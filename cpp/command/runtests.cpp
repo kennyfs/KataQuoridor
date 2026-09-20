@@ -25,37 +25,47 @@
 using namespace std;
 
 int MainCmds::runtests(const vector<string>& args) {
-  (void)args;
   testAssert(sizeof(size_t) == 8);
   Board::initHash();
   ScoreValue::initTables();
 
-  BSearch::runTests();
-  Rand::runTests();
-  DateTime::runTests();
-  FancyMath::runTests();
-  ComputeElos::runTests();
-  Base64::runTests();
-  ThreadTest::runTests();
+  bool runAll = (args.size() <= 1);
+  auto shouldRun = [&](const string& name) {
+    if(runAll && name != "go") return true;
+    for(size_t i = 1; i < args.size(); i++) {
+      if(Global::isEqualCaseInsensitive(args[i], name)) return true;
+    }
+    return false;
+  };
 
-  Tests::runBoardIOTests();
-  Tests::runBoardBasicTests();
+  if(shouldRun("core") || shouldRun("rules")) {
+    BSearch::runTests();
+    Rand::runTests();
+    DateTime::runTests();
+    FancyMath::runTests();
+    ComputeElos::runTests();
+    Base64::runTests();
+    ThreadTest::runTests();
+  }
 
-  Tests::runBoardAreaTests();
+  if(shouldRun("rules"))
+    Tests::runRulesTests();
 
-  Tests::runRulesTests();
-  Tests::runPassAliveSuicideModeTests();
-  Tests::runExcludeTerritoryAtariModeTests();
-
-  Tests::runBoardUndoTest();
-  Tests::runBoardHandicapTest();
-  Tests::runBoardStressTest();
-
-  Tests::runSgfTests();
-  Tests::runBasicSymmetryTests();
-  Tests::runBoardSymmetryTests();
-  Tests::runSymmetryDifferenceTests();
-  Tests::runBoardReplayTest();
+  if(shouldRun("go")) {
+    Tests::runBoardIOTests();
+    Tests::runBoardBasicTests();
+    Tests::runBoardAreaTests();
+    Tests::runPassAliveSuicideModeTests();
+    Tests::runExcludeTerritoryAtariModeTests();
+    Tests::runBoardUndoTest();
+    Tests::runBoardHandicapTest();
+    Tests::runBoardStressTest();
+    Tests::runSgfTests();
+    Tests::runBasicSymmetryTests();
+    Tests::runBoardSymmetryTests();
+    Tests::runSymmetryDifferenceTests();
+    Tests::runBoardReplayTest();
+  }
 
   ScoreValue::freeTables();
 
