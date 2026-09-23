@@ -216,6 +216,10 @@ const Board& BoardHistory::getRecentBoard(int numMovesAgo) const {
 }
 
 bool BoardHistory::isLegal(const Board& board, Loc moveLoc, Player movePla) const {
+  if(isGameFinished)
+    return false;
+  if(movePla != presumedNextMovePla)
+    return false;
   return board.isLegal(moveLoc, movePla);
 }
 
@@ -248,6 +252,12 @@ void BoardHistory::makeBoardMoveAssumeLegal(
     const KoHashTable* rootKoHashTable, bool preventEncore) {
   (void)rootKoHashTable;
   (void)preventEncore;
+
+  // 0. Reset any previous terminal state
+  isGameFinished = false;
+  winner = C_EMPTY;
+  isNoResult = false;
+  isResignation = false;
 
   // 1. Execute the move
   board.playMoveAssumeLegal(moveLoc, movePla);
@@ -292,14 +302,16 @@ bool BoardHistory::makeBoardMoveTolerant(Board& board, Loc moveLoc, Player moveP
 }
 
 bool BoardHistory::makeBoardMoveTolerant(Board& board, Loc moveLoc, Player movePla, bool preventEncore) {
-  if(!isLegal(board, moveLoc, movePla))
+  if(!isLegalTolerant(board, moveLoc, movePla))
     return false;
   makeBoardMoveAssumeLegal(board, moveLoc, movePla, NULL, preventEncore);
   return true;
 }
 
 bool BoardHistory::isLegalTolerant(const Board& board, Loc moveLoc, Player movePla) const {
-  return isLegal(board, moveLoc, movePla);
+  if(movePla != P_BLACK && movePla != P_WHITE)
+    return false;
+  return board.isLegal(moveLoc, movePla);
 }
 
 void BoardHistory::endGameIfAllPassAlive(const Board&) {}

@@ -100,30 +100,49 @@ string Rules::writeWhiteHandicapBonusRule(int) { return "0"; }
 bool Rules::komiIsIntOrHalfInt(float) { return true; }
 
 Rules Rules::parseRules(const string& str) {
-  Rules rules = getQuoridorRules();
-  try {
-    json input = json::parse(str);
-    if(input.contains("maxMovesPerGame") && input["maxMovesPerGame"].is_number_integer()) {
-      rules.maxMovesPerGame = input["maxMovesPerGame"].get<int>();
-    }
-  }
-  catch(...) {}
+  Rules rules;
+  if(!tryParseRules(str, rules))
+    throw StringError("Unknown rules: " + str);
   return rules;
 }
 
 Rules Rules::parseRulesWithoutKomi(const string& str, float komi) {
-  Rules rules = parseRules(str);
-  rules.komi = komi;
+  Rules rules;
+  if(!tryParseRulesWithoutKomi(str, rules, komi))
+    throw StringError("Unknown rules: " + str);
   return rules;
 }
 
 bool Rules::tryParseRules(const string& str, Rules& buf) {
-  buf = parseRules(str);
-  return true;
+  string s = Global::trim(str);
+  if(Global::isEqualCaseInsensitive(s, "quoridor") ||
+     Global::isEqualCaseInsensitive(s, "default") ||
+     Global::isEqualCaseInsensitive(s, "tromptaylor")) {
+    buf = getQuoridorRules();
+    return true;
+  }
+  try {
+    json input = json::parse(s);
+    if(input.is_object()) {
+      Rules rules = getQuoridorRules();
+      if(input.contains("maxMovesPerGame") && input["maxMovesPerGame"].is_number_integer()) {
+        int m = input["maxMovesPerGame"].get<int>();
+        if(m > 0) rules.maxMovesPerGame = m;
+      }
+      buf = rules;
+      return true;
+    }
+  }
+  catch(...) {
+    return false;
+  }
+  return false;
 }
 
 bool Rules::tryParseRulesWithoutKomi(const string& str, Rules& buf, float komi) {
-  buf = parseRulesWithoutKomi(str, komi);
+  if(!tryParseRules(str, buf))
+    return false;
+  buf.komi = komi;
   return true;
 }
 

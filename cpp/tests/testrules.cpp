@@ -524,6 +524,82 @@ static void testResignationAndRecentBoards() {
   cout << "    -> Passed (Resignation, ring buffer and clear verified)!" << endl;
 }
 
+// Step 6 - Test 5: Strict vs Tolerant isLegal & Terminal State Reset
+static void testBoardHistoryIsLegalStrictAndTolerant() {
+  cout << "  [Step 6.5] Strict vs Tolerant isLegal & Terminal State Reset..." << endl;
+  Board b;
+  Rules rules = Rules::getQuoridorRules();
+  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+
+  Loc bMove = Location::pawnLoc(4, 7, 17);
+  Loc wMove = Location::pawnLoc(4, 1, 17);
+
+  // Black's turn initially
+  testAssert(hist.isLegal(b, bMove, P_BLACK));
+  testAssert(!hist.isLegal(b, wMove, P_WHITE));           // Strict: not White's turn
+  testAssert(hist.isLegalTolerant(b, wMove, P_WHITE));     // Tolerant: allows White
+  testAssert(!hist.isLegalTolerant(b, wMove, C_EMPTY));    // Tolerant: invalid player
+
+  // Resignation triggers terminal state
+  hist.setWinnerByResignation(P_WHITE);
+  testAssert(hist.isGameFinished);
+  testAssert(!hist.isLegal(b, bMove, P_BLACK));            // Strict: game finished
+  testAssert(hist.isLegalTolerant(b, bMove, P_BLACK));     // Tolerant: allows exploration
+
+  // Playing a move in tolerant mode resets terminal state
+  bool suc = hist.makeBoardMoveTolerant(b, bMove, P_BLACK);
+  testAssert(suc);
+  testAssert(!hist.isGameFinished);
+  testAssert(hist.winner == C_EMPTY);
+  testAssert(!hist.isResignation);
+  testAssert(hist.presumedNextMovePla == P_WHITE);
+
+  cout << "    -> Passed (Strict/Tolerant distinction and terminal reset verified)!" << endl;
+}
+
+// Step 6 - Test 6: Rules parsing and validation
+static void testRulesParsingValidation() {
+  cout << "  [Step 6.6] Rules Parsing Validation..." << endl;
+  Rules r;
+
+  // Valid named rules
+  testAssert(Rules::tryParseRules("quoridor", r));
+  testAssert(r.maxMovesPerGame == 200);
+  testAssert(Rules::tryParseRules("DEFAULT", r));
+  testAssert(Rules::tryParseRules("tromptaylor", r));
+
+  // Valid JSON rules
+  testAssert(Rules::tryParseRules("{}", r));
+  testAssert(r.maxMovesPerGame == 200);
+  testAssert(Rules::tryParseRules("{\"maxMovesPerGame\": 150}", r));
+  testAssert(r.maxMovesPerGame == 150);
+  testAssert(Rules::tryParseRules("{\"maxMovesPerGame\": 300, \"ko\": \"POSITIONAL\"}", r));
+  testAssert(r.maxMovesPerGame == 300);
+
+  // Invalid inputs
+  testAssert(!Rules::tryParseRules("invalid_rules", r));
+  testAssert(!Rules::tryParseRules("[1, 2, 3]", r));
+  testAssert(!Rules::tryParseRules("123", r));
+  testAssert(!Rules::tryParseRules("", r));
+
+  // tryParseRulesWithoutKomi
+  testAssert(Rules::tryParseRulesWithoutKomi("quoridor", r, 5.5f));
+  testAssert(r.komi == 5.5f);
+  testAssert(!Rules::tryParseRulesWithoutKomi("garbage", r, 5.5f));
+
+  // parseRules throws on invalid
+  bool threw = false;
+  try {
+    Rules::parseRules("nonsense");
+  }
+  catch(const StringError&) {
+    threw = true;
+  }
+  testAssert(threw);
+
+  cout << "    -> Passed (Rules validation and exception handling verified)!" << endl;
+}
+
 } // namespace
 
 void Tests::runRulesTests() {
@@ -539,6 +615,8 @@ void Tests::runRulesTests() {
   testWhiteWinCondition();
   testMaxMoves200DrawCondition();
   testResignationAndRecentBoards();
+  testBoardHistoryIsLegalStrictAndTolerant();
+  testRulesParsingValidation();
   cout << "=== All Quoridor Step 1 & Step 6 Tests Passed Successfully! ===" << endl;
 }
 
