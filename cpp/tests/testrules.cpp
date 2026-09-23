@@ -595,6 +595,71 @@ static void testRulesParsingValidation() {
   cout << "    -> Passed (Rules validation and exception handling verified)!" << endl;
 }
 
+// Step 7 - Test 1: Move parsing and anti-fool validation
+static void testMoveStringParsingAntiFool() {
+  cout << "  [Step 7.1] Move Parsing & Anti-Fool Format Validation..." << endl;
+  Board b;
+  Loc loc;
+
+  // Pure pawn move
+  testAssert(Location::tryOfString("e8", b, loc));
+  testAssert(loc == Location::pawnLoc(4, 7, 17));
+  testAssert(Location::tryOfString("E8", b, loc));
+  testAssert(loc == Location::pawnLoc(4, 7, 17));
+
+  // Pure wall placement
+  testAssert(Location::tryOfString("e2h", b, loc));
+  testAssert(loc == Location::hWallLoc(4, 1, 17));
+  testAssert(Location::tryOfString("e2v", b, loc));
+  testAssert(loc == Location::vWallLoc(4, 1, 17));
+
+  // Prefixed formats
+  testAssert(Location::tryOfString("move e8", b, loc));
+  testAssert(loc == Location::pawnLoc(4, 7, 17));
+  testAssert(Location::tryOfString("wall e2h", b, loc));
+  testAssert(loc == Location::hWallLoc(4, 1, 17));
+  testAssert(Location::tryOfString("wall e2v", b, loc));
+  testAssert(loc == Location::vWallLoc(4, 1, 17));
+
+  // Mutually exclusive prefix rejection and invalid format rejection
+  testAssert(!Location::tryOfString("move e2v", b, loc));
+  testAssert(!Location::tryOfString("move e2h", b, loc));
+  testAssert(!Location::tryOfString("wall e8", b, loc));
+  testAssert(!Location::tryOfString("wall e2 h", b, loc));
+  testAssert(!Location::tryOfString("wall e2 v", b, loc));
+
+  // Out of bound / invalid format rejection
+  testAssert(!Location::tryOfString("j1", b, loc));
+  testAssert(!Location::tryOfString("e0", b, loc));
+  testAssert(!Location::tryOfString("e9h", b, loc));
+  testAssert(!Location::tryOfString("e9v", b, loc));
+  testAssert(!Location::tryOfString("xyz", b, loc));
+
+  cout << "    -> Passed (Anti-fool move syntax parsing verified)!" << endl;
+}
+
+// Step 7 - Test 2: QTP distance and walls queries
+static void testQTPDistanceAndWalls() {
+  cout << "  [Step 7.2] QTP Distance and Walls Logic..." << endl;
+  Board b;
+
+  testAssert(b.blackFences == 10);
+  testAssert(b.whiteFences == 10);
+  testAssert(b.getShortestPathDistance(P_BLACK) == 8);
+  testAssert(b.getShortestPathDistance(P_WHITE) == 8);
+
+  // Play a vertical wall at e2v
+  Loc wLoc = Location::vWallLoc(4, 1, 17);
+  b.playMoveAssumeLegal(wLoc, P_BLACK);
+
+  testAssert(b.blackFences == 9);
+  testAssert(b.whiteFences == 10);
+  testAssert(b.getShortestPathDistance(P_BLACK) == 8);
+  testAssert(b.getShortestPathDistance(P_WHITE) == 8);
+
+  cout << "    -> Passed (Fences left and shortest path distance verified)!" << endl;
+}
+
 } // namespace
 
 void Tests::runRulesTests() {
@@ -612,6 +677,8 @@ void Tests::runRulesTests() {
   testResignationAndRecentBoards();
   testBoardHistoryIsLegalStrictAndTolerant();
   testRulesParsingValidation();
-  cout << "=== All Quoridor Step 1 & Step 6 Tests Passed Successfully! ===" << endl;
+  testMoveStringParsingAntiFool();
+  testQTPDistanceAndWalls();
+  cout << "=== All Quoridor Step 1, Step 6 & Step 7 Tests Passed Successfully! ===" << endl;
 }
 

@@ -202,21 +202,10 @@ string Location::toString(Loc loc, const Board& b) {
   return toString(loc, b.x_size, b.y_size);
 }
 
-static bool tryParseLetterCoordinate(char c, int& x) {
-  if(c >= 'A' && c <= 'H')
-    x = c - 'A';
-  else if(c >= 'a' && c <= 'h')
-    x = c - 'a';
-  else if(c >= 'J' && c <= 'Z')
-    x = c - 'A' - 1;
-  else if(c >= 'j' && c <= 'z')
-    x = c - 'a' - 1;
-  else
-    return false;
-  return true;
-}
-
-bool Location::tryOfString(const string& str, int x_size, int y_size, Loc& result) {
+// Parses a string into a Loc. Supports:
+// - "(x, y)" coordinate tuple: Defined on the 17x17 board
+// - Quoridor notation: e.g., "move e8" (pawn) or "wall e2h" / "e2v" (wall), where position is [a-i][1-9]
+bool Location::tryOfString(const string& str, int x_size, int /*y_size*/, Loc& result) {
   string s = Global::trim(str);
   if(s.length() < 2)
     return false;
@@ -234,12 +223,7 @@ bool Location::tryOfString(const string& str, int x_size, int y_size, Loc& resul
   }
   else if(Global::isPrefix(s, "wall ") || Global::isPrefix(s, "WALL ") || Global::isPrefix(s, "Wall ")) {
     hasWallPrefix = true;
-    string rest = Global::trim(s.substr(5));
-    vector<string> parts = Global::split(rest, ' ');
-    if(parts.size() == 2)
-      s = parts[0] + parts[1];
-    else
-      s = rest;
+    s = Global::trim(s.substr(5));
   }
 
   if(s.length() < 2)
@@ -300,25 +284,7 @@ bool Location::tryOfString(const string& str, int x_size, int y_size, Loc& resul
     }
   }
 
-  if(hasMovePrefix || hasWallPrefix)
-    return false;
-
-  // Standard KataGo letter coordinate (A1, E9, Q17)
-  int x;
-  if(!tryParseLetterCoordinate(s[0], x))
-    return false;
-
-  int y;
-  bool sucY = Global::tryStringToInt(s.substr(1), y);
-  if(!sucY)
-    return false;
-  y = y_size - y;
-
-  if(x < 0 || x >= x_size || y < 0 || y >= y_size)
-    return false;
-
-  result = Location::getLoc(x, y, x_size);
-  return true;
+  return false;
 }
 
 bool Location::tryOfString(const string& str, const Board& b, Loc& result) {

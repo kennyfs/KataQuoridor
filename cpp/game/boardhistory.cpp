@@ -259,7 +259,6 @@ void BoardHistory::makeBoardMoveAssumeLegal(
     Board& board, Loc moveLoc, Player movePla,
     const KoHashTable* rootKoHashTable, bool preventEncore) {
   (void)rootKoHashTable;
-  (void)preventEncore;
 
   // 0. Reset any previous terminal state
   isGameFinished = false;
@@ -272,6 +271,7 @@ void BoardHistory::makeBoardMoveAssumeLegal(
 
   // 2. Update move history
   moveHistory.push_back({moveLoc, movePla});
+  preventEncoreHistory.push_back(preventEncore);
 
   // 3. Update recentBoards ring buffer
   currentRecentBoardIdx = (currentRecentBoardIdx + 1) % NUM_RECENT_BOARDS;

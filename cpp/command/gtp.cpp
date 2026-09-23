@@ -27,19 +27,21 @@ static const vector<string> knownCommands = {
   "known_command",
   "list_commands",
   "quit",
-
-  //GTP extension - specify "boardsize X:Y" or "boardsize X Y" for non-square sizes
-  //rectangular_boardsize is an alias for boardsize, intended to make it more evident that we have such support
-  "boardsize",
-  "rectangular_boardsize",
+  // "boardsize", // maybe support multiple board size later
+  // "rectangular_boardsize",
 
   "clear_board",
   "set_position",
-  "komi",
-  //GTP extension - get KataGo's current komi setting
-  "get_komi",
   "play",
+  "move",
+  "wall",
   "undo",
+
+  // Quoridor extensions (QTP)
+  "walls",
+  "dist",
+  "winner",
+  "legal_moves",
 
   //GTP extension - specify rules
   "kata-get-rules",
@@ -51,7 +53,6 @@ static const vector<string> knownCommands = {
   "kata-get-param",
   "kata-set-param",
   "kata-list-params",
-  "kgs-rules",
 
   "genmove",
   "kata-search", //Doesn't actually make the move
@@ -64,19 +65,12 @@ static const vector<string> knownCommands = {
   "clear_cache",
 
   "showboard",
-  "fixed_handicap",
-  "place_free_handicap",
-  "set_free_handicap",
 
   "time_settings",
-  "kgs-time_settings",
   "time_left",
   //KataGo extensions for time settings
   "kata-list_time_settings",
   "kata-time_settings",
-
-  "final_score",
-  "final_status_list",
 
   "loadsgf",
   "printsgf",
@@ -2385,47 +2379,6 @@ int MainCmds::gtp(const vector<string>& args) {
       logger.write("Quit requested by controller");
     }
 
-    else if(command == "boardsize" || command == "rectangular_boardsize") {
-      maybeSaveAvoidPatterns(false);
-      int newXSize = 0;
-      int newYSize = 0;
-      bool suc = false;
-
-      if(pieces.size() == 1) {
-        if(contains(pieces[0],':')) {
-          vector<string> subpieces = Global::split(pieces[0],':');
-          if(subpieces.size() == 2 && Global::tryStringToInt(subpieces[0], newXSize) && Global::tryStringToInt(subpieces[1], newYSize))
-            suc = true;
-        }
-        else {
-          if(Global::tryStringToInt(pieces[0], newXSize)) {
-            suc = true;
-            newYSize = newXSize;
-          }
-        }
-      }
-      else if(pieces.size() == 2) {
-        if(Global::tryStringToInt(pieces[0], newXSize) && Global::tryStringToInt(pieces[1], newYSize))
-          suc = true;
-      }
-
-      if(!suc) {
-        responseIsError = true;
-        response = "Expected int argument for boardsize or pair of ints but got '" + Global::concat(pieces," ") + "'";
-      }
-      else if(newXSize < 2 || newYSize < 2) {
-        responseIsError = true;
-        response = "unacceptable size";
-      }
-      else if(newXSize > Board::MAX_LEN || newYSize > Board::MAX_LEN) {
-        responseIsError = true;
-        response = Global::strprintf("unacceptable size (Board::MAX_LEN is %d, consider increasing and recompiling)",(int)Board::MAX_LEN);
-      }
-      else {
-        engine->setOrResetBoardSize(cfg,logger,seedRand,newXSize,newYSize,logger.isLoggingToStderr());
-      }
-    }
-
     else if(command == "clear_board") {
       maybeSaveAvoidPatterns(false);
       if(autoAvoidPatterns && shouldReloadAutoAvoidPatterns) {
@@ -2434,34 +2387,6 @@ int MainCmds::gtp(const vector<string>& args) {
         shouldReloadAutoAvoidPatterns = false;
       }
       engine->clearBoard();
-    }
-
-    else if(command == "komi") {
-      float newKomi = 0;
-      if(pieces.size() != 1 || !Global::tryStringToFloat(pieces[0],newKomi)) {
-        responseIsError = true;
-        response = "Expected single float argument for komi but got '" + Global::concat(pieces," ") + "'";
-      }
-      //GTP spec says that we should accept any komi, but we're going to ignore that.
-      else if(isnan(newKomi) || newKomi < Rules::MIN_USER_KOMI || newKomi > Rules::MAX_USER_KOMI) {
-        responseIsError = true;
-        response = "unacceptable komi";
-      }
-      else if(!Rules::komiIsIntOrHalfInt(newKomi)) {
-        responseIsError = true;
-        response = "komi must be an integer or half-integer";
-      }
-      else {
-        if(isForcingKomi)
-          newKomi = forcedKomi;
-        engine->updateKomiIfNew(newKomi);
-        //In case the controller tells us komi every move, restart pondering afterward.
-        maybeStartPondering = engine->bot->getRootHist().moveHistory.size() > 0;
-      }
-    }
-
-    else if(command == "get_komi") {
-      response = Global::doubleToString(engine->getCurrentRules().komi);
     }
 
     else if(command == "kata-get-rules") {
@@ -2526,49 +2451,6 @@ int MainCmds::gtp(const vector<string>& args) {
           if(!logger.isLoggingToStderr())
             cerr << "Changed rules to " + newRules.toStringNoKomiMaybeNice() << endl;
         }
-      }
-    }
-
-    else if(command == "kgs-rules") {
-      bool parseSuccess = false;
-      Rules newRules;
-      if(pieces.size() <= 0) {
-        responseIsError = true;
-        response = "Expected one argument kgs-rules";
-      }
-      else {
-        string s = Global::toLower(Global::trim(pieces[0]));
-        if(s == "chinese") {
-          newRules = Rules::parseRulesWithoutKomi("chinese-kgs",engine->getCurrentRules().komi);
-          parseSuccess = true;
-        }
-        else if(s == "aga") {
-          newRules = Rules::parseRulesWithoutKomi("aga",engine->getCurrentRules().komi);
-          parseSuccess = true;
-        }
-        else if(s == "new_zealand") {
-          newRules = Rules::parseRulesWithoutKomi("new_zealand",engine->getCurrentRules().komi);
-          parseSuccess = true;
-        }
-        else if(s == "japanese") {
-          newRules = Rules::parseRulesWithoutKomi("japanese",engine->getCurrentRules().komi);
-          parseSuccess = true;
-        }
-        else {
-          responseIsError = true;
-          response = "Unknown rules '" + s + "'";
-        }
-      }
-      if(parseSuccess) {
-        string error;
-        bool suc = engine->setRulesNotIncludingKomi(newRules,error);
-        if(!suc) {
-          responseIsError = true;
-          response = error;
-        }
-        logger.write("Changed rules to " + newRules.toStringNoKomiMaybeNice());
-        if(!logger.isLoggingToStderr())
-          cerr << "Changed rules to " + newRules.toStringNoKomiMaybeNice() << endl;
       }
     }
 
@@ -3035,25 +2917,108 @@ int MainCmds::gtp(const vector<string>& args) {
     else if(command == "play") {
       Player pla;
       Loc loc;
-      if(pieces.size() != 2) {
+      if(pieces.size() < 2) {
         responseIsError = true;
-        response = "Expected two arguments for play but got '" + Global::concat(pieces," ") + "'";
+        response = "Expected at least two arguments for play but got '" + Global::concat(pieces," ") + "'";
       }
       else if(!PlayerIO::tryParsePlayer(pieces[0],pla)) {
         responseIsError = true;
         response = "Could not parse color: '" + pieces[0] + "'";
       }
-      else if(!tryParseLoc(pieces[1],engine->bot->getRootBoard(),loc)) {
-        responseIsError = true;
-        response = "Could not parse vertex: '" + pieces[1] + "'";
+      else {
+        string moveStr = pieces[1];
+        for(size_t i = 2; i < pieces.size(); i++)
+          moveStr += " " + pieces[i];
+        if(!tryParseLoc(moveStr,engine->bot->getRootBoard(),loc)) {
+          responseIsError = true;
+          response = "Could not parse vertex: '" + moveStr + "'";
+        }
+        else {
+          bool suc = engine->play(loc,pla);
+          if(!suc) {
+            responseIsError = true;
+            response = "illegal move";
+          }
+          maybeStartPondering = true;
+        }
+      }
+    }
+
+    else if(command == "move") {
+      Player pla = engine->bot->getRootPla();
+      string destStr;
+      if(pieces.size() == 1) {
+        // Default to the next player
+        destStr = pieces[0];
+      }
+      else if(pieces.size() == 2) {
+        if(!PlayerIO::tryParsePlayer(pieces[0], pla)) {
+          responseIsError = true;
+          response = "Could not parse player: '" + pieces[0] + "'";
+        }
+        else {
+          destStr = pieces[1];
+        }
       }
       else {
-        bool suc = engine->play(loc,pla);
-        if(!suc) {
+        responseIsError = true;
+        response = "Expected 1 or 2 arguments for move but got '" + Global::concat(pieces," ") + "'";
+      }
+
+      if(!responseIsError) {
+        Loc loc;
+        string moveStr = "move " + destStr;
+        if(!tryParseLoc(moveStr, engine->bot->getRootBoard(), loc)) {
           responseIsError = true;
-          response = "illegal move";
+          response = "Could not parse vertex: '" + destStr + "'";
         }
-        maybeStartPondering = true;
+        else {
+          bool suc = engine->play(loc, pla);
+          if(!suc) {
+            responseIsError = true;
+            response = "illegal move";
+          }
+          maybeStartPondering = true;
+        }
+      }
+    }
+
+    else if(command == "wall") {
+      Player pla = engine->bot->getRootPla();
+      string destStr;
+      if(pieces.size() == 1) {
+        // Default to the next player
+        destStr = pieces[0];
+      }
+      else if(pieces.size() == 2) {
+        if(!PlayerIO::tryParsePlayer(pieces[0], pla)) {
+          responseIsError = true;
+          response = "Could not parse player: '" + pieces[0] + "'";
+        }
+        else {
+          destStr = pieces[1];
+        }
+      }
+      else {
+        responseIsError = true;
+        response = "Expected 1 or 2 arguments for wall but got '" + Global::concat(pieces," ") + "'";
+      }
+
+      if(!responseIsError) {
+        Loc loc;
+        string wallStr = "wall " + destStr;
+        if(!tryParseLoc(wallStr, engine->bot->getRootBoard(), loc)) {
+          responseIsError = true;
+          response = "Could not parse vertex: '" + destStr + "'";
+        }
+        else {
+          bool suc = engine->play(loc, pla);
+          if(!suc) {
+            responseIsError = true;
+            response = "illegal move";
+          }
+          maybeStartPondering = true;
+        }
       }
     }
 
@@ -3238,157 +3203,97 @@ int MainCmds::gtp(const vector<string>& args) {
       response = Global::trim(filterDoubleNewlines(sout.str()));
     }
 
-    else if(command == "fixed_handicap") {
-      int n;
-      if(pieces.size() != 1) {
-        responseIsError = true;
-        response = "Expected one argument for fixed_handicap but got '" + Global::concat(pieces," ") + "'";
+    else if(command == "walls") {
+      const Board& board = engine->bot->getRootBoard();
+      if(pieces.size() == 0) {
+        response = Global::strprintf("B: %d W: %d", board.blackFences, board.whiteFences);
       }
-      else if(!Global::tryStringToInt(pieces[0],n)) {
-        responseIsError = true;
-        response = "Could not parse number of handicap stones: '" + pieces[0] + "'";
-      }
-      else if(n < 2) {
-        responseIsError = true;
-        response = "Number of handicap stones less than 2: '" + pieces[0] + "'";
-      }
-      else if(!engine->bot->getRootBoard().isEmpty()) {
-        responseIsError = true;
-        response = "Board is not empty";
-      }
-      else {
-        maybeSaveAvoidPatterns(false);
-        engine->placeFixedHandicap(n,response,responseIsError);
-      }
-    }
-
-    else if(command == "place_free_handicap") {
-      int n;
-      if(pieces.size() != 1) {
-        responseIsError = true;
-        response = "Expected one argument for place_free_handicap but got '" + Global::concat(pieces," ") + "'";
-      }
-      else if(!Global::tryStringToInt(pieces[0],n)) {
-        responseIsError = true;
-        response = "Could not parse number of handicap stones: '" + pieces[0] + "'";
-      }
-      else if(n < 2) {
-        responseIsError = true;
-        response = "Number of handicap stones less than 2: '" + pieces[0] + "'";
-      }
-      else if(!engine->bot->getRootBoard().isEmpty()) {
-        responseIsError = true;
-        response = "Board is not empty";
-      }
-      else {
-        maybeSaveAvoidPatterns(false);
-        engine->placeFreeHandicap(n,response,responseIsError,seedRand);
-      }
-    }
-
-    else if(command == "set_free_handicap") {
-      if(!engine->bot->getRootBoard().isEmpty()) {
-        responseIsError = true;
-        response = "Board is not empty";
-      }
-      else {
-        vector<Move> locs;
-        int xSize = engine->bot->getRootBoard().x_size;
-        int ySize = engine->bot->getRootBoard().y_size;
-        Board board(xSize,ySize);
-        for(int i = 0; i<pieces.size(); i++) {
-          Loc loc;
-          bool suc = tryParseLoc(pieces[i],board,loc);
-          if(!suc || loc == Board::PASS_LOC) {
-            responseIsError = true;
-            response = "Invalid handicap location: " + pieces[i];
-          }
-          locs.emplace_back(loc,P_BLACK);
-        }
-        bool suc = board.setStonesFailIfNoLibs(locs);
-        if(!suc) {
-          responseIsError = true;
-          response = "Handicap placement is invalid";
+      else if(pieces.size() == 1) {
+        Player pla;
+        if(PlayerIO::tryParsePlayer(pieces[0], pla)) {
+          int fences = (pla == P_BLACK) ? board.blackFences : board.whiteFences;
+          response = Global::intToString(fences);
         }
         else {
-          maybeSaveAvoidPatterns(false);
-          Player pla = P_WHITE;
-          BoardHistory hist(board,pla,engine->getCurrentRules(),0,Search::resolveHistoryModes(engine->getGenmoveParams(),engine->nnEval));
-          hist.setInitialTurnNumber(board.numStonesOnBoard()); //Should give more accurate temperaure and time control behavior
-          vector<Move> newMoveHistory;
-          engine->setPositionAndRules(pla,board,hist,board,pla,newMoveHistory);
+          responseIsError = true;
+          response = "Could not parse player: " + pieces[0];
         }
-      }
-    }
-
-    else if(command == "final_score") {
-      engine->stopAndWait();
-
-      Player winner = C_EMPTY;
-      double finalWhiteMinusBlackScore = 0.0;
-      engine->computeAnticipatedWinnerAndScore(winner,finalWhiteMinusBlackScore);
-
-      if(winner == C_EMPTY)
-        response = "0";
-      else if(winner == C_BLACK)
-        response = "B+" + Global::strprintf("%.1f",-finalWhiteMinusBlackScore);
-      else if(winner == C_WHITE)
-        response = "W+" + Global::strprintf("%.1f",finalWhiteMinusBlackScore);
-      else
-        ASSERT_UNREACHABLE;
-    }
-
-    else if(command == "final_status_list") {
-      int statusMode = 0;
-      if(pieces.size() != 1) {
-        responseIsError = true;
-        response = "Expected one argument for final_status_list but got '" + Global::concat(pieces," ") + "'";
       }
       else {
-        if(pieces[0] == "alive")
-          statusMode = 0;
-        else if(pieces[0] == "seki")
-          statusMode = 1;
-        else if(pieces[0] == "dead")
-          statusMode = 2;
+        responseIsError = true;
+        response = "Expected 0 or 1 arguments for walls but got '" + Global::concat(pieces," ") + "'";
+      }
+    }
+
+    else if(command == "dist") {
+      const Board& board = engine->bot->getRootBoard();
+      if(pieces.size() == 0) {
+        int bDist = board.getShortestPathDistance(P_BLACK);
+        int wDist = board.getShortestPathDistance(P_WHITE);
+        response = Global::strprintf("B: %d W: %d", bDist, wDist);
+      }
+      else if(pieces.size() == 1) {
+        Player pla;
+        if(PlayerIO::tryParsePlayer(pieces[0], pla)) {
+          int dist = board.getShortestPathDistance(pla);
+          response = Global::intToString(dist);
+        }
         else {
           responseIsError = true;
-          response = "Argument to final_status_list must be 'alive' or 'seki' or 'dead'";
-          statusMode = 3;
+          response = "Could not parse player: " + pieces[0];
         }
+      }
+      else {
+        responseIsError = true;
+        response = "Expected 0 or 1 arguments for dist but got '" + Global::concat(pieces," ") + "'";
+      }
+    }
 
-        if(statusMode < 3) {
-          vector<bool> isAlive = engine->computeAnticipatedStatuses();
-          Board board = engine->bot->getRootBoard();
-          vector<Loc> locsToReport;
+    else if(command == "winner") {
+      const BoardHistory& hist = engine->bot->getRootHist();
+      if(hist.isGameFinished) {
+        if(hist.isNoResult)
+          response = "Draw";
+        else if(hist.winner == P_BLACK)
+          response = "B";
+        else if(hist.winner == P_WHITE)
+          response = "W";
+        else
+          response = "none";
+      }
+      else {
+        response = "none";
+      }
+    }
 
-          if(statusMode == 0) {
-            for(int y = 0; y<board.y_size; y++) {
-              for(int x = 0; x<board.x_size; x++) {
-                Loc loc = Location::getLoc(x,y,board.x_size);
-                if(board.colors[loc] != C_EMPTY && isAlive[loc])
-                  locsToReport.push_back(loc);
-              }
+    else if(command == "legal_moves") {
+      Player pla = engine->bot->getRootPla();
+      if(pieces.size() == 1) {
+        if(!PlayerIO::tryParsePlayer(pieces[0], pla)) {
+          responseIsError = true;
+          response = "Could not parse player: " + pieces[0];
+        }
+      }
+      else if(pieces.size() > 1) {
+        responseIsError = true;
+        response = "Expected 0 or 1 arguments for legal_moves but got '" + Global::concat(pieces," ") + "'";
+      }
+
+      if(!responseIsError) {
+        const Board& board = engine->bot->getRootBoard();
+        ostringstream sout;
+        bool first = true;
+        for(int y = 0; y < board.y_size; y++) {
+          for(int x = 0; x < board.x_size; x++) {
+            Loc loc = Location::getLoc(x, y, board.x_size);
+            if(board.isLegal(loc, pla)) {
+              if(!first) sout << " ";
+              first = false;
+              sout << Location::toString(loc, board);
             }
           }
-          if(statusMode == 2) {
-            for(int y = 0; y<board.y_size; y++) {
-              for(int x = 0; x<board.x_size; x++) {
-                Loc loc = Location::getLoc(x,y,board.x_size);
-                if(board.colors[loc] != C_EMPTY && !isAlive[loc])
-                  locsToReport.push_back(loc);
-              }
-            }
-          }
-
-          response = "";
-          for(int i = 0; i<locsToReport.size(); i++) {
-            Loc loc = locsToReport[i];
-            if(i > 0)
-              response += " ";
-            response += Location::toString(loc,board);
-          }
         }
+        response = sout.str();
       }
     }
 
