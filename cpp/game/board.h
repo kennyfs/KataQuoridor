@@ -39,9 +39,6 @@
  * - Total policy slots = 17*17 + 1 = 290 (+1 is PASS_LOC, always illegal)
  */
 
-static const int MAX_FENCE_NUM = 10;
-static const int MAX_MOVE_NUM = 100 * COMPILE_MAX_BOARD_LEN * COMPILE_MAX_BOARD_LEN;
-
 // TYPES AND CONSTANTS-----------------------------------------------------------------
 
 struct Board;
@@ -150,16 +147,9 @@ struct Board {
   static Hash128 ZOBRIST_SIZE_Y_HASH[MAX_LEN + 1];
   static Hash128 ZOBRIST_BOARD_HASH[MAX_ARR_SIZE][NUM_BOARD_COLORS];
   static Hash128 ZOBRIST_BOARD_HASH2[MAX_ARR_SIZE][NUM_BOARD_COLORS];
-  static Hash128 ZOBRIST_KO_LOC_HASH[MAX_ARR_SIZE];
-  static Hash128 ZOBRIST_NEXTPLA_HASH[4];
-  static Hash128 ZOBRIST_MOVENUM_HASH[MAX_MOVE_NUM];
   static Hash128 ZOBRIST_PLAYER_HASH[4];
   static Hash128 ZOBRIST_FENCENUM_HASH[MAX_FENCE_NUM + 1][2];
-  static Hash128 ZOBRIST_KO_MARK_HASH[MAX_ARR_SIZE][4];
-  static Hash128 ZOBRIST_ENCORE_HASH[4];
-  static Hash128 ZOBRIST_SECOND_ENCORE_START_HASH[MAX_ARR_SIZE][NUM_BOARD_COLORS];
   static const Hash128 ZOBRIST_GAME_IS_OVER;
-  static const Hash128 ZOBRIST_PASS_ENDS_PHASE;
 
   // Compatibility stubs for unchanged modules until respective steps
   Loc chain_head[MAX_ARR_SIZE];
@@ -189,6 +179,8 @@ struct Board {
   bool isLegal(Loc loc, Player pla, bool isMultiStoneSuicideLegal = false) const;
   bool isLegalIgnoringKo(Loc loc, Player pla, bool isMultiStoneSuicideLegal = false) const { (void)isMultiStoneSuicideLegal; return isLegal(loc, pla); }
   bool isOnBoard(Loc loc) const;
+  bool isOnBoardPawn(Loc loc) const;
+  bool isOnBoardFence(Loc loc) const;
   bool isEmpty() const;
   int numStonesOnBoard() const;
   int numPlaStonesOnBoard(Player pla) const;
@@ -212,6 +204,7 @@ struct Board {
 
   // Quoridor Movement & Wall queries
   bool canPawnStep(Loc from, Loc to) const;
+  bool isLegalPawnMove(Loc loc, Player pla) const;
   std::vector<Loc> getLegalPawnDestinations(Player pla) const;
   bool isLegalWallPlacement(int c, int r, bool isVertical, Player pla) const;
   bool checkNoFullBlockLazy(int c, int r, bool isVertical) const;

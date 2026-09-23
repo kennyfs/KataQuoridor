@@ -25,6 +25,7 @@
 using namespace std;
 
 int MainCmds::runtests(const vector<string>& args) {
+  (void)args;
   testAssert(sizeof(size_t) == 8);
   Board::initHash();
   ScoreValue::initTables();

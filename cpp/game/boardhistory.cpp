@@ -798,8 +798,6 @@ void BoardHistory::setWinnerByResignation(Player pla) {
 void BoardHistory::setKoRecapBlocked(Loc loc, bool b) {
   if(koRecapBlocked[loc] != b) {
     koRecapBlocked[loc] = b;
-    //We used to have per-color marks, so the zobrist was for both. Just combine them.
-    koRecapBlockHash ^= Board::ZOBRIST_KO_MARK_HASH[loc][C_BLACK] ^ Board::ZOBRIST_KO_MARK_HASH[loc][C_WHITE];
   }
 }
 
@@ -1214,8 +1212,6 @@ Hash128 BoardHistory::getSituationAndSimpleKoHash(const Board& board, Player nex
   //Note that board.pos_hash also incorporates the size of the board.
   Hash128 hash = board.pos_hash;
   hash ^= Board::ZOBRIST_PLAYER_HASH[nextPlayer];
-  if(board.ko_loc != Board::NULL_LOC)
-    hash ^= Board::ZOBRIST_KO_LOC_HASH[board.ko_loc];
   return hash;
 }
 
@@ -1223,8 +1219,6 @@ Hash128 BoardHistory::getSituationAndSimpleKoAndPrevPosHash(const Board& board, 
   //Note that board.pos_hash also incorporates the size of the board.
   Hash128 hash = board.pos_hash;
   hash ^= Board::ZOBRIST_PLAYER_HASH[nextPlayer];
-  if(board.ko_loc != Board::NULL_LOC)
-    hash ^= Board::ZOBRIST_KO_LOC_HASH[board.ko_loc];
 
   Hash128 mixed;
   mixed.hash1 = Hash::rrmxmx(hash.hash0);
@@ -1242,48 +1236,10 @@ Hash128 BoardHistory::getSituationRulesAndKoHash(
   const Board& board, const BoardHistory& hist, Player nextPlayer, double drawEquivalentWinsForWhite,
   const BoardHistoryModes& modes
 ) {
-  int xSize = board.x_size;
-  int ySize = board.y_size;
 
   //Note that board.pos_hash also incorporates the size of the board.
   Hash128 hash = board.pos_hash;
   hash ^= Board::ZOBRIST_PLAYER_HASH[nextPlayer];
-
-  testAssert(hist.encorePhase >= 0 && hist.encorePhase <= 2);
-  hash ^= Board::ZOBRIST_ENCORE_HASH[hist.encorePhase];
-
-  if(hist.encorePhase == 0) {
-    if(board.ko_loc != Board::NULL_LOC)
-      hash ^= Board::ZOBRIST_KO_LOC_HASH[board.ko_loc];
-    for(int y = 0; y<ySize; y++) {
-      for(int x = 0; x<xSize; x++) {
-        Loc loc = Location::getLoc(x,y,xSize);
-        if(hist.superKoBanned[loc] && loc != board.ko_loc)
-          hash ^= Board::ZOBRIST_KO_LOC_HASH[loc];
-      }
-    }
-  }
-  else {
-    for(int y = 0; y<ySize; y++) {
-      for(int x = 0; x<xSize; x++) {
-        Loc loc = Location::getLoc(x,y,xSize);
-        if(hist.superKoBanned[loc])
-          hash ^= Board::ZOBRIST_KO_LOC_HASH[loc];
-        if(hist.koRecapBlocked[loc])
-          hash ^= Board::ZOBRIST_KO_MARK_HASH[loc][P_BLACK] ^ Board::ZOBRIST_KO_MARK_HASH[loc][P_WHITE];
-      }
-    }
-    if(hist.encorePhase == 2) {
-      for(int y = 0; y<ySize; y++) {
-        for(int x = 0; x<xSize; x++) {
-          Loc loc = Location::getLoc(x,y,xSize);
-          Color c = hist.secondEncoreStartColors[loc];
-          if(c != C_EMPTY)
-            hash ^= Board::ZOBRIST_SECOND_ENCORE_START_HASH[loc][c];
-        }
-      }
-    }
-  }
 
   float selfKomi = hist.currentSelfKomi(nextPlayer,drawEquivalentWinsForWhite);
 

@@ -10,7 +10,6 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <queue>
 #include <sstream>
 #include <vector>
 
@@ -24,18 +23,10 @@ Hash128 Board::ZOBRIST_SIZE_X_HASH[MAX_LEN + 1];
 Hash128 Board::ZOBRIST_SIZE_Y_HASH[MAX_LEN + 1];
 Hash128 Board::ZOBRIST_BOARD_HASH[MAX_ARR_SIZE][NUM_BOARD_COLORS];
 Hash128 Board::ZOBRIST_BOARD_HASH2[MAX_ARR_SIZE][NUM_BOARD_COLORS];
-Hash128 Board::ZOBRIST_KO_LOC_HASH[MAX_ARR_SIZE];
-Hash128 Board::ZOBRIST_NEXTPLA_HASH[4];
-Hash128 Board::ZOBRIST_MOVENUM_HASH[MAX_MOVE_NUM];
 Hash128 Board::ZOBRIST_PLAYER_HASH[4];
 Hash128 Board::ZOBRIST_FENCENUM_HASH[MAX_FENCE_NUM + 1][2];
-Hash128 Board::ZOBRIST_KO_MARK_HASH[MAX_ARR_SIZE][4];
-Hash128 Board::ZOBRIST_ENCORE_HASH[4];
-Hash128 Board::ZOBRIST_SECOND_ENCORE_START_HASH[MAX_ARR_SIZE][NUM_BOARD_COLORS];
-const Hash128 Board::ZOBRIST_GAME_IS_OVER =
+const Hash128 Board::ZOBRIST_GAME_IS_OVER = //Based on sha256 hash of Board::ZOBRIST_GAME_IS_OVER
   Hash128(0xb6f9e465597a77eeULL, 0xf1d583d960a4ce7fULL);
-const Hash128 Board::ZOBRIST_PASS_ENDS_PHASE =
-  Hash128(0x948b80b2b8d0023aULL, 0x1f191f6d63428df8ULL);
 
 // PLAYER IO-------------------------------------------------------------------------------
 namespace PlayerIO {
@@ -69,12 +60,12 @@ namespace PlayerIO {
   }
 
   bool tryParsePlayer(const string& s, Player& pla) {
-    string str = Global::trim(s);
-    if(str == "B" || str == "b" || str == "Black" || str == "black" || str == "P1" || str == "p1" || str == "1") {
+    string str = Global::toLower(Global::trim(s));
+    if(str == "b" || str == "black" || str == "p1" || str == "1") {
       pla = P_BLACK;
       return true;
     }
-    if(str == "W" || str == "w" || str == "White" || str == "white" || str == "P2" || str == "p2" || str == "2") {
+    if(str == "w" || str == "white" || str == "p2" || str == "2") {
       pla = P_WHITE;
       return true;
     }
@@ -82,7 +73,7 @@ namespace PlayerIO {
   }
 
   Player parsePlayer(const string& s) {
-    Player pla;
+    Player pla = C_EMPTY;
     if(tryParsePlayer(s, pla))
       return pla;
     throw StringError("Could not parse player: " + s);
@@ -104,7 +95,7 @@ void Location::getAdjacentOffsets(short adj_offsets[8], int x_size) {
 bool Location::isAdjacent(Loc loc0, Loc loc1, int x_size) {
   return loc0 == loc1 - (x_size + 1) || loc0 == loc1 - 1 || loc0 == loc1 + 1 || loc0 == loc1 + (x_size + 1);
 }
-
+// [delete in future] for Anti-Mirror Go.
 Loc Location::getMirrorLoc(Loc loc, int x_size, int y_size) {
   if(loc == Board::NULL_LOC || loc == Board::PASS_LOC)
     return loc;
@@ -458,7 +449,7 @@ void Board::init(int xS, int yS) {
   colors[blackPawnLoc] = C_BLACK;
 
   // Compute initial hash
-  pos_hash = ZOBRIST_SIZE_X_HASH[x_size] ^ ZOBRIST_SIZE_Y_HASH[y_size] ^ ZOBRIST_NEXTPLA_HASH[nextPla];
+  pos_hash = ZOBRIST_SIZE_X_HASH[x_size] ^ ZOBRIST_SIZE_Y_HASH[y_size];
   pos_hash ^= ZOBRIST_BOARD_HASH[whitePawnLoc][C_WHITE];
   pos_hash ^= ZOBRIST_BOARD_HASH[blackPawnLoc][C_BLACK];
   pos_hash ^= ZOBRIST_FENCENUM_HASH[blackFences][0];
@@ -466,12 +457,10 @@ void Board::init(int xS, int yS) {
 
   // Initial cached paths
   cachedPathP1.clear();
-  for(int y = y_size - 1; y >= 0; y -= 2)
-    cachedPathP1.push_back(Location::getLoc(midX, y, x_size));
+  bfsReachable(blackPawnLoc, 0, &cachedPathP1);
 
   cachedPathP2.clear();
-  for(int y = 0; y < y_size; y += 2)
-    cachedPathP2.push_back(Location::getLoc(midX, y, x_size));
+  bfsReachable(whitePawnLoc, y_size - 1, &cachedPathP2);
 }
 
 void Board::initHash() {
@@ -489,36 +478,21 @@ void Board::initHash() {
     ZOBRIST_PLAYER_HASH[i] = nextHash();
 
   for(int i = 0; i < MAX_ARR_SIZE; i++) {
-    ZOBRIST_KO_LOC_HASH[i] = nextHash();
-    for(int j = 0; j < 4; j++)
-      ZOBRIST_KO_MARK_HASH[i][j] = nextHash();
     for(Color j = 0; j < NUM_BOARD_COLORS; j++) {
-      ZOBRIST_SECOND_ENCORE_START_HASH[i][j] = nextHash();
       if(j == C_EMPTY || j == C_WALL) {
         ZOBRIST_BOARD_HASH[i][j] = Hash128();
-        ZOBRIST_BOARD_HASH2[i][j] = Hash128();
       }
       else {
         ZOBRIST_BOARD_HASH[i][j] = nextHash();
-        ZOBRIST_BOARD_HASH2[i][j] = nextHash();
       }
     }
   }
 
-  for(int i = 0; i < 4; i++)
-    ZOBRIST_ENCORE_HASH[i] = nextHash();
-
+  rand.init("Board::initHash() for ZOBRIST_FENCENUM_HASH hashes");
   for(int i = 0; i < MAX_FENCE_NUM + 1; i++) {
     ZOBRIST_FENCENUM_HASH[i][0] = nextHash();
     ZOBRIST_FENCENUM_HASH[i][1] = nextHash();
   }
-
-  for(Color j = 0; j < 4; j++)
-    ZOBRIST_NEXTPLA_HASH[j] = nextHash();
-
-  for(int i = 0; i < MAX_MOVE_NUM; i++)
-    ZOBRIST_MOVENUM_HASH[i] = nextHash();
-  ZOBRIST_MOVENUM_HASH[0] = Hash128();
 
   rand.init("Board::initHash() for ZOBRIST_SIZE hashes");
   for(int i = 0; i < MAX_LEN + 1; i++) {
@@ -526,11 +500,35 @@ void Board::initHash() {
     ZOBRIST_SIZE_Y_HASH[i] = nextHash();
   }
 
+  //Reseed and compute one more set of zobrist hashes, mixed a bit differently
+  rand.init("Board::initHash() for second set of ZOBRIST hashes");
+  for(int i = 0; i<MAX_ARR_SIZE; i++) {
+    for(Color j = 0; j< NUM_BOARD_COLORS; j++) {
+      ZOBRIST_BOARD_HASH2[i][j] = nextHash();
+      ZOBRIST_BOARD_HASH2[i][j].hash0 = Hash::murmurMix(ZOBRIST_BOARD_HASH2[i][j].hash0);
+      ZOBRIST_BOARD_HASH2[i][j].hash1 = Hash::splitMix64(ZOBRIST_BOARD_HASH2[i][j].hash1);
+    }
+  }
+
   IS_ZOBRIST_INITALIZED = true;
 }
 
 bool Board::isOnBoard(Loc loc) const {
   return loc >= 0 && loc < MAX_ARR_SIZE && colors[loc] != C_WALL;
+}
+
+bool Board::isOnBoardPawn(Loc loc) const {
+  if (!(loc >= 0 && loc < MAX_ARR_SIZE && colors[loc] != C_WALL)) return false;
+  int x = Location::getX(loc, x_size);
+  int y = Location::getY(loc, x_size);
+  return (x % 2 == 0 && y % 2 == 0);
+}
+
+bool Board::isOnBoardFence(Loc loc) const {
+  if (!(loc >= 0 && loc < MAX_ARR_SIZE && colors[loc] != C_WALL)) return false;
+  int x = Location::getX(loc, x_size);
+  int y = Location::getY(loc, x_size);
+  return (x % 2 == 1 && y % 2 == 1) || (x % 2 == 1 && y % 2 == 0);
 }
 
 bool Board::isEmpty() const {
@@ -574,32 +572,41 @@ bool Board::setStones(const vector<Move>& placements) {
 }
 
 void Board::placeFence(Loc center, bool isVertical) {
-  setStone(center, C_FENCE);
+  auto placeOne = [this](Loc loc) {
+    colors[loc] = C_FENCE;
+    // hash for empty is 0 so no need to XOR it
+    pos_hash ^= ZOBRIST_BOARD_HASH[loc][C_FENCE];
+  };
+  placeOne(center);
   if(isVertical) {
-    setStone(center + adj_offsets[0], C_FENCE);
-    setStone(center + adj_offsets[3], C_FENCE);
+    placeOne(center + adj_offsets[0]);
+    placeOne(center + adj_offsets[3]);
   }
   else {
-    setStone(center + adj_offsets[1], C_FENCE);
-    setStone(center + adj_offsets[2], C_FENCE);
+    placeOne(center + adj_offsets[1]);
+    placeOne(center + adj_offsets[2]);
   }
 }
 
 void Board::removeFence(Loc center, bool isVertical) {
-  setStone(center, C_EMPTY);
+  auto removeOne = [this](Loc loc) {
+    colors[loc] = C_EMPTY;
+    pos_hash ^= ZOBRIST_BOARD_HASH[loc][C_FENCE];
+  };
+  removeOne(center);
   if(isVertical) {
-    setStone(center + adj_offsets[0], C_EMPTY);
-    setStone(center + adj_offsets[3], C_EMPTY);
+    removeOne(center + adj_offsets[0]);
+    removeOne(center + adj_offsets[3]);
   }
   else {
-    setStone(center + adj_offsets[1], C_EMPTY);
-    setStone(center + adj_offsets[2], C_EMPTY);
+    removeOne(center + adj_offsets[1]);
+    removeOne(center + adj_offsets[2]);
   }
 }
 
 // Check if a pawn can step directly from pawn cell `from` to adjacent pawn cell `to`
 bool Board::canPawnStep(Loc from, Loc to) const {
-  if(!isOnBoard(from) || !isOnBoard(to))
+  if(!isOnBoardPawn(from) || !isOnBoardPawn(to))
     return false;
   int x0 = Location::getX(from, x_size);
   int y0 = Location::getY(from, x_size);
@@ -617,8 +624,77 @@ bool Board::canPawnStep(Loc from, Loc to) const {
   return colors[mid] != C_FENCE;
 }
 
+bool Board::isLegalPawnMove(Loc loc, Player pla) const {
+  if(!isOnBoardPawn(loc) || colors[loc] != C_EMPTY)
+    return false;
+  Loc myLoc = (pla == P_BLACK) ? blackPawnLoc : whitePawnLoc;
+  Loc oppLoc = (pla == P_BLACK) ? whitePawnLoc : blackPawnLoc;
+
+  int myX = Location::getX(myLoc, x_size);
+  int myY = Location::getY(myLoc, x_size);
+  int targetX = Location::getX(loc, x_size);
+  int targetY = Location::getY(loc, x_size);
+
+  int dx = targetX - myX;
+  int dy = targetY - myY;
+  int dist = abs(dx) + abs(dy);
+  if(dist != 2 && dist != 4)
+    return false;
+
+  // Direct step of 1 cell (distance 2 on 17x17 grid)
+  if(dist == 2) {
+    if(loc == oppLoc)
+      return false;
+    return canPawnStep(myLoc, loc);
+  }
+
+  // dist == 4: Jump over opponent (either straight or diagonal)
+  const int dirs[4][2] = {{0, -2}, {-2, 0}, {2, 0}, {0, 2}};
+  for(int d = 0; d < 4; d++) {
+    int nx = myX + dirs[d][0];
+    int ny = myY + dirs[d][1];
+    if(nx < 0 || nx >= x_size || ny < 0 || ny >= y_size)
+      continue;
+    Loc step1 = Location::getLoc(nx, ny, x_size);
+    if(step1 != oppLoc || !canPawnStep(myLoc, step1))
+      continue;
+
+    // Opponent pawn is adjacent! Check straight jump
+    int jx = nx + dirs[d][0];
+    int jy = ny + dirs[d][1];
+    bool canStraight = false;
+    if(jx >= 0 && jx < x_size && jy >= 0 && jy < y_size) {
+      Loc step2 = Location::getLoc(jx, jy, x_size);
+      if(canPawnStep(oppLoc, step2) && colors[step2] == C_EMPTY) {
+        if(step2 == loc)
+          return true;
+        canStraight = true;
+      }
+    }
+    // If straight jump blocked by wall or board edge, diagonal jumps allowed
+    if(!canStraight) {
+      int d1 = (d == 0 || d == 3) ? 1 : 0;
+      int d2 = (d == 0 || d == 3) ? 2 : 3;
+      int perpDirs[2] = {d1, d2};
+      for(int i = 0; i < 2; i++) {
+        int pd = perpDirs[i];
+        int diagX = nx + dirs[pd][0];
+        int diagY = ny + dirs[pd][1];
+        if(diagX >= 0 && diagX < x_size && diagY >= 0 && diagY < y_size) {
+          Loc diagLoc = Location::getLoc(diagX, diagY, x_size);
+          if(diagLoc == loc && canPawnStep(oppLoc, diagLoc) && colors[diagLoc] == C_EMPTY)
+            return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
 vector<Loc> Board::getLegalPawnDestinations(Player pla) const {
   vector<Loc> moves;
+  moves.reserve(2);
   Loc myLoc = (pla == P_BLACK) ? blackPawnLoc : whitePawnLoc;
   Loc oppLoc = (pla == P_BLACK) ? whitePawnLoc : blackPawnLoc;
 
@@ -675,25 +751,27 @@ vector<Loc> Board::getLegalPawnDestinations(Player pla) const {
 }
 
 bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
-  if(!isOnBoard(start))
+  if(!isOnBoardPawn(start))
     return false;
 
   bool visited[MAX_ARR_SIZE];
   memset(visited, 0, sizeof(visited));
   Loc parent[MAX_ARR_SIZE];
-  for(int i = 0; i < MAX_ARR_SIZE; i++)
-    parent[i] = NULL_LOC;
+  if(outPath != nullptr)
+    memset(parent, 0, sizeof(parent));
 
-  queue<Loc> q;
-  q.push(start);
+  Loc q[81];
+  int qHead = 0;
+  int qTail = 0;
+
+  q[qTail++] = start;
   visited[start] = true;
 
   Loc goalFound = NULL_LOC;
   const int dirs[4][2] = {{0, -2}, {-2, 0}, {2, 0}, {0, 2}};
 
-  while(!q.empty()) {
-    Loc curr = q.front();
-    q.pop();
+  while(qHead < qTail) {
+    Loc curr = q[qHead++];
 
     int cy = Location::getY(curr, x_size);
     if(cy == targetY) {
@@ -710,8 +788,9 @@ bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
       Loc next = Location::getLoc(nx, ny, x_size);
       if(!visited[next] && canPawnStep(curr, next)) {
         visited[next] = true;
-        parent[next] = curr;
-        q.push(next);
+        if(outPath != nullptr)
+          parent[next] = curr;
+        q[qTail++] = next;
       }
     }
   }
@@ -721,6 +800,7 @@ bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
 
   if(outPath != nullptr) {
     outPath->clear();
+    outPath->reserve(81);
     Loc curr = goalFound;
     while(curr != NULL_LOC) {
       outPath->push_back(curr);
@@ -732,9 +812,11 @@ bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
   return true;
 }
 
-static bool pathUsesCell(const vector<Loc>& path, Loc cell) {
-  for(Loc l : path) {
-    if(l == cell)
+static bool pathCrossesWall(const vector<Loc>& path, Loc arm1, Loc arm2) {
+  if(path.size() < 2) return false;
+  for(size_t i = 0; i + 1 < path.size(); i++) {
+    Loc edgeMid = (path[i] + path[i+1]) >> 1;
+    if(edgeMid == arm1 || edgeMid == arm2)
       return true;
   }
   return false;
@@ -745,8 +827,8 @@ bool Board::checkNoFullBlockLazy(int c, int r, bool isVertical) const {
   Loc arm1 = isVertical ? (center + adj_offsets[0]) : (center + adj_offsets[1]);
   Loc arm2 = isVertical ? (center + adj_offsets[3]) : (center + adj_offsets[2]);
 
-  bool cutP1 = pathUsesCell(cachedPathP1, center) || pathUsesCell(cachedPathP1, arm1) || pathUsesCell(cachedPathP1, arm2);
-  bool cutP2 = pathUsesCell(cachedPathP2, center) || pathUsesCell(cachedPathP2, arm2) || pathUsesCell(cachedPathP2, arm2);
+  bool cutP1 = pathCrossesWall(cachedPathP1, arm1, arm2);
+  bool cutP2 = pathCrossesWall(cachedPathP2, arm1, arm2);
 
   if(!cutP1 && !cutP2)
     return true;
@@ -798,8 +880,6 @@ bool Board::isLegalWallPlacement(int c, int r, bool isVertical, Player pla) cons
 
 bool Board::isLegal(Loc loc, Player pla, bool isMultiStoneSuicideLegal) const {
   (void)isMultiStoneSuicideLegal;
-  if(pla != nextPla)
-    return false;
   if(loc == PASS_LOC || loc == NULL_LOC)
     return false;
   if(!isOnBoard(loc))
@@ -812,12 +892,7 @@ bool Board::isLegal(Loc loc, Player pla, bool isMultiStoneSuicideLegal) const {
 
   // Case 1: Pawn move at even x, even y
   if(x % 2 == 0 && y % 2 == 0) {
-    auto legalDests = getLegalPawnDestinations(pla);
-    for(Loc d : legalDests) {
-      if(d == loc)
-        return true;
-    }
-    return false;
+    return isLegalPawnMove(loc, pla);
   }
   // Case 2: Horizontal fence at odd x, odd y
   if(x % 2 == 1 && y % 2 == 1) {
@@ -836,9 +911,7 @@ bool Board::isLegal(Loc loc, Player pla, bool isMultiStoneSuicideLegal) const {
 }
 
 void Board::playMoveAssumeLegal(Loc loc, Player pla) {
-  pos_hash ^= ZOBRIST_MOVENUM_HASH[movenum];
   movenum++;
-  pos_hash ^= ZOBRIST_MOVENUM_HASH[movenum];
 
   int x = Location::getX(loc, x_size);
   int y = Location::getY(loc, x_size);
@@ -876,11 +949,11 @@ void Board::playMoveAssumeLegal(Loc loc, Player pla) {
     // Update cached paths if affected
     Loc arm1 = loc + adj_offsets[1];
     Loc arm2 = loc + adj_offsets[2];
-    if(pathUsesCell(cachedPathP1, arm1) || pathUsesCell(cachedPathP1, arm2)) {
+    if(pathCrossesWall(cachedPathP1, arm1, arm2)) {
       cachedPathP1.clear();
       bfsReachable(blackPawnLoc, 0, &cachedPathP1);
     }
-    if(pathUsesCell(cachedPathP2, arm1) || pathUsesCell(cachedPathP2, arm2)) {
+    if(pathCrossesWall(cachedPathP2, arm1, arm2)) {
       cachedPathP2.clear();
       bfsReachable(whitePawnLoc, y_size - 1, &cachedPathP2);
     }
@@ -902,20 +975,18 @@ void Board::playMoveAssumeLegal(Loc loc, Player pla) {
     // Update cached paths if affected
     Loc top = center + adj_offsets[0];
     Loc bot = center + adj_offsets[3];
-    if(pathUsesCell(cachedPathP1, top) || pathUsesCell(cachedPathP1, bot)) {
+    if(pathCrossesWall(cachedPathP1, top, bot)) {
       cachedPathP1.clear();
       bfsReachable(blackPawnLoc, 0, &cachedPathP1);
     }
-    if(pathUsesCell(cachedPathP2, top) || pathUsesCell(cachedPathP2, bot)) {
+    if(pathCrossesWall(cachedPathP2, top, bot)) {
       cachedPathP2.clear();
       bfsReachable(whitePawnLoc, y_size - 1, &cachedPathP2);
     }
   }
 
   // Switch player
-  pos_hash ^= ZOBRIST_NEXTPLA_HASH[nextPla];
   nextPla = getOpp(nextPla);
-  pos_hash ^= ZOBRIST_NEXTPLA_HASH[nextPla];
 }
 
 bool Board::playMove(Loc loc, Player pla, bool isMultiStoneSuicideLegal) {
@@ -971,6 +1042,8 @@ void Board::undo(MoveRecord record) {
 
   if(x % 2 == 0 && y % 2 == 0) {
     // Revert pawn move
+    // Note: Opponent's cached path remains valid because BFS pathfinding only
+    // checks for fence blocking (via canPawnStep) and is unaffected by pawn movements.
     if(record.pla == P_BLACK) {
       colors[blackPawnLoc] = C_EMPTY;
       blackPawnLoc = record.oldBlackPawnLoc;
@@ -1022,22 +1095,23 @@ void Board::calDistMap(Player pla, int32_t* res) const {
 
   int targetY = (pla == P_BLACK) ? 0 : (y_size - 1);
 
-  queue<Loc> q;
+  Loc q[81];
+  int qHead = 0;
+  int qTail = 0;
   bool visited[MAX_ARR_SIZE];
   memset(visited, 0, sizeof(visited));
 
   for(int c = 0; c < 9; c++) {
     Loc goal = Location::getLoc(2 * c, targetY, x_size);
-    q.push(goal);
+    q[qTail++] = goal;
     visited[goal] = true;
     res[c * 9 + targetY / 2] = 0;
   }
 
   const int dirs[4][2] = {{0, -2}, {-2, 0}, {2, 0}, {0, 2}};
 
-  while(!q.empty()) {
-    Loc curr = q.front();
-    q.pop();
+  while(qHead < qTail) {
+    Loc curr = q[qHead++];
 
     int cx = Location::getX(curr, x_size);
     int cy = Location::getY(curr, x_size);
@@ -1052,7 +1126,7 @@ void Board::calDistMap(Player pla, int32_t* res) const {
       if(!visited[next] && canPawnStep(curr, next)) {
         visited[next] = true;
         res[(nx / 2) * 9 + (ny / 2)] = curDist + 1;
-        q.push(next);
+        q[qTail++] = next;
       }
     }
   }
@@ -1099,6 +1173,20 @@ Board Board::getMirroredX() const {
   b.bfsReachable(b.blackPawnLoc, 0, &b.cachedPathP1);
   b.cachedPathP2.clear();
   b.bfsReachable(b.whitePawnLoc, y_size - 1, &b.cachedPathP2);
+
+  b.pos_hash = ZOBRIST_SIZE_X_HASH[b.x_size] ^ ZOBRIST_SIZE_Y_HASH[b.y_size];
+  b.pos_hash ^= ZOBRIST_BOARD_HASH[b.whitePawnLoc][C_WHITE];
+  b.pos_hash ^= ZOBRIST_BOARD_HASH[b.blackPawnLoc][C_BLACK];
+  b.pos_hash ^= ZOBRIST_FENCENUM_HASH[b.blackFences][0];
+  b.pos_hash ^= ZOBRIST_FENCENUM_HASH[b.whiteFences][1];
+  for(int y = 0; y < b.y_size; y++) {
+    for(int x = 0; x < b.x_size; x++) {
+      Loc loc = Location::getLoc(x, y, b.x_size);
+      if(b.colors[loc] == C_FENCE) {
+        b.pos_hash ^= ZOBRIST_BOARD_HASH[loc][C_FENCE];
+      }
+    }
+  }
   return b;
 }
 
@@ -1235,10 +1323,25 @@ Board Board::ofJson(const nlohmann::json& j) {
   for(int i = 0; i < Board::MAX_ARR_SIZE && i < (int)colArr.size(); i++)
     b.colors[i] = (Color)colArr[i];
 
+  b.pos_hash = ZOBRIST_SIZE_X_HASH[b.x_size] ^ ZOBRIST_SIZE_Y_HASH[b.y_size];
+  b.pos_hash ^= ZOBRIST_BOARD_HASH[b.whitePawnLoc][C_WHITE];
+  b.pos_hash ^= ZOBRIST_BOARD_HASH[b.blackPawnLoc][C_BLACK];
+  b.pos_hash ^= ZOBRIST_FENCENUM_HASH[b.blackFences][0];
+  b.pos_hash ^= ZOBRIST_FENCENUM_HASH[b.whiteFences][1];
+  for(int y = 0; y < b.y_size; y++) {
+    for(int x = 0; x < b.x_size; x++) {
+      Loc loc = Location::getLoc(x, y, b.x_size);
+      if(b.colors[loc] == C_FENCE) {
+        b.pos_hash ^= ZOBRIST_BOARD_HASH[loc][C_FENCE];
+      }
+    }
+  }
+
   b.cachedPathP1.clear();
   b.bfsReachable(b.blackPawnLoc, 0, &b.cachedPathP1);
   b.cachedPathP2.clear();
   b.bfsReachable(b.whitePawnLoc, b.y_size - 1, &b.cachedPathP2);
 
+  b.checkConsistency();
   return b;
 }
