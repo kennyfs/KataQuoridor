@@ -27,6 +27,9 @@ Hash128 Board::ZOBRIST_PLAYER_HASH[4];
 Hash128 Board::ZOBRIST_FENCENUM_HASH[MAX_FENCE_NUM + 1][2];
 const Hash128 Board::ZOBRIST_GAME_IS_OVER = //Based on sha256 hash of Board::ZOBRIST_GAME_IS_OVER
   Hash128(0xb6f9e465597a77eeULL, 0xf1d583d960a4ce7fULL);
+const Hash128 Board::ZOBRIST_PASS_ENDS_PHASE =
+  Hash128(0x89d2d0c262a4d34fULL, 0x2e06180360a0f8bfULL);
+Hash128 Board::ZOBRIST_KO_LOC_HASH[MAX_ARR_SIZE];
 
 // PLAYER IO-------------------------------------------------------------------------------
 namespace PlayerIO {

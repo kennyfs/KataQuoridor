@@ -3,11 +3,17 @@
 
 #include "../core/global.h"
 #include "../core/hash.h"
-
 #include "../external/nlohmann_json/json.hpp"
 
-struct Rules {
+#include <set>
+#include <string>
+#include <iostream>
 
+struct Rules {
+  // The only meaningful Quoridor rule parameter
+  int maxMovesPerGame;  // default = 200
+
+  // Compatibility stubs for unchanged modules until Step 7-10
   static const int KO_SIMPLE = 0;
   static const int KO_POSITIONAL = 1;
   static const int KO_SITUATIONAL = 2;
@@ -31,17 +37,14 @@ struct Rules {
   static const int WHB_N_MINUS_ONE = 2;
   int whiteHandicapBonusRule;
 
-  //Mostly an informational value - doesn't affect the actual implemented rules, but GTP or Analysis may, at a
-  //high level, use this info to adjust passing behavior - whether it's okay to pass without capturing dead stones.
-  //Only relevant for area scoring.
   bool friendlyPassOk;
 
   float komi;
-  //Min and max acceptable komi in various places involving user input validation
   static constexpr float MIN_USER_KOMI = -400.0f;
   static constexpr float MAX_USER_KOMI = 400.0f;
 
   Rules();
+  explicit Rules(int maxMovesPerGame);
   Rules(
     int koRule,
     int scoringRule,
@@ -57,8 +60,30 @@ struct Rules {
   bool operator==(const Rules& other) const;
   bool operator!=(const Rules& other) const;
 
+  // Factory
+  static Rules getQuoridorRules();  // returns Rules(200)
+
+  // Stub serialization kept for GTP/SGF compatibility
+  std::string toString() const;
+  std::string toStringNoKomi() const;
+  std::string toStringNoKomiMaybeNice() const;
+  std::string toJsonString() const;
+  std::string toJsonStringNoKomi() const;
+  std::string toJsonStringNoKomiMaybeOmitStuff() const;
+  nlohmann::json toJson() const;
+  nlohmann::json toJsonNoKomi() const;
+  nlohmann::json toJsonNoKomiMaybeOmitStuff() const;
+
+  static Rules parseRules(const std::string& str);
+  static Rules parseRulesWithoutKomi(const std::string& str, float komi);
+  static bool tryParseRules(const std::string& str, Rules& buf);
+  static bool tryParseRulesWithoutKomi(const std::string& str, Rules& buf, float komi);
+
+  static Rules updateRules(const std::string& key, const std::string& value, const Rules& priorRules);
+
   bool equalsIgnoringKomi(const Rules& other) const;
   bool gameResultWillBeInteger() const;
+  static bool komiIsIntOrHalfInt(float komi);
 
   static Rules getTrompTaylorish();
   static Rules getSimpleTerritory();
@@ -76,25 +101,7 @@ struct Rules {
   static std::string writeTaxRule(int taxRule);
   static std::string writeWhiteHandicapBonusRule(int whiteHandicapBonusRule);
 
-  static bool komiIsIntOrHalfInt(float komi);
-
-  static Rules parseRules(const std::string& str);
-  static Rules parseRulesWithoutKomi(const std::string& str, float komi);
-  static bool tryParseRules(const std::string& str, Rules& buf);
-  static bool tryParseRulesWithoutKomi(const std::string& str, Rules& buf, float komi);
-
-  static Rules updateRules(const std::string& key, const std::string& value, const Rules& priorRules);
-
   friend std::ostream& operator<<(std::ostream& out, const Rules& rules);
-  std::string toString() const;
-  std::string toStringNoKomi() const;
-  std::string toStringNoKomiMaybeNice() const;
-  std::string toJsonString() const;
-  std::string toJsonStringNoKomi() const;
-  std::string toJsonStringNoKomiMaybeOmitStuff() const;
-  nlohmann::json toJson() const;
-  nlohmann::json toJsonNoKomi() const;
-  nlohmann::json toJsonNoKomiMaybeOmitStuff() const;
 
   static const Hash128 ZOBRIST_KO_RULE_HASH[4];
   static const Hash128 ZOBRIST_SCORING_RULE_HASH[2];
@@ -104,9 +111,6 @@ struct Rules {
   static const Hash128 ZOBRIST_FRIENDLY_PASS_OK_HASH;
   static const Hash128 ZOBRIST_PASS_ALIVE_UNDER_SUICIDE_HASH;
   static const Hash128 ZOBRIST_EXCLUDE_TERRITORY_ADJ_ATARI_HASH;
-
-private:
-  nlohmann::json toJsonHelper(bool omitKomi, bool omitDefaults) const;
 };
 
 #endif  // GAME_RULES_H_

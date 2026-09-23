@@ -6,6 +6,8 @@
 
 #include "../tests/tests.h"
 #include "../game/board.h"
+#include "../game/rules.h"
+#include "../game/boardhistory.h"
 #include "../core/global.h"
 
 #include <cassert>
@@ -327,14 +329,205 @@ static void testInitialBoardState() {
   testAssert(b.numStonesOnBoard() == 2);
   testAssert(b.numPlaStonesOnBoard(P_BLACK) == 1);
   testAssert(b.numPlaStonesOnBoard(P_WHITE) == 1);
-
   cout << "    -> Passed (Initial board state 100% verified)!" << endl;
+}
+
+// Step 6 - Test 1: Black wins by reaching y=0 (row 0)
+static void testBlackWinCondition() {
+  cout << "  [Step 6.1] Black Win Condition (reaching y=0)..." << endl;
+
+  Board b;
+  Rules rules = Rules::getQuoridorRules();
+  testAssert(rules.maxMovesPerGame == 200);
+
+  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+  testAssert(!hist.isGameFinished);
+  testAssert(hist.winner == C_EMPTY);
+
+  // Black advances north along column 4: row 8 down to row 0
+  // White moves away from c=4,r=0 to c=3,r=0 on move 1, then oscillates between (3,0) and (2,0)
+  for(int step = 0; step < 7; step++) {
+    // Black moves to (c=4, r = 7 - step)
+    Loc bLoc = Location::pawnLoc(4, 7 - step, 17);
+    testAssert(hist.isLegal(b, bLoc, P_BLACK));
+    hist.makeBoardMoveAssumeLegal(b, bLoc, P_BLACK, NULL);
+    testAssert(!hist.isGameFinished);
+    testAssert(hist.winner == C_EMPTY);
+
+    // White moves:
+    // step 0: (4,0) -> (3,0)
+    // step 1: (3,0) -> (2,0)
+    // step 2: (2,0) -> (3,0)
+    // step 3: (3,0) -> (2,0)...
+    int wCol = (step % 2 == 0) ? 3 : 2;
+    Loc wLoc = Location::pawnLoc(wCol, 0, 17);
+    testAssert(hist.isLegal(b, wLoc, P_WHITE));
+    hist.makeBoardMoveAssumeLegal(b, wLoc, P_WHITE, NULL);
+    testAssert(!hist.isGameFinished);
+    testAssert(hist.winner == C_EMPTY);
+  }
+
+  // After 7 pairs of moves (14 moves total):
+  // Black is at (c=4, r=1, y=2).
+  // White is at (c=3, r=0, y=0).
+  // (c=4, r=0, y=0) is empty.
+  // Move 15: Black moves to (c=4, r=0, y=0)
+  Loc winningLoc = Location::pawnLoc(4, 0, 17);
+  testAssert(hist.isLegal(b, winningLoc, P_BLACK));
+  hist.makeBoardMoveAssumeLegal(b, winningLoc, P_BLACK, NULL);
+
+  // Terminal assertion
+  testAssert(hist.isGameFinished == true);
+  testAssert(hist.winner == P_BLACK);
+  testAssert(hist.isNoResult == false);
+  testAssert(hist.isResignation == false);
+  testAssert(hist.moveHistory.size() == 15);
+
+  cout << "    -> Passed (Black reaches y=0 and triggers winner == P_BLACK)!" << endl;
+}
+
+// Step 6 - Test 2: White wins by reaching y=16 (row 8)
+static void testWhiteWinCondition() {
+  cout << "  [Step 6.2] White Win Condition (reaching y=16)..." << endl;
+
+  Board b;
+  Rules rules = Rules::getQuoridorRules();
+  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+
+  // Black leaves (4,8) immediately to (3,8), then oscillates between (3,8) and (2,8)
+  // White advances south along column 4: row 0 up to row 8
+  for(int step = 0; step < 7; step++) {
+    // Black moves:
+    // step 0: (4,8) -> (3,8)
+    // step 1: (3,8) -> (2,8)
+    // step 2: (2,8) -> (3,8)...
+    int bCol = (step % 2 == 0) ? 3 : 2;
+    Loc bLoc = Location::pawnLoc(bCol, 8, 17);
+    testAssert(hist.isLegal(b, bLoc, P_BLACK));
+    hist.makeBoardMoveAssumeLegal(b, bLoc, P_BLACK, NULL);
+    testAssert(!hist.isGameFinished);
+
+    // White moves to (c=4, r = step + 1)
+    Loc wLoc = Location::pawnLoc(4, step + 1, 17);
+    testAssert(hist.isLegal(b, wLoc, P_WHITE));
+    hist.makeBoardMoveAssumeLegal(b, wLoc, P_WHITE, NULL);
+    testAssert(!hist.isGameFinished);
+  }
+
+  // Black makes move 15 between (2,8) and (3,8):
+  Loc bLocLast = Location::pawnLoc(2, 8, 17);
+  testAssert(hist.isLegal(b, bLocLast, P_BLACK));
+  hist.makeBoardMoveAssumeLegal(b, bLocLast, P_BLACK, NULL);
+  testAssert(!hist.isGameFinished);
+
+  // White makes move 16 to (c=4, r=8, y=16):
+  Loc winningLoc = Location::pawnLoc(4, 8, 17);
+  testAssert(hist.isLegal(b, winningLoc, P_WHITE));
+  hist.makeBoardMoveAssumeLegal(b, winningLoc, P_WHITE, NULL);
+
+  testAssert(hist.isGameFinished == true);
+  testAssert(hist.winner == P_WHITE);
+  testAssert(hist.isNoResult == false);
+  testAssert(hist.isResignation == false);
+  testAssert(hist.moveHistory.size() == 16);
+
+  cout << "    -> Passed (White reaches y=16 and triggers winner == P_WHITE)!" << endl;
+}
+
+// Step 6 - Test 3: 200-step draw condition
+static void testMaxMoves200DrawCondition() {
+  cout << "  [Step 6.3] 200-Move Draw Condition..." << endl;
+
+  Board b;
+  Rules rules = Rules::getQuoridorRules();
+  testAssert(rules.maxMovesPerGame == 200);
+
+  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+
+  // Black oscillates between e9 (4,8) and e8 (4,7)
+  // White oscillates between e1 (4,0) and e2 (4,1)
+  Loc bPosA = Location::pawnLoc(4, 8, 17);
+  Loc bPosB = Location::pawnLoc(4, 7, 17);
+  Loc wPosA = Location::pawnLoc(4, 0, 17);
+  Loc wPosB = Location::pawnLoc(4, 1, 17);
+
+  // 50 cycles of 4 moves = 200 moves total
+  for(int cycle = 0; cycle < 50; cycle++) {
+    // Move 1: Black to B
+    hist.makeBoardMoveAssumeLegal(b, bPosB, P_BLACK, NULL);
+    if(cycle < 49 || true) {
+      testAssert(hist.isGameFinished == false);
+      testAssert(hist.winner == C_EMPTY);
+      testAssert(hist.isNoResult == false);
+    }
+
+    // Move 2: White to B
+    hist.makeBoardMoveAssumeLegal(b, wPosB, P_WHITE, NULL);
+    testAssert(hist.isGameFinished == false);
+    testAssert(hist.winner == C_EMPTY);
+    testAssert(hist.isNoResult == false);
+
+    // Move 3: Black to A
+    hist.makeBoardMoveAssumeLegal(b, bPosA, P_BLACK, NULL);
+    testAssert(hist.isGameFinished == false);
+    testAssert(hist.winner == C_EMPTY);
+    testAssert(hist.isNoResult == false);
+
+    // Move 4: White to A (on cycle 49, this is move 200!)
+    hist.makeBoardMoveAssumeLegal(b, wPosA, P_WHITE, NULL);
+    if(cycle < 49) {
+      testAssert(hist.isGameFinished == false);
+      testAssert(hist.winner == C_EMPTY);
+      testAssert(hist.isNoResult == false);
+    }
+  }
+
+  // Exactly at move 200:
+  testAssert((int)hist.moveHistory.size() == 200);
+  testAssert(hist.isGameFinished == true);
+  testAssert(hist.isNoResult == true);
+  testAssert(hist.winner == C_EMPTY);
+  testAssert(hist.isResignation == false);
+
+  cout << "    -> Passed (Exactly 200 moves without win triggers draw / isNoResult)!" << endl;
+}
+
+// Step 6 - Test 4: Resignation & RecentBoards Ring Buffer
+static void testResignationAndRecentBoards() {
+  cout << "  [Step 6.4] Resignation and RecentBoards ring buffer..." << endl;
+
+  Board b;
+  Rules rules = Rules::getQuoridorRules();
+  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+
+  // Test recentBoards tracking
+  Loc bLoc1 = Location::pawnLoc(4, 7, 17);
+  hist.makeBoardMoveAssumeLegal(b, bLoc1, P_BLACK, NULL);
+  testAssert(hist.getRecentBoard(0).blackPawnLoc == bLoc1);
+  testAssert(hist.getRecentBoard(1).blackPawnLoc == Location::pawnLoc(4, 8, 17));
+
+  // Test resignation
+  hist.setWinnerByResignation(P_WHITE);
+  testAssert(hist.isGameFinished == true);
+  testAssert(hist.winner == P_WHITE);
+  testAssert(hist.isResignation == true);
+  testAssert(hist.isNoResult == false);
+
+  // Test clear resets state
+  Board bFresh;
+  hist.clear(bFresh, P_BLACK, rules, 0);
+  testAssert(hist.isGameFinished == false);
+  testAssert(hist.winner == C_EMPTY);
+  testAssert(hist.isResignation == false);
+  testAssert(hist.moveHistory.empty());
+
+  cout << "    -> Passed (Resignation, ring buffer and clear verified)!" << endl;
 }
 
 } // namespace
 
 void Tests::runRulesTests() {
-  cout << "=== Running Quoridor Step 1 Rules & Topology Tests ===" << endl;
+  cout << "=== Running Quoridor Rules, Topology & BoardHistory Tests ===" << endl;
   testGridConstants();
   testPawnCoordinates();
   testHWallCoordinates();
@@ -342,5 +535,10 @@ void Tests::runRulesTests() {
   testDisjointMoveLocations();
   testAdjacentOffsets();
   testInitialBoardState();
-  cout << "=== All Quoridor Step 1 Tests Passed Successfully! ===" << endl;
+  testBlackWinCondition();
+  testWhiteWinCondition();
+  testMaxMoves200DrawCondition();
+  testResignationAndRecentBoards();
+  cout << "=== All Quoridor Step 1 & Step 6 Tests Passed Successfully! ===" << endl;
 }
+

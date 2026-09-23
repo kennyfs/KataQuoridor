@@ -152,6 +152,8 @@ struct Board {
   static const Hash128 ZOBRIST_GAME_IS_OVER;
 
   // Compatibility stubs for unchanged modules until respective steps
+  static const Hash128 ZOBRIST_PASS_ENDS_PHASE;
+  static Hash128 ZOBRIST_KO_LOC_HASH[MAX_ARR_SIZE];
   Loc chain_head[MAX_ARR_SIZE];
   Loc next_in_chain[MAX_ARR_SIZE];
 
