@@ -2610,7 +2610,7 @@ GameRunner::GameRunner(ConfigParser& cfg, const PlaySettings& pSettings, Logger&
 {
   logSearchInfo = cfg.getBool("logSearchInfo");
   logMoves = cfg.getBool("logMoves");
-  maxMovesPerGame = cfg.getInt("maxMovesPerGame",0,1 << 30);
+  maxMovesPerGame = cfg.contains("maxMovesPerGame") ? cfg.getInt("maxMovesPerGame",0,1 << 30) : 300;
   clearBotBeforeSearch = cfg.contains("clearBotBeforeSearch") ? cfg.getBool("clearBotBeforeSearch") : false;
 
   //Initialize object for randomizing game settings
@@ -2623,7 +2623,7 @@ GameRunner::GameRunner(ConfigParser& cfg, const string& gameInitRandSeed, const 
 {
   logSearchInfo = cfg.getBool("logSearchInfo");
   logMoves = cfg.getBool("logMoves");
-  maxMovesPerGame = cfg.getInt("maxMovesPerGame",0,1 << 30);
+  maxMovesPerGame = cfg.contains("maxMovesPerGame") ? cfg.getInt("maxMovesPerGame",0,1 << 30) : 300;
   clearBotBeforeSearch = cfg.contains("clearBotBeforeSearch") ? cfg.getBool("clearBotBeforeSearch") : false;
 
   //Initialize object for randomizing game settings

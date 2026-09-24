@@ -8,6 +8,7 @@
 #include "../game/board.h"
 #include "../game/rules.h"
 #include "../game/boardhistory.h"
+#include "../game/graphhash.h"
 #include "../core/global.h"
 
 #include <cassert>
@@ -337,10 +338,7 @@ static void testBlackWinCondition() {
   cout << "  [Step 6.1] Black Win Condition (reaching y=0)..." << endl;
 
   Board b;
-  Rules rules = Rules::getQuoridorRules();
-  testAssert(rules.maxMovesPerGame == 200);
-
-  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+  BoardHistory hist(b, P_BLACK);
   testAssert(!hist.isGameFinished);
   testAssert(hist.winner == C_EMPTY);
 
@@ -391,8 +389,7 @@ static void testWhiteWinCondition() {
   cout << "  [Step 6.2] White Win Condition (reaching y=16)..." << endl;
 
   Board b;
-  Rules rules = Rules::getQuoridorRules();
-  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+  BoardHistory hist(b, P_BLACK);
 
   // Black leaves (4,8) immediately to (3,8), then oscillates between (3,8) and (2,8)
   // White advances south along column 4: row 0 up to row 8
@@ -434,15 +431,15 @@ static void testWhiteWinCondition() {
   cout << "    -> Passed (White reaches y=16 and triggers winner == P_WHITE)!" << endl;
 }
 
-// Step 6 - Test 3: 200-step draw condition
-static void testMaxMoves200DrawCondition() {
-  cout << "  [Step 6.3] 200-Move Draw Condition..." << endl;
+// Step 6 - Test 3: Pure rules (no draw condition, 300+ moves) & Transposition Merging
+static void testPureRulesNoDrawAndTransposition() {
+  cout << "  [Step 6.3] Pure Rules (No Draw Condition & Transposition Merging across 300 moves)..." << endl;
+
+  Board bInitial;
+  BoardHistory histInitial(bInitial, P_BLACK);
 
   Board b;
-  Rules rules = Rules::getQuoridorRules();
-  testAssert(rules.maxMovesPerGame == 200);
-
-  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+  BoardHistory hist(b, P_BLACK);
 
   // Black oscillates between e9 (4,8) and e8 (4,7)
   // White oscillates between e1 (4,0) and e2 (4,1)
@@ -451,15 +448,13 @@ static void testMaxMoves200DrawCondition() {
   Loc wPosA = Location::pawnLoc(4, 0, 17);
   Loc wPosB = Location::pawnLoc(4, 1, 17);
 
-  // 50 cycles of 4 moves = 200 moves total
-  for(int cycle = 0; cycle < 50; cycle++) {
+  // 75 cycles of 4 moves = 300 moves total
+  for(int cycle = 0; cycle < 75; cycle++) {
     // Move 1: Black to B
     hist.makeBoardMoveAssumeLegal(b, bPosB, P_BLACK, NULL);
-    if(cycle < 49 || true) {
-      testAssert(hist.isGameFinished == false);
-      testAssert(hist.winner == C_EMPTY);
-      testAssert(hist.isNoResult == false);
-    }
+    testAssert(hist.isGameFinished == false);
+    testAssert(hist.winner == C_EMPTY);
+    testAssert(hist.isNoResult == false);
 
     // Move 2: White to B
     hist.makeBoardMoveAssumeLegal(b, wPosB, P_WHITE, NULL);
@@ -473,23 +468,30 @@ static void testMaxMoves200DrawCondition() {
     testAssert(hist.winner == C_EMPTY);
     testAssert(hist.isNoResult == false);
 
-    // Move 4: White to A (on cycle 49, this is move 200!)
+    // Move 4: White to A
     hist.makeBoardMoveAssumeLegal(b, wPosA, P_WHITE, NULL);
-    if(cycle < 49) {
-      testAssert(hist.isGameFinished == false);
-      testAssert(hist.winner == C_EMPTY);
-      testAssert(hist.isNoResult == false);
-    }
+    testAssert(hist.isGameFinished == false);
+    testAssert(hist.winner == C_EMPTY);
+    testAssert(hist.isNoResult == false);
   }
 
-  // Exactly at move 200:
-  testAssert((int)hist.moveHistory.size() == 200);
-  testAssert(hist.isGameFinished == true);
-  testAssert(hist.isNoResult == true);
+  // Exactly at move 300:
+  testAssert((int)hist.moveHistory.size() == 300);
+  testAssert(hist.isGameFinished == false); // NO DRAW in pure Quoridor rules!
+  testAssert(hist.isNoResult == false);
   testAssert(hist.winner == C_EMPTY);
-  testAssert(hist.isResignation == false);
 
-  cout << "    -> Passed (Exactly 200 moves without win triggers draw / isNoResult)!" << endl;
+  // Pure Markov Transposition Merging Verification:
+  // At move 300, pawns are at initial locations and 0 walls placed.
+  // Board pos_hash, sitHash, situationRulesAndKoHash, and GraphHash::getStateHash MUST match initial!
+  testAssert(b.pos_hash == bInitial.pos_hash);
+  testAssert(b.getSitHash(P_BLACK) == bInitial.getSitHash(P_BLACK));
+  testAssert(BoardHistory::getSituationRulesAndKoHash(b, hist, P_BLACK, 0.5) ==
+             BoardHistory::getSituationRulesAndKoHash(bInitial, histInitial, P_BLACK, 0.5));
+  testAssert(GraphHash::getStateHash(hist, P_BLACK, 0.5) ==
+             GraphHash::getStateHash(histInitial, P_BLACK, 0.5));
+
+  cout << "    -> Passed (Pure rules: 300 moves without draw, Markov state & transposition hash verified)!" << endl;
 }
 
 // Step 6 - Test 4: Resignation & RecentBoards Ring Buffer
@@ -497,8 +499,7 @@ static void testResignationAndRecentBoards() {
   cout << "  [Step 6.4] Resignation and RecentBoards ring buffer..." << endl;
 
   Board b;
-  Rules rules = Rules::getQuoridorRules();
-  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+  BoardHistory hist(b, P_BLACK);
 
   // Test recentBoards tracking
   Loc bLoc1 = Location::pawnLoc(4, 7, 17);
@@ -515,7 +516,7 @@ static void testResignationAndRecentBoards() {
 
   // Test clear resets state
   Board bFresh;
-  hist.clear(bFresh, P_BLACK, rules, 0);
+  hist.clear(bFresh, P_BLACK);
   testAssert(hist.isGameFinished == false);
   testAssert(hist.winner == C_EMPTY);
   testAssert(hist.isResignation == false);
@@ -528,8 +529,7 @@ static void testResignationAndRecentBoards() {
 static void testBoardHistoryIsLegalStrictAndTolerant() {
   cout << "  [Step 6.5] Strict vs Tolerant isLegal & Terminal State Reset..." << endl;
   Board b;
-  Rules rules = Rules::getQuoridorRules();
-  BoardHistory hist(b, P_BLACK, rules, 0, BoardHistoryModes());
+  BoardHistory hist(b, P_BLACK);
 
   Loc bMove = Location::pawnLoc(4, 7, 17);
   Loc wMove = Location::pawnLoc(4, 1, 17);
@@ -564,17 +564,12 @@ static void testRulesParsingValidation() {
 
   // Valid named rules
   testAssert(Rules::tryParseRules("quoridor", r));
-  testAssert(r.maxMovesPerGame == 200);
   testAssert(Rules::tryParseRules("DEFAULT", r));
   testAssert(Rules::tryParseRules("tromptaylor", r));
 
   // Valid JSON rules
   testAssert(Rules::tryParseRules("{}", r));
-  testAssert(r.maxMovesPerGame == 200);
-  testAssert(Rules::tryParseRules("{\"maxMovesPerGame\": 150}", r));
-  testAssert(r.maxMovesPerGame == 150);
-  testAssert(Rules::tryParseRules("{\"maxMovesPerGame\": 300, \"ko\": \"POSITIONAL\"}", r));
-  testAssert(r.maxMovesPerGame == 300);
+  testAssert(Rules::tryParseRules("{\"rules\": \"quoridor\"}", r));
 
   // Invalid inputs
   testAssert(!Rules::tryParseRules("invalid_rules", r));
@@ -613,7 +608,7 @@ void Tests::runRulesTests() {
   testInitialBoardState();
   testBlackWinCondition();
   testWhiteWinCondition();
-  testMaxMoves200DrawCondition();
+  testPureRulesNoDrawAndTransposition();
   testResignationAndRecentBoards();
   testBoardHistoryIsLegalStrictAndTolerant();
   testRulesParsingValidation();

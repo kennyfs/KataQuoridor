@@ -72,6 +72,10 @@ BoardHistory::BoardHistory()
 
 BoardHistory::~BoardHistory() {}
 
+BoardHistory::BoardHistory(const Board& board, Player pla)
+  : BoardHistory(board, pla, Rules::getQuoridorRules(), 0, BoardHistoryModes())
+{}
+
 BoardHistory::BoardHistory(const Board& board, Player pla, const Rules& r, int ePhase, const BoardHistoryModes& modes_)
   : rules(r),
     moveHistory(),
@@ -121,6 +125,10 @@ BoardHistory::BoardHistory(const BoardHistory& other) = default;
 BoardHistory& BoardHistory::operator=(const BoardHistory& other) = default;
 BoardHistory::BoardHistory(BoardHistory&& other) noexcept = default;
 BoardHistory& BoardHistory::operator=(BoardHistory&& other) noexcept = default;
+
+void BoardHistory::clear(const Board& board, Player pla) {
+  clear(board, pla, Rules::getQuoridorRules(), 0);
+}
 
 void BoardHistory::clear(const Board& board, Player pla, const Rules& r, int encorePhase_) {
   (void)encorePhase_;
@@ -288,13 +296,6 @@ void BoardHistory::makeBoardMoveAssumeLegal(
     isNoResult = false;
     return;
   }
-
-  // 5. Terminal condition: 200-step draw
-  if((int)moveHistory.size() >= rules.maxMovesPerGame) {
-    isGameFinished = true;
-    winner = C_EMPTY;
-    isNoResult = true;
-  }
 }
 
 bool BoardHistory::makeBoardMoveTolerant(Board& board, Loc moveLoc, Player movePla) {
@@ -333,7 +334,7 @@ void BoardHistory::printBasicInfo(ostream& out, const Board& board) const {
   Board::printBoard(out, board, Board::NULL_LOC, &moveHistory);
   out << "Next player: " << PlayerIO::playerToString(presumedNextMovePla) << endl;
   out << "Rules: " << rules.toJsonString() << endl;
-  out << "Moves played: " << moveHistory.size() << " / " << rules.maxMovesPerGame << endl;
+  out << "Moves played: " << moveHistory.size() << endl;
   if(isGameFinished) {
     out << "Game finished: winner = " << PlayerIO::playerToString(winner)
         << (isNoResult ? " (Draw/NoResult)" : "")
@@ -346,7 +347,7 @@ void BoardHistory::printDebugInfo(ostream& out, const Board& board) const {
   out << "Initial pla " << PlayerIO::playerToString(initialPla) << endl;
   out << "Rules " << rules << endl;
   out << "Presumed next pla " << PlayerIO::playerToString(presumedNextMovePla) << endl;
-  out << "Moves played: " << moveHistory.size() << " / " << rules.maxMovesPerGame << endl;
+  out << "Moves played: " << moveHistory.size() << endl;
   out << "Game result " << isGameFinished << " " << PlayerIO::playerToString(winner)
       << " isNoResult=" << isNoResult << " isResignation=" << isResignation << endl;
   out << "Last moves ";
@@ -373,10 +374,6 @@ int BoardHistory::computeWhiteHandicapBonus() const {
 
 bool BoardHistory::hasBlackPassOrWhiteFirst() const {
   return false;
-}
-
-Hash128 BoardHistory::getSituationAndSimpleKoHash(const Board& board, Player nextPlayer) {
-  return board.getSitHash(nextPlayer);
 }
 
 Hash128 BoardHistory::getSituationAndSimpleKoAndPrevPosHash(const Board& board, const BoardHistory&, Player nextPlayer) {

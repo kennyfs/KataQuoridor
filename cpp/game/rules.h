@@ -10,9 +10,6 @@
 #include <iostream>
 
 struct Rules {
-  // The only meaningful Quoridor rule parameter
-  int maxMovesPerGame;  // default = 200
-
   // Compatibility stubs for unchanged modules until Step 7-10
   static const int KO_SIMPLE = 0;
   static const int KO_POSITIONAL = 1;
@@ -44,7 +41,6 @@ struct Rules {
   static constexpr float MAX_USER_KOMI = 400.0f;
 
   Rules();
-  explicit Rules(int maxMovesPerGame);
   Rules(
     int koRule,
     int scoringRule,
@@ -61,7 +57,7 @@ struct Rules {
   bool operator!=(const Rules& other) const;
 
   // Factory
-  static Rules getQuoridorRules();  // returns Rules(200)
+  static Rules getQuoridorRules();
 
   // Stub serialization kept for GTP/SGF compatibility
   std::string toString() const;

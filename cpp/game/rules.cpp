@@ -8,20 +8,7 @@ using namespace std;
 using json = nlohmann::json;
 
 Rules::Rules()
-  : maxMovesPerGame(200),
-    koRule(KO_POSITIONAL),
-    scoringRule(SCORING_AREA),
-    taxRule(TAX_NONE),
-    multiStoneSuicideLegal(false),
-    hasButton(false),
-    whiteHandicapBonusRule(WHB_ZERO),
-    friendlyPassOk(false),
-    komi(0.0f)
-{}
-
-Rules::Rules(int maxMoves)
-  : maxMovesPerGame(maxMoves),
-    koRule(KO_POSITIONAL),
+  : koRule(KO_POSITIONAL),
     scoringRule(SCORING_AREA),
     taxRule(TAX_NONE),
     multiStoneSuicideLegal(false),
@@ -41,8 +28,7 @@ Rules::Rules(
   bool pOk,
   float km
 )
-  : maxMovesPerGame(200),
-    koRule(kRule),
+  : koRule(kRule),
     scoringRule(sRule),
     taxRule(tRule),
     multiStoneSuicideLegal(suic),
@@ -55,7 +41,8 @@ Rules::Rules(
 Rules::~Rules() {}
 
 bool Rules::operator==(const Rules& other) const {
-  return maxMovesPerGame == other.maxMovesPerGame;
+  (void)other;
+  return true;
 }
 
 bool Rules::operator!=(const Rules& other) const {
@@ -63,7 +50,8 @@ bool Rules::operator!=(const Rules& other) const {
 }
 
 bool Rules::equalsIgnoringKomi(const Rules& other) const {
-  return maxMovesPerGame == other.maxMovesPerGame;
+  (void)other;
+  return true;
 }
 
 bool Rules::gameResultWillBeInteger() const {
@@ -71,7 +59,7 @@ bool Rules::gameResultWillBeInteger() const {
 }
 
 Rules Rules::getQuoridorRules() {
-  return Rules(200);
+  return Rules();
 }
 
 Rules Rules::getTrompTaylorish() {
@@ -124,12 +112,7 @@ bool Rules::tryParseRules(const string& str, Rules& buf) {
   try {
     json input = json::parse(s);
     if(input.is_object()) {
-      Rules rules = getQuoridorRules();
-      if(input.contains("maxMovesPerGame") && input["maxMovesPerGame"].is_number_integer()) {
-        int m = input["maxMovesPerGame"].get<int>();
-        if(m > 0) rules.maxMovesPerGame = m;
-      }
-      buf = rules;
+      buf = getQuoridorRules();
       return true;
     }
   }
@@ -164,7 +147,6 @@ string Rules::toStringNoKomiMaybeNice() const {
 
 json Rules::toJson() const {
   json ret;
-  ret["maxMovesPerGame"] = maxMovesPerGame;
   // Minimal fields to satisfy any older consumers
   ret["ko"] = "POSITIONAL";
   ret["scoring"] = "AREA";

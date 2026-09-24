@@ -80,6 +80,7 @@ struct BoardHistory {
   BoardHistory();
   ~BoardHistory();
 
+  BoardHistory(const Board& board, Player pla);
   BoardHistory(const Board& board, Player pla, const Rules& rules, int encorePhase, const BoardHistoryModes& modes);
 
   BoardHistory(const BoardHistory& other);
@@ -89,6 +90,7 @@ struct BoardHistory {
   BoardHistory& operator=(BoardHistory&& other) noexcept;
 
   // Clears all history and status, sets rules
+  void clear(const Board& board, Player pla);
   void clear(const Board& board, Player pla, const Rules& rules, int encorePhase);
   void setKomi(float newKomi);
   void setInitialTurnNumber(int64_t n);
@@ -137,7 +139,6 @@ struct BoardHistory {
 
   bool hasBlackPassOrWhiteFirst() const;
 
-  static Hash128 getSituationAndSimpleKoHash(const Board& board, Player nextPlayer);
   static Hash128 getSituationAndSimpleKoAndPrevPosHash(const Board& board, const BoardHistory& hist, Player nextPlayer);
   static Hash128 getSituationRulesAndKoHash(const Board& board, const BoardHistory& hist, Player nextPlayer, double drawEquivalentWinsForWhite);
   static Hash128 getSituationRulesAndKoHash(const Board& board, const BoardHistory& hist, Player nextPlayer, double drawEquivalentWinsForWhite, const BoardHistoryModes& modes);
