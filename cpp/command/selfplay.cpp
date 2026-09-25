@@ -93,12 +93,15 @@ int MainCmds::selfplay(const vector<string>& args) {
   const int numGameThreads = cfg.getInt("numGameThreads",1,16384);
   const string gameSeedBase = Global::uint64ToHexString(seedRand.nextUInt64());
 
-  //Width and height of the board to use when writing data, typically 19
-  const int dataBoardLen = cfg.getInt("dataBoardLen",3,Board::MAX_LEN);
   const int inputsVersion =
     cfg.contains("inputsVersion") ?
     cfg.getInt("inputsVersion",0,10000) :
     NNModelVersion::getInputsVersion(NNModelVersion::defaultModelVersion);
+  //Width and height of the board to use when writing data, typically 9 for Quoridor
+  const int dataBoardLen =
+    cfg.contains("dataBoardLen") ?
+    cfg.getInt("dataBoardLen",3,Board::MAX_LEN) :
+    (inputsVersion == 1 ? NNInputs::NN_X_LEN : Board::MAX_LEN);
   //Max number of games that we will allow to be queued up and not written out
   const int maxDataQueueSize = cfg.getInt("maxDataQueueSize",1,1000000);
   const int maxRowsPerTrainFile = cfg.getInt("maxRowsPerTrainFile",1,100000000);
@@ -166,9 +169,11 @@ int MainCmds::selfplay(const vector<string>& args) {
     const string expectedSha256 = "";
 
     Rand rand;
-     NNEvaluator* nnEval = Setup::initializeNNEvaluator(
+    int defaultNNXLen = (inputsVersion == 1) ? NNInputs::NN_X_LEN : maxBoardXSizeUsed;
+    int defaultNNYLen = (inputsVersion == 1) ? NNInputs::NN_Y_LEN : maxBoardYSizeUsed;
+    NNEvaluator* nnEval = Setup::initializeNNEvaluator(
       modelName,modelFile,expectedSha256,cfg,logger,rand,expectedConcurrentEvals,
-      maxBoardXSizeUsed,maxBoardYSizeUsed,Setup::MaxBatchSizeRequest::requireFromConfig(),defaultRequireExactNNLen,disableFP16,
+      defaultNNXLen,defaultNNYLen,Setup::MaxBatchSizeRequest::requireFromConfig(),defaultRequireExactNNLen,disableFP16,
       Setup::SETUP_FOR_OTHER
     );
     logger.write("Loaded latest neural net " + modelName + " from: " + modelFile);

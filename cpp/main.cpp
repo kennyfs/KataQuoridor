@@ -174,6 +174,8 @@ static int handleSubcommand(const string& subcommand, const vector<string>& args
     return MainCmds::genposesfromselfplayinit(subArgs);
   else if(subcommand == "writetrainingdata")
     return MainCmds::writetrainingdata(subArgs);
+  else if(subcommand == "writesampletrainquoridor")
+    return MainCmds::writesampletrainquoridor(subArgs);
   else if(subcommand == "sampleinitializations")
     return MainCmds::sampleinitializations(subArgs);
   else if(subcommand == "evalrandominits")

@@ -275,7 +275,7 @@ void FinishedGameData::printDebug(ostream& out) const {
 //And update the python code
 static const int POLICY_TARGET_NUM_CHANNELS = 2;
 static const int GLOBAL_TARGET_NUM_CHANNELS = 80;
-static const int VALUE_SPATIAL_TARGET_NUM_CHANNELS = 5;
+static const int VALUE_SPATIAL_TARGET_NUM_CHANNELS = 4;
 static const int QVALUE_SPATIAL_TARGET_NUM_CHANNELS = 3;
 
 TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBChannels, int numFChannels, int xLen, int yLen, bool includeMetadata)
@@ -291,11 +291,11 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    binaryInputNCHWUnpacked(NULL),
    binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
    globalInputNC({maxRws, numFChannels}),
-   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, NNPos::getPolicySize(xLen,yLen)}),
+   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, (iVersion == 1 ? NNInputs::NN_POLICY_SIZE : NNPos::getPolicySize(xLen,yLen))}),
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
    scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
    valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
-   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, NNPos::getPolicySize(xLen,yLen)}),
+   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, (iVersion == 1 ? NNInputs::NN_POLICY_SIZE : NNPos::getPolicySize(xLen,yLen))}),
    metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS})
 {
   binaryInputNCHWUnpacked = new float[numBChannels * xLen * yLen];
@@ -352,6 +352,46 @@ static void fillPolicyTarget(const vector<PolicyTargetMove>& policyTargetMoves, 
     int pos = NNPos::locToPos(move.loc, boardXSize, dataXLen, dataYLen);
     testAssert(pos >= 0 && pos < policySize);
     target[pos] = move.policyTarget;
+  }
+}
+
+static void fillPolicyTargetQuoridor(const vector<PolicyTargetMove>& policyTargetMoves, int policySize, int boardXSize, Player nextPlayer, int16_t* target) {
+  testAssert(policySize == NNInputs::NN_POLICY_SIZE);
+  zeroPolicyTarget(policySize, target);
+  size_t size = policyTargetMoves.size();
+  for(size_t i = 0; i < size; i++) {
+    const PolicyTargetMove& move = policyTargetMoves[i];
+    Loc moveLoc = move.loc;
+    if(Location::isPawnLoc(moveLoc, boardXSize)) {
+      int x = Location::getX(moveLoc, boardXSize);
+      int y = Location::getY(moveLoc, boardXSize);
+      int c = x / 2;
+      int r = y / 2;
+      int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
+      int slot = 0 * 81 + rCanon * 9 + c;
+      testAssert(slot >= 0 && slot < policySize);
+      target[slot] = move.policyTarget;
+    }
+    else if(Location::isVWallLoc(moveLoc, boardXSize)) {
+      int x = Location::getX(moveLoc, boardXSize);
+      int y = Location::getY(moveLoc, boardXSize);
+      int c = (x - 1) / 2;
+      int r = y / 2;
+      int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+      int slot = 1 * 81 + rCanon * 9 + c;
+      testAssert(slot >= 0 && slot < policySize);
+      target[slot] = move.policyTarget;
+    }
+    else if(Location::isHWallLoc(moveLoc, boardXSize)) {
+      int x = Location::getX(moveLoc, boardXSize);
+      int y = Location::getY(moveLoc, boardXSize);
+      int c = (x - 1) / 2;
+      int r = (y - 1) / 2;
+      int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+      int slot = 2 * 81 + rCanon * 9 + c;
+      testAssert(slot >= 0 && slot < policySize);
+      target[slot] = move.policyTarget;
+    }
   }
 }
 
@@ -526,25 +566,46 @@ void TrainingWriteBuffers::addRow(
   rowGlobal[25] = targetWeight;
 
   //Fill policy
-  const int policySize = NNPos::getPolicySize(dataXLen,dataYLen);
+  const int policySize = (inputsVersion == 1) ? NNInputs::NN_POLICY_SIZE : NNPos::getPolicySize(dataXLen,dataYLen);
   int16_t* rowPolicy = policyTargetsNCMove.data + curRows * POLICY_TARGET_NUM_CHANNELS * policySize;
 
-  if(policyTarget0 != NULL) {
-    fillPolicyTarget(*policyTarget0, policySize, dataXLen, dataYLen, board.x_size, rowPolicy + 0 * policySize);
-    rowGlobal[26] = 1.0f;
-  }
-  else {
-    uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
-    rowGlobal[26] = 0.0f;
-  }
+  if(inputsVersion == 1) {
+    if(policyTarget0 != NULL) {
+      fillPolicyTargetQuoridor(*policyTarget0, policySize, board.x_size, nextPlayer, rowPolicy + 0 * policySize);
+      rowGlobal[26] = 1.0f;
+    }
+    else {
+      uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
+      rowGlobal[26] = 0.0f;
+    }
 
-  if(policyTarget1 != NULL) {
-    fillPolicyTarget(*policyTarget1, policySize, dataXLen, dataYLen, board.x_size, rowPolicy + 1 * policySize);
-    rowGlobal[28] = 1.0f;
+    if(policyTarget1 != NULL) {
+      fillPolicyTargetQuoridor(*policyTarget1, policySize, board.x_size, nextPlayer, rowPolicy + 1 * policySize);
+      rowGlobal[28] = 1.0f;
+    }
+    else {
+      uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
+      rowGlobal[28] = 0.0f;
+    }
   }
   else {
-    uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
-    rowGlobal[28] = 0.0f;
+    if(policyTarget0 != NULL) {
+      fillPolicyTarget(*policyTarget0, policySize, dataXLen, dataYLen, board.x_size, rowPolicy + 0 * policySize);
+      rowGlobal[26] = 1.0f;
+    }
+    else {
+      uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
+      rowGlobal[26] = 0.0f;
+    }
+
+    if(policyTarget1 != NULL) {
+      fillPolicyTarget(*policyTarget1, policySize, dataXLen, dataYLen, board.x_size, rowPolicy + 1 * policySize);
+      rowGlobal[28] = 1.0f;
+    }
+    else {
+      uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
+      rowGlobal[28] = 0.0f;
+    }
   }
 
   //Fill td-like value targets
@@ -566,7 +627,25 @@ void TrainingWriteBuffers::addRow(
   const ValueTargets& thisTargets = whiteValueTargets[whiteValueTargetsIdx];
   //If the actual game ended in a no-result, we don't use lead for any position during the game
   //including side positions, just in case.
-  if(thisTargets.hasLead && !(actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
+  if(inputsVersion == 1) {
+    if(actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult) {
+      float whiteMargin = 0.0f;
+      if(thisTargets.hasLead) {
+        whiteMargin = thisTargets.lead;
+      } else if(posHistForFutureBoards != NULL && !posHistForFutureBoards->empty()) {
+        const Board& finalB = posHistForFutureBoards->back();
+        if(actualGameEndHist.winner == P_WHITE) {
+          whiteMargin = (float)finalB.getShortestPathDistance(P_BLACK);
+        } else if(actualGameEndHist.winner == P_BLACK) {
+          whiteMargin = -(float)finalB.getShortestPathDistance(P_WHITE);
+        }
+      }
+      float margin = (nextPlayer == P_WHITE) ? whiteMargin : -whiteMargin;
+      rowGlobal[21] = margin;
+      rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
+    }
+  }
+  else if(thisTargets.hasLead && !(actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
     //Flip based on next player for training
     float lead = nextPlayer == P_WHITE ? thisTargets.lead : -thisTargets.lead;
     float scoreTargetCap = NNPos::MAX_BOARD_AREA + NNPos::EXTRA_SCORE_DISTR_RADIUS;
@@ -696,134 +775,208 @@ void TrainingWriteBuffers::addRow(
   int8_t* rowScoreDistr = scoreDistrN.data + curRows * scoreDistrLen;
   int8_t* rowOwnership = valueTargetsNCHW.data + curRows * VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea;
 
-  if(finalOwnership == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
-    rowGlobal[27] = 0.0f;
-    rowGlobal[20] = 0.0f;
-    for(int i = 0; i<posArea*2; i++)
-      rowOwnership[i] = 0;
-    for(int i = 0; i<scoreDistrLen; i++)
+  if(inputsVersion == 1) {
+    // Dummy score distribution for Quoridor (not used in Quoridor loss, but required for valid npz format)
+    for(int i = 0; i < scoreDistrLen; i++)
       rowScoreDistr[i] = 0;
-    //Dummy value, to make sure it still sums to 100
-    rowScoreDistr[scoreDistrMid-1] = 50;
+    rowScoreDistr[scoreDistrMid - 1] = 50;
     rowScoreDistr[scoreDistrMid] = 50;
-  }
-  else {
-    testAssert(finalFullArea != NULL);
-    testAssert(finalBoard != NULL);
 
-    //Ownership weight scales by value weight
-    rowGlobal[27] = valueTargetWeight;
-    //Fill score info
-    const ValueTargets& lastTargets = whiteValueTargets[whiteValueTargets.size()-1];
-    float score = nextPlayer == P_WHITE ? lastTargets.score : -lastTargets.score;
-    rowGlobal[20] = score;
+    // Clear 4 spatial value target channels
+    std::fill(rowOwnership, rowOwnership + VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea, 0);
 
-    //Fill with zeros in case the buffers differ in size
-    for(int i = 0; i<posArea*2; i++)
-      rowOwnership[i] = 0;
+    if(posHistForFutureBoards != NULL && actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult) {
+      rowGlobal[27] = valueTargetWeight; // target_weight_aux
 
-    //Fill ownership info
-    Player opp = getOpp(nextPlayer);
-    for(int y = 0; y<board.y_size; y++) {
-      for(int x = 0; x<board.x_size; x++) {
-        int pos = NNPos::xyToPos(x,y,dataXLen);
-        Loc loc = Location::getLoc(x,y,board.x_size);
-        if(finalOwnership[loc] == nextPlayer) rowOwnership[pos] = 1;
-        else if(finalOwnership[loc] == opp) rowOwnership[pos] = -1;
-        //Mark full area points that ended up not being owned
-        if(finalFullArea[loc] != C_EMPTY && finalOwnership[loc] == C_EMPTY)
-          rowOwnership[pos+posArea] = (finalFullArea[loc] == nextPlayer ? 1 : -1);
+      const vector<Board>& boards = *posHistForFutureBoards;
+      testAssert(boards.size() > 0);
+
+      // Channel 0: Current player pawn future trajectory
+      // Channel 1: Opponent player pawn future trajectory
+      for(size_t t = (size_t)whiteValueTargetsIdx; t < boards.size(); t++) {
+        const Board& b = boards[t];
+        Loc locPla = (nextPlayer == P_BLACK) ? b.blackPawnLoc : b.whitePawnLoc;
+        Loc locOpp = (nextPlayer == P_BLACK) ? b.whitePawnLoc : b.blackPawnLoc;
+
+        if(locPla != Board::NULL_LOC && locPla != Board::PASS_LOC) {
+          int x = Location::getX(locPla, board.x_size);
+          int y = Location::getY(locPla, board.x_size);
+          int c = x / 2;
+          int r = y / 2;
+          int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
+          if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
+            rowOwnership[0 * posArea + rCanon * 9 + c] = 1;
+        }
+
+        if(locOpp != Board::NULL_LOC && locOpp != Board::PASS_LOC) {
+          int x = Location::getX(locOpp, board.x_size);
+          int y = Location::getY(locOpp, board.x_size);
+          int c = x / 2;
+          int r = y / 2;
+          int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
+          if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
+            rowOwnership[1 * posArea + rCanon * 9 + c] = 1;
+        }
+      }
+
+      // Channel 2: Terminal Vertical Wall anchors
+      // Channel 3: Terminal Horizontal Wall anchors
+      const Board& finalB = boards.back();
+      for(int r = 0; r < 8; r++) {
+        for(int c = 0; c < 8; c++) {
+          Loc center = Location::hWallLoc(c, r, finalB.x_size);
+          if(finalB.colors[center] == C_FENCE) {
+            int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+            Loc top = center + finalB.adj_offsets[0];
+            if(finalB.colors[top] == C_FENCE) {
+              rowOwnership[2 * posArea + rCanon * 9 + c] = 1;
+            }
+            Loc left = center + finalB.adj_offsets[1];
+            if(finalB.colors[left] == C_FENCE) {
+              rowOwnership[3 * posArea + rCanon * 9 + c] = 1;
+            }
+          }
+        }
       }
     }
-
-    //Fill score vector "onehot"-like
-    for(int i = 0; i<scoreDistrLen; i++)
-      rowScoreDistr[i] = 0;
-    int centerScore = (int)round(score);
-    int lowerIdx = centerScore+scoreDistrMid-1;
-    int upperIdx = centerScore+scoreDistrMid;
-    if(upperIdx <= 0)
-      rowScoreDistr[0] = 100;
-    else if(lowerIdx >= scoreDistrLen-1)
-      rowScoreDistr[scoreDistrLen-1] = 100;
     else {
-      float lambda = score - (centerScore-0.5f);
-      int upperProp = (int)round(lambda*100.0f);
-      rowScoreDistr[lowerIdx] = 100-upperProp;
-      rowScoreDistr[upperIdx] = upperProp;
-    }
-  }
-
-  if(posHistForFutureBoards == NULL) {
-    rowGlobal[33] = 0.0f;
-    for(int i = 0; i<posArea; i++) {
-      rowOwnership[i+posArea*2] = 0;
-      rowOwnership[i+posArea*3] = 0;
+      rowGlobal[27] = 0.0f;
     }
   }
   else {
-    const vector<Board>& boards = *posHistForFutureBoards;
-    testAssert(boards.size() == whiteValueTargets.size());
-    testAssert(boards.size() > 0);
-
-    // Future position weight
-    rowGlobal[33] = 1.0f;
-    int endIdx = (int)boards.size()-1;
-    const Board& board2 = boards[std::min(whiteValueTargetsIdx+8,endIdx)];
-    const Board& board3 = boards[std::min(whiteValueTargetsIdx+32,endIdx)];
-    testAssert(board2.y_size == board.y_size && board2.x_size == board.x_size);
-    testAssert(board3.y_size == board.y_size && board3.x_size == board.x_size);
-
-    for(int i = 0; i<posArea; i++) {
-      rowOwnership[i+posArea*2] = 0;
-      rowOwnership[i+posArea*3] = 0;
+    if(finalOwnership == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
+      rowGlobal[27] = 0.0f;
+      rowGlobal[20] = 0.0f;
+      for(int i = 0; i<posArea*2; i++)
+        rowOwnership[i] = 0;
+      for(int i = 0; i<scoreDistrLen; i++)
+        rowScoreDistr[i] = 0;
+      //Dummy value, to make sure it still sums to 100
+      rowScoreDistr[scoreDistrMid-1] = 50;
+      rowScoreDistr[scoreDistrMid] = 50;
     }
-    Player pla = nextPlayer;
-    Player opp = getOpp(nextPlayer);
-    for(int y = 0; y<board.y_size; y++) {
-      for(int x = 0; x<board.x_size; x++) {
-        int pos = NNPos::xyToPos(x,y,dataXLen);
-        Loc loc = Location::getLoc(x,y,board.x_size);
-        if(board2.colors[loc] == pla) rowOwnership[pos+posArea*2] = 1;
-        else if(board2.colors[loc] == opp) rowOwnership[pos+posArea*2] = -1;
-        if(board3.colors[loc] == pla) rowOwnership[pos+posArea*3] = 1;
-        else if(board3.colors[loc] == opp) rowOwnership[pos+posArea*3] = -1;
+    else {
+      testAssert(finalFullArea != NULL);
+      testAssert(finalBoard != NULL);
+
+      //Ownership weight scales by value weight
+      rowGlobal[27] = valueTargetWeight;
+      //Fill score info
+      const ValueTargets& lastTargets = whiteValueTargets[whiteValueTargets.size()-1];
+      float score = nextPlayer == P_WHITE ? lastTargets.score : -lastTargets.score;
+      rowGlobal[20] = score;
+
+      //Fill with zeros in case the buffers differ in size
+      for(int i = 0; i<posArea*2; i++)
+        rowOwnership[i] = 0;
+
+      //Fill ownership info
+      Player opp = getOpp(nextPlayer);
+      for(int y = 0; y<board.y_size; y++) {
+        for(int x = 0; x<board.x_size; x++) {
+          int pos = NNPos::xyToPos(x,y,dataXLen);
+          Loc loc = Location::getLoc(x,y,board.x_size);
+          if(finalOwnership[loc] == nextPlayer) rowOwnership[pos] = 1;
+          else if(finalOwnership[loc] == opp) rowOwnership[pos] = -1;
+          //Mark full area points that ended up not being owned
+          if(finalFullArea[loc] != C_EMPTY && finalOwnership[loc] == C_EMPTY)
+            rowOwnership[pos+posArea] = (finalFullArea[loc] == nextPlayer ? 1 : -1);
+        }
+      }
+
+      //Fill score vector "onehot"-like
+      for(int i = 0; i<scoreDistrLen; i++)
+        rowScoreDistr[i] = 0;
+      int centerScore = (int)round(score);
+      int lowerIdx = centerScore+scoreDistrMid-1;
+      int upperIdx = centerScore+scoreDistrMid;
+      if(upperIdx <= 0)
+        rowScoreDistr[0] = 100;
+      else if(lowerIdx >= scoreDistrLen-1)
+        rowScoreDistr[scoreDistrLen-1] = 100;
+      else {
+        float lambda = score - (centerScore-0.5f);
+        int upperProp = (int)round(lambda*100.0f);
+        rowScoreDistr[lowerIdx] = 100-upperProp;
+        rowScoreDistr[upperIdx] = upperProp;
+      }
+    }
+
+    if(posHistForFutureBoards == NULL) {
+      rowGlobal[33] = 0.0f;
+      for(int i = 0; i<posArea; i++) {
+        rowOwnership[i+posArea*2] = 0;
+        rowOwnership[i+posArea*3] = 0;
+      }
+    }
+    else {
+      const vector<Board>& boards = *posHistForFutureBoards;
+      testAssert(boards.size() == whiteValueTargets.size());
+      testAssert(boards.size() > 0);
+
+      // Future position weight
+      rowGlobal[33] = 1.0f;
+      int endIdx = (int)boards.size()-1;
+      const Board& board2 = boards[std::min(whiteValueTargetsIdx+8,endIdx)];
+      const Board& board3 = boards[std::min(whiteValueTargetsIdx+32,endIdx)];
+      testAssert(board2.y_size == board.y_size && board2.x_size == board.x_size);
+      testAssert(board3.y_size == board.y_size && board3.x_size == board.x_size);
+
+      for(int i = 0; i<posArea; i++) {
+        rowOwnership[i+posArea*2] = 0;
+        rowOwnership[i+posArea*3] = 0;
+      }
+      Player pla = nextPlayer;
+      Player opp = getOpp(nextPlayer);
+      for(int y = 0; y<board.y_size; y++) {
+        for(int x = 0; x<board.x_size; x++) {
+          int pos = NNPos::xyToPos(x,y,dataXLen);
+          Loc loc = Location::getLoc(x,y,board.x_size);
+          if(board2.colors[loc] == pla) rowOwnership[pos+posArea*2] = 1;
+          else if(board2.colors[loc] == opp) rowOwnership[pos+posArea*2] = -1;
+          if(board3.colors[loc] == pla) rowOwnership[pos+posArea*3] = 1;
+          else if(board3.colors[loc] == opp) rowOwnership[pos+posArea*3] = -1;
+        }
+      }
+    }
+
+    if(finalWhiteScoring == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
+      rowGlobal[34] = 0.0f;
+      for(int i = 0; i<posArea; i++) {
+        rowOwnership[i+posArea*4] = 0;
+      }
+    }
+    else {
+      // Scoring weight scales with value weight
+      rowGlobal[34] = valueTargetWeight;
+      //Fill with zeros in case the buffers differ in size
+      for(int i = 0; i<posArea; i++) {
+        rowOwnership[i+posArea*4] = 0;
+      }
+
+      for(int y = 0; y<board.y_size; y++) {
+        for(int x = 0; x<board.x_size; x++) {
+          int pos = NNPos::xyToPos(x,y,dataXLen);
+          Loc loc = Location::getLoc(x,y,board.x_size);
+          float scoring = (nextPlayer == P_WHITE ? finalWhiteScoring[loc] : -finalWhiteScoring[loc]);
+          testAssert(scoring <= 1.0f && scoring >= -1.0f);
+          rowOwnership[pos+posArea*4] = clampToRadius120(scoring*120.0f,rand);
+        }
       }
     }
   }
-
-
-  if(finalWhiteScoring == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
-    rowGlobal[34] = 0.0f;
-    for(int i = 0; i<posArea; i++) {
-      rowOwnership[i+posArea*4] = 0;
-    }
-  }
-  else {
-    // Scoring weight scales with value weight
-    rowGlobal[34] = valueTargetWeight;
-    //Fill with zeros in case the buffers differ in size
-    for(int i = 0; i<posArea; i++) {
-      rowOwnership[i+posArea*4] = 0;
-    }
-
-    for(int y = 0; y<board.y_size; y++) {
-      for(int x = 0; x<board.x_size; x++) {
-        int pos = NNPos::xyToPos(x,y,dataXLen);
-        Loc loc = Location::getLoc(x,y,board.x_size);
-        float scoring = (nextPlayer == P_WHITE ? finalWhiteScoring[loc] : -finalWhiteScoring[loc]);
-        testAssert(scoring <= 1.0f && scoring >= -1.0f);
-        rowOwnership[pos+posArea*4] = clampToRadius120(scoring*120.0f,rand);
-      }
-    }
-  }
-
 
   //Q values
-  {
+  if(whiteQValueTargets.size() > 0) {
     testAssert(whiteValueTargetsIdx < whiteQValueTargets.size());
     int16_t* rowQValues = qValueTargetsNCMove.data + curRows * QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize;
-    fillQValueTarget(whiteQValueTargets[whiteValueTargetsIdx].targets, nextPlayer, policySize, dataXLen, dataYLen, board.x_size, rowQValues, rand);
+    if(inputsVersion == 1) {
+      for(int i = 0; i < QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize; i++)
+        rowQValues[i] = 0;
+    }
+    else {
+      fillQValueTarget(whiteQValueTargets[whiteValueTargetsIdx].targets, nextPlayer, policySize, dataXLen, dataYLen, board.x_size, rowQValues, rand);
+    }
   }
 
   if(hasMetadataInput) {
@@ -1092,10 +1245,12 @@ void TrainingDataWriter::writeGame(const FinishedGameData& data) {
     else
       testAssert(lastTargets.noResult == 0.0f);
 
-    testAssert(data.finalFullArea != NULL);
-    testAssert(data.finalOwnership != NULL);
-    testAssert(data.finalSekiAreas != NULL);
-    testAssert(data.finalWhiteScoring != NULL);
+    if(inputsVersion != 1) {
+      testAssert(data.finalFullArea != NULL);
+      testAssert(data.finalOwnership != NULL);
+      testAssert(data.finalSekiAreas != NULL);
+      testAssert(data.finalWhiteScoring != NULL);
+    }
     testAssert(!data.endHist.isResignation);
   }
 

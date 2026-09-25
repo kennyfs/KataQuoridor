@@ -9,6 +9,7 @@
 #include "../dataio/sgf.h"
 #include "../dataio/poswriter.h"
 #include "../dataio/files.h"
+#include "../dataio/trainingwrite.h"
 #include "../search/asyncbot.h"
 #include "../program/setup.h"
 #include "../program/playutils.h"
@@ -648,6 +649,131 @@ int MainCmds::selfplaysurprisedump(const vector<string>& args) {
   delete forkData;
   delete gameRunner;
   delete nnEval;
+  ScoreValue::freeTables();
+  return 0;
+}
+
+int MainCmds::writesampletrainquoridor(const vector<string>& args) {
+  if(args.size() < 2) {
+    cout << "Usage: katago writesampletrainquoridor OUTDIR [NUM_FILES] [NUM_ROWS_PER_FILE]" << endl;
+    return 1;
+  }
+  string outDir = args[1];
+  int numFiles = (args.size() >= 3) ? Global::stringToInt(args[2]) : 2;
+  int rowsPerFile = (args.size() >= 4) ? Global::stringToInt(args[3]) : 16;
+
+  Board::initHash();
+  ScoreValue::initTables();
+
+  MakeDir::make(outDir);
+
+  Rand rand("writesampletrainquoridor");
+  int inputsVersion = 1;
+  int nnXLen = 9;
+  int nnYLen = 9;
+
+  for(int f = 0; f < numFiles; f++) {
+    TrainingWriteBuffers buffers(
+      inputsVersion, rowsPerFile, NNInputs::NUM_FEATURES_SPATIAL_V1, NNInputs::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+    );
+
+    while(buffers.curRows < rowsPerFile) {
+      Board startBoard(17, 17);
+      Player startPla = P_BLACK;
+      Rules rules = Rules::getTrompTaylorish();
+      BoardHistory startHist(startBoard, startPla, rules, 0, BoardHistoryModes(false, false));
+
+      vector<Board> posHist;
+      posHist.push_back(startBoard);
+
+      Board currBoard = startBoard;
+      BoardHistory currHist = startHist;
+      Player currPla = startPla;
+
+      int maxTurns = 30;
+      int turnsPlayed = 0;
+
+      for(int t = 0; t < maxTurns; t++) {
+        std::vector<Loc> pawnDests = currBoard.getLegalPawnDestinations(currPla);
+        Loc chosenMove = Board::NULL_LOC;
+        if(!pawnDests.empty()) {
+          int bestDist = 999;
+          for(Loc dest : pawnDests) {
+            int d = (currPla == P_BLACK) ? Location::getY(dest, 17) : (16 - Location::getY(dest, 17));
+            if(d < bestDist) {
+              bestDist = d;
+              chosenMove = dest;
+            }
+          }
+        }
+        if(chosenMove == Board::NULL_LOC) break;
+
+        currHist.makeBoardMoveAssumeLegal(currBoard, chosenMove, currPla, NULL);
+        posHist.push_back(currBoard);
+        turnsPlayed++;
+        if(currHist.isGameFinished) break;
+        currPla = getOpp(currPla);
+      }
+
+      if(!currHist.isGameFinished) {
+        currHist.isGameFinished = true;
+        currHist.winner = P_BLACK;
+        currHist.isNoResult = false;
+      }
+
+      vector<ValueTargets> whiteValueTargets(turnsPlayed + 1);
+      for(size_t i = 0; i <= (size_t)turnsPlayed; i++) {
+        whiteValueTargets[i].win = (currHist.winner == P_WHITE) ? 1.0f : 0.0f;
+        whiteValueTargets[i].loss = (currHist.winner == P_BLACK) ? 1.0f : 0.0f;
+        whiteValueTargets[i].noResult = 0.0f;
+        whiteValueTargets[i].score = (currHist.winner == P_WHITE) ? 5.0f : -5.0f;
+        whiteValueTargets[i].hasLead = true;
+        whiteValueTargets[i].lead = whiteValueTargets[i].score;
+      }
+      vector<QValueTargets> whiteQValueTargets(turnsPlayed + 1);
+      NNRawStats nnRawStats;
+      nnRawStats.whiteWinLoss = 0.0;
+      nnRawStats.whiteScoreMean = 0.0;
+      nnRawStats.policyEntropy = 0.0;
+
+      for(int turn = 0; turn < turnsPlayed && buffers.curRows < rowsPerFile; turn++) {
+        Player p = (turn % 2 == 0) ? P_BLACK : P_WHITE;
+        vector<PolicyTargetMove> policyTarget0;
+        Loc moveLoc = currHist.moveHistory[turn].loc;
+        policyTarget0.push_back(PolicyTargetMove(moveLoc, 100));
+
+        vector<PolicyTargetMove> policyTarget1;
+        if(turn + 1 < turnsPlayed) {
+          policyTarget1.push_back(PolicyTargetMove(currHist.moveHistory[turn + 1].loc, 100));
+        }
+
+        Board bAtTurn = posHist[turn];
+        BoardHistory hAtTurn(bAtTurn, p, rules, turn, BoardHistoryModes(false, false));
+
+        buffers.addRow(
+          bAtTurn, hAtTurn, p,
+          startHist, currHist,
+          turn, 1.0f, 100,
+          &policyTarget0, (turn + 1 < turnsPlayed ? &policyTarget1 : NULL),
+          0.1, 1.0, 1.0,
+          whiteValueTargets, whiteQValueTargets,
+          turn, 1.0f, 1.0f, 1.0f,
+          nnRawStats,
+          &currBoard, NULL, NULL, NULL,
+          &posHist,
+          false, 0, 0.5, C_EMPTY, 0.0,
+          Hash128(), vector<ChangedNeuralNet*>(),
+          false, 0, FinishedGameData::MODE_NORMAL,
+          NULL, rand, ReanalysisData()
+        );
+      }
+    }
+
+    string fileName = outDir + "/train" + Global::intToString(f) + ".npz";
+    buffers.writeToZipFile(fileName);
+    cout << "Wrote " << buffers.curRows << " rows to " << fileName << endl;
+  }
+
   ScoreValue::freeTables();
   return 0;
 }

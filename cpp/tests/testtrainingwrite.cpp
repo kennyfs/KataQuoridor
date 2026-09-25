@@ -157,6 +157,198 @@ static void runReanalysisRowChannelsTest() {
   cout << "Reanalysis row channels test passed" << endl;
 }
 
+static void runQuoridorTrainingWriteTest() {
+  cout << "Running Quoridor training write and canonical target test" << endl;
+
+  int inputsVersion = 1;
+  int maxRows = 8;
+  int nnXLen = 9;
+  int nnYLen = 9;
+  TrainingWriteBuffers buffers(
+    inputsVersion, maxRows, NNInputs::NUM_FEATURES_SPATIAL_V1, NNInputs::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+  );
+
+  // 1. Verify buffer shapes
+  testAssert(buffers.policyTargetsNCMove.getActualDataLen(1) == 2 * NNInputs::NN_POLICY_SIZE); // 2 * 243
+  testAssert(buffers.valueTargetsNCHW.getActualDataLen(1) == 4 * 9 * 9); // 4 * 81
+  testAssert(buffers.globalTargetsNC.getActualDataLen(1) == 80);
+
+  // 2. Setup board and history
+  Board startBoard(17, 17);
+  Player nextPla = P_BLACK;
+  Rules rules = Rules::getTrompTaylorish();
+  BoardHistory hist(startBoard, nextPla, rules, 0, BoardHistoryModes(false, false));
+
+  // Policy target moves
+  // Black player:
+  // Pawn move to (c=4, r=7) -> 17x17 pawnLoc(4, 7)
+  // V-wall at (c=2, r=3) -> 17x17 vWallLoc(2, 3)
+  // H-wall at (c=5, r=1) -> 17x17 hWallLoc(5, 1)
+  vector<PolicyTargetMove> policyTargetP0;
+  policyTargetP0.push_back(PolicyTargetMove(Location::pawnLoc(4, 7, 17), 150));
+  policyTargetP0.push_back(PolicyTargetMove(Location::vWallLoc(2, 3, 17), 75));
+  policyTargetP0.push_back(PolicyTargetMove(Location::hWallLoc(5, 1, 17), 50));
+
+  vector<PolicyTargetMove> policyTargetP1;
+  policyTargetP1.push_back(PolicyTargetMove(Location::pawnLoc(4, 1, 17), 120));
+
+  // Future boards simulation
+  vector<Board> posHistForFutureBoards;
+  posHistForFutureBoards.push_back(startBoard);
+
+  Board b1 = startBoard;
+  b1.playMoveAssumeLegal(Location::pawnLoc(4, 7, 17), P_BLACK);
+  posHistForFutureBoards.push_back(b1);
+
+  Board b2 = b1;
+  b2.playMoveAssumeLegal(Location::pawnLoc(4, 1, 17), P_WHITE);
+  posHistForFutureBoards.push_back(b2);
+
+  Board b3 = b2;
+  b3.playMoveAssumeLegal(Location::vWallLoc(2, 3, 17), P_BLACK);
+  posHistForFutureBoards.push_back(b3);
+
+  Board b4 = b3;
+  b4.playMoveAssumeLegal(Location::hWallLoc(5, 1, 17), P_WHITE);
+  posHistForFutureBoards.push_back(b4);
+
+  Board finalBoard = b4;
+  finalBoard.playMoveAssumeLegal(Location::pawnLoc(4, 0, 17), P_BLACK);
+  posHistForFutureBoards.push_back(finalBoard);
+
+  BoardHistory endHist(finalBoard, P_WHITE, rules, 5, BoardHistoryModes(false, false));
+  endHist.isGameFinished = true;
+  endHist.winner = P_BLACK;
+  endHist.isNoResult = false;
+
+  vector<ValueTargets> whiteValueTargets(posHistForFutureBoards.size());
+  for(size_t i = 0; i < whiteValueTargets.size(); i++) {
+    whiteValueTargets[i].win = 0.0f;
+    whiteValueTargets[i].loss = 1.0f; // Black won
+    whiteValueTargets[i].noResult = 0.0f;
+    whiteValueTargets[i].score = -5.0f;
+    whiteValueTargets[i].hasLead = false;
+  }
+  vector<QValueTargets> whiteQValueTargets(posHistForFutureBoards.size());
+  NNRawStats nnRawStats;
+  nnRawStats.whiteWinLoss = 0.0;
+  nnRawStats.whiteScoreMean = 0.0;
+  nnRawStats.policyEntropy = 0.0;
+  Rand rand("runQuoridorTrainingWriteTest");
+
+  // Add Row 0: Black to move from startBoard
+  buffers.addRow(
+    startBoard, hist, P_BLACK,
+    hist, endHist,
+    0, 1.0f, 275,
+    &policyTargetP0, &policyTargetP1,
+    0.1, 1.0, 1.0,
+    whiteValueTargets, whiteQValueTargets,
+    0, 1.0f, 1.0f, 1.0f,
+    nnRawStats,
+    &finalBoard, NULL, NULL, NULL,
+    &posHistForFutureBoards,
+    false, 0, 0.5, C_EMPTY, 0.0,
+    Hash128(), vector<ChangedNeuralNet*>(),
+    false, 0, FinishedGameData::MODE_NORMAL,
+    NULL, rand, ReanalysisData()
+  );
+
+  // Verify Row 0 (Black to move)
+  // Policy targets:
+  // Pawn (4, 7): rCanon = 7. slot = 0 * 81 + 7 * 9 + 4 = 67.
+  // V-wall (2, 3): rCanon = 3. slot = 1 * 81 + 3 * 9 + 2 = 110.
+  // H-wall (5, 1): rCanon = 1. slot = 2 * 81 + 1 * 9 + 5 = 176.
+  const int16_t* p0 = buffers.policyTargetsNCMove.data + 0 * 2 * NNInputs::NN_POLICY_SIZE;
+  testAssert(p0[67] == 150);
+  testAssert(p0[110] == 75);
+  testAssert(p0[176] == 50);
+
+  // Policy target 1 (opponent move at pawn (4, 1)):
+  // From Black's canonical perspective: rCanon = 1. slot = 0 * 81 + 1 * 9 + 4 = 13.
+  const int16_t* p1 = p0 + NNInputs::NN_POLICY_SIZE;
+  testAssert(p1[13] == 120);
+
+  // Value targets spatial (4 x 81)
+  const int8_t* vt = buffers.valueTargetsNCHW.data + 0 * 4 * 81;
+  // Channel 0 (Player / Black future trajectory):
+  // (4, 8) [start], (4, 7) [b1], (4, 0) [finalBoard]
+  // In canonical view for Black: (c=4, rCanon=8), (c=4, rCanon=7), (c=4, rCanon=0)
+  testAssert(vt[0 * 81 + 8 * 9 + 4] == 1);
+  testAssert(vt[0 * 81 + 7 * 9 + 4] == 1);
+  testAssert(vt[0 * 81 + 0 * 9 + 4] == 1);
+  // Channel 1 (Opponent / White future trajectory):
+  // (4, 0) [start], (4, 1) [b2]
+  testAssert(vt[1 * 81 + 0 * 9 + 4] == 1);
+  testAssert(vt[1 * 81 + 1 * 9 + 4] == 1);
+  // Channel 2 (Terminal V-wall at (2, 3)):
+  // In canonical view for Black: rCanon = 3, c = 2.
+  testAssert(vt[2 * 81 + 3 * 9 + 2] == 1);
+  // Channel 3 (Terminal H-wall at (5, 1)):
+  // In canonical view for Black: rCanon = 1, c = 5.
+  testAssert(vt[3 * 81 + 1 * 9 + 5] == 1);
+
+  // Global targets
+  const float* gt = buffers.globalTargetsNC.data + 0 * 80;
+  testAssert(gt[25] == 1.0f); // row weight
+  testAssert(gt[26] == 1.0f); // policy player weight
+  testAssert(gt[27] == 1.0f); // aux weight
+  testAssert(gt[28] == 1.0f); // policy opp weight
+  testAssert(gt[29] == 1.0f); // margin weight
+  // Black won, so nextPlayer (Black) lead is positive
+  testAssert(gt[21] > 0.0f);
+
+  // Add Row 1: White to move from b1
+  // White to move: canonical Y-flip applied!
+  vector<PolicyTargetMove> policyTargetWhite;
+  // White pawn move to (4, 1): physical r=1 -> White rCanon = 8 - 1 = 7. slot = 0 * 81 + 7 * 9 + 4 = 67.
+  policyTargetWhite.push_back(PolicyTargetMove(Location::pawnLoc(4, 1, 17), 200));
+  // White V-wall at (2, 3): physical r=3 -> White rCanon = 7 - 3 = 4. slot = 1 * 81 + 4 * 9 + 2 = 119.
+  policyTargetWhite.push_back(PolicyTargetMove(Location::vWallLoc(2, 3, 17), 80));
+  // White H-wall at (5, 1): physical r=1 -> White rCanon = 7 - 1 = 6. slot = 2 * 81 + 6 * 9 + 5 = 221.
+  policyTargetWhite.push_back(PolicyTargetMove(Location::hWallLoc(5, 1, 17), 60));
+
+  buffers.addRow(
+    b1, hist, P_WHITE,
+    hist, endHist,
+    1, 1.0f, 340,
+    &policyTargetWhite, NULL,
+    0.1, 1.0, 1.0,
+    whiteValueTargets, whiteQValueTargets,
+    1, 1.0f, 1.0f, 1.0f,
+    nnRawStats,
+    &finalBoard, NULL, NULL, NULL,
+    &posHistForFutureBoards,
+    false, 0, 0.5, C_EMPTY, 0.0,
+    Hash128(), vector<ChangedNeuralNet*>(),
+    false, 0, FinishedGameData::MODE_NORMAL,
+    NULL, rand, ReanalysisData()
+  );
+
+  const int16_t* pWhite = buffers.policyTargetsNCMove.data + 1 * 2 * NNInputs::NN_POLICY_SIZE;
+  testAssert(pWhite[67] == 200);
+  testAssert(pWhite[119] == 80);
+  testAssert(pWhite[221] == 60);
+
+  // Verify Row 1 (White to move) spatial value targets in White canonical view:
+  const int8_t* vtWhite = buffers.valueTargetsNCHW.data + 1 * 4 * 81;
+  // Terminal V-wall at (2, 3): White rCanon = 7 - 3 = 4. slot = 2 * 81 + 4 * 9 + 2 = 198 + 2 = 200.
+  testAssert(vtWhite[2 * 81 + 4 * 9 + 2] == 1);
+  // Terminal H-wall at (5, 1): White rCanon = 7 - 1 = 6. slot = 3 * 81 + 6 * 9 + 5 = 297 + 5 = 302.
+  testAssert(vtWhite[3 * 81 + 6 * 9 + 5] == 1);
+
+  // Global targets for White (who lost, so margin is negative)
+  const float* gtWhite = buffers.globalTargetsNC.data + 1 * 80;
+  testAssert(gtWhite[21] < 0.0f);
+
+  // Write buffers to a temporary zip file and test file writing
+  string tmpZip = "test_quoridor_training_write_tmp.npz";
+  buffers.writeToZipFile(tmpZip);
+  std::remove(tmpZip.c_str());
+
+  cout << "Quoridor training write test passed!" << endl;
+}
+
 void Tests::runTrainingWriteTests() {
   bool inputsNHWC = true;
   bool useNHWC = false;
@@ -166,6 +358,11 @@ void Tests::runTrainingWriteTests() {
   NeuralNet::globalInitialize();
 
   runReanalysisRowChannelsTest();
+  runQuoridorTrainingWriteTest();
+
+  NeuralNet::globalCleanup();
+  cout << "All training write tests passed." << endl;
+  return;
 
   int maxRows = 256;
   double firstFileMinRandProp = 1.0;

@@ -228,11 +228,8 @@ def apply_symmetry_policy_quoridor(tensor, symm):
     assert 3 <= len(orig_shape) <= 5
     batch_size = orig_shape[0]
 
-    # Reshape to (B, 6, 3, 9, 9)
-    if 3 <= len(orig_shape) <= 4:  # (B, 18, 81) or (B, 18, 9, 9)
-        t = tensor.view(batch_size, 6, 3, 9, 9).clone()
-    else:
-        t = tensor.clone()
+    # Reshape to (B, N, 3, 9, 9) where N is number of policy heads/targets
+    t = tensor.view(batch_size, -1, 3, 9, 9).clone()
 
     out = torch.zeros_like(t)
     # Plane 0 (Pawn): flip horizontally across all 9 columns

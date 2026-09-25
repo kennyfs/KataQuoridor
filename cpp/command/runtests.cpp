@@ -55,6 +55,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("nninputs"))
     Tests::runNNInputsTests();
 
+  if(shouldRun("trainingwrite"))
+    Tests::runTrainingWriteTests();
+
   if(shouldRun("go")) {
     Tests::runBoardIOTests();
     Tests::runBoardBasicTests();

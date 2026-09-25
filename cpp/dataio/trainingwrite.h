@@ -274,10 +274,16 @@ struct TrainingWriteBuffers {
   NumpyBuffer<int8_t> scoreDistrN;
 
   //Spatial value-related targets
+  //Go (5 channels):
   //C0: Final board ownership [-1,1], from the perspective of the player to move. All 0 if C27 has weight 0.
   //C1: Difference between ownership and naive area (such as due to seki). All 0 if C27 has weight 0.
   //C2-3: Future board position a certain number of turns in the future. All 0 if C33 has weight 0.
   //C4: Final board area/territory [-120,120]. All 0 if C34 has weight 0. Unlike ownership, takes into account group tax and scoring rules.
+  //Quoridor (4 channels):
+  //C0: Current player pawn future trajectory (binary mask)
+  //C1: Opponent player pawn future trajectory (binary mask)
+  //C2: Terminal vertical wall anchors (binary mask on 8x8 active region)
+  //C3: Terminal horizontal wall anchors (binary mask on 8x8 active region)
   NumpyBuffer<int8_t> valueTargetsNCHW;
 
   //Spatial q-value targets, from the perspective of the player to move.

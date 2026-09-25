@@ -131,6 +131,10 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
 
     int nnXLen = std::max(defaultNNXLen,2);
     int nnYLen = std::max(defaultNNYLen,2);
+    if(defaultNNXLen > NNInputs::NN_X_LEN && !cfg.contains("maxBoardXSizeForNNBuffer" + idxStr) && !cfg.contains("maxBoardXSizeForNNBuffer") && !cfg.contains("maxBoardSizeForNNBuffer" + idxStr) && !cfg.contains("maxBoardSizeForNNBuffer")) {
+      nnXLen = NNInputs::NN_X_LEN;
+      nnYLen = NNInputs::NN_Y_LEN;
+    }
     if(setupFor != SETUP_FOR_DISTRIBUTED) {
       if(cfg.contains("maxBoardXSizeForNNBuffer" + idxStr))
         nnXLen = cfg.getInt("maxBoardXSizeForNNBuffer" + idxStr, 2, NNPos::MAX_BOARD_LEN);
