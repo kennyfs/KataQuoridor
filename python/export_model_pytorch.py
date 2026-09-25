@@ -80,8 +80,8 @@ def main(args):
             raise Exception(f"Unknown model config name: {export_random_initialized_model}")
         model_config = modelconfigs.config_of_name[export_random_initialized_model]
         logging.info(f"Exporting freshly random-initialized model with config: {export_random_initialized_model}")
-        logging.info(str(model_config))
-        model = Model(model_config, pos_len=19)
+        pos_len = 9 if modelconfigs.is_quoridor(model_config) else 19
+        model = Model(model_config, pos_len=pos_len)
         model.initialize()
         model.to("cpu")
         swa_model = None
@@ -115,6 +115,29 @@ def main(args):
                 logging.warning("WARNING (-ignore-attn-logit-bound): " + msg)
             else:
                 raise Exception(msg)
+
+    # QUORIDOR ONNX EXPORT ---------------------------------------------------------
+    if modelconfigs.is_quoridor(model_config):
+        logging.info("Exporting Quoridor model to ONNX format")
+        from katago.train.export_onnx import export_quoridor_onnx
+        onnx_path = os.path.join(export_dir, filename_prefix + ".onnx")
+        export_quoridor_onnx(model_to_export, onnx_path, model_name=model_name)
+        logging.info(f"Exported Quoridor ONNX model to {onnx_path}")
+
+        with open(os.path.join(export_dir, "metadata.json"), "w") as f:
+            train_state = other_state_dict.get("train_state", {})
+            data = {}
+            if "global_step_samples" in train_state:
+                data["global_step_samples"] = train_state["global_step_samples"]
+            if "total_num_data_rows" in train_state:
+                data["total_num_data_rows"] = train_state["total_num_data_rows"]
+            json.dump(data, f)
+
+        logging.info("Exported at: ")
+        logging.info(str(datetime.datetime.utcnow()) + " UTC")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        return
 
     # WRITING MODEL ----------------------------------------------------------------
     extension = ".bin"

@@ -45,7 +45,12 @@ ModelConfig = Dict[str,Any]
 def get_version(config: ModelConfig):
     return config["version"]
 
+def is_quoridor(config: ModelConfig) -> bool:
+    return config.get("game") == "quoridor" or config.get("version") == 1
+
 def get_num_bin_input_features(config: ModelConfig):
+    if is_quoridor(config):
+        return 16
     version = get_version(config)
     if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16 or version == 17:
         return 22
@@ -53,6 +58,8 @@ def get_num_bin_input_features(config: ModelConfig):
         assert(False)
 
 def get_num_global_input_features(config: ModelConfig):
+    if is_quoridor(config):
+        return 16
     version = get_version(config)
     if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16 or version == 17:
         return 19
@@ -1827,7 +1834,58 @@ b5c384h6nbttflrtab2cheaps = {
 }
 
 
+tf3_b4c192_quoridor = {
+    "game": "quoridor",
+    "version": 1,
+    "norm_kind": "fixup",
+    "bnorm_epsilon": 1e-4,
+    "bnorm_running_avg_momentum": 0.001,
+    "initial_conv_1x1": False,
+    "gamma_weight_decay_center_1": True,
+    "trunk_num_channels": 192,
+    "mid_num_channels": 96,
+    "gpool_num_channels": 32,
+    "transformer_ffn_channels": 384,
+    "transformer_heads": 4,
+    "transformer_kv_heads": 4,
+    "learnable_rope": True,
+    "block_kind": [[f"block{i}", "bottlenest2transformerropesg"] for i in range(1, 5)],
+    "p1_num_channels": 32,
+    "g1_num_channels": 32,
+    "v1_num_channels": 32,
+    "v2_size": 64,
+    "num_policy_outputs": 18,
+    "num_value_outputs": 2,
+    "pos_len": 9,
+}
+
+b2c64_quoridor = {
+    "game": "quoridor",
+    "version": 1,
+    "norm_kind": "fixup",
+    "bnorm_epsilon": 1e-4,
+    "bnorm_running_avg_momentum": 0.001,
+    "initial_conv_1x1": False,
+    "gamma_weight_decay_center_1": True,
+    "trunk_num_channels": 64,
+    "mid_num_channels": 32,
+    "gpool_num_channels": 16,
+    "block_kind": [["block1", "bottlenest2"], ["block2", "bottlenest2"]],
+    "p1_num_channels": 16,
+    "g1_num_channels": 16,
+    "v1_num_channels": 16,
+    "v2_size": 32,
+    "num_policy_outputs": 18,
+    "num_value_outputs": 2,
+    "pos_len": 9,
+}
+
+
 base_config_of_name = {
+    # QUORIDOR MODELS =============================================================
+    "tf3_b4c192_quoridor": tf3_b4c192_quoridor,
+    "b2c64_quoridor": b2c64_quoridor,
+
     # CONVNETS ====================================================================
     # "nbt" (nested bottleneck) architectures are usually much better than the plain residual block nets
 

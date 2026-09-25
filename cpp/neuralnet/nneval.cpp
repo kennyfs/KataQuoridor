@@ -1283,10 +1283,10 @@ void NNEvaluator::evaluate(
       double noResultLogits = buf.result->whiteNoResultProb * postProcessParams.outputScaleMultiplier;
 
       // Softmax
-      double maxLogits = std::max(std::max(winLogits,lossLogits),noResultLogits);
+      double maxLogits = (noResultLogits <= -1e20) ? std::max(winLogits, lossLogits) : std::max(std::max(winLogits,lossLogits),noResultLogits);
       double winProb = exp(winLogits - maxLogits);
       double lossProb = exp(lossLogits - maxLogits);
-      double noResultProb = exp(noResultLogits - maxLogits);
+      double noResultProb = (noResultLogits <= -1e20) ? 0.0 : exp(noResultLogits - maxLogits);
 
       double probSum = winProb + lossProb + noResultProb;
       winProb /= probSum;

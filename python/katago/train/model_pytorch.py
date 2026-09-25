@@ -2613,7 +2613,9 @@ class PolicyHead(torch.nn.Module):
         self.config = config
         self.activation = activation
 
-        if config["version"] <= 11:
+        if modelconfigs.is_quoridor(config):
+            self.num_policy_outputs = config.get("num_policy_outputs", 18)
+        elif config["version"] <= 11:
             self.num_policy_outputs = 4
         elif config["version"] <= 15:
             self.num_policy_outputs = 6
@@ -2647,12 +2649,13 @@ class PolicyHead(torch.nn.Module):
         self.gpool = KataGPool()
 
         self.linear_g = torch.nn.Linear(3 * c_g1, c_p1, bias=False)
-        if config["version"] <= 14:
-            self.linear_pass = torch.nn.Linear(3 * c_g1, self.num_policy_outputs, bias=False)
-        else:
-            self.linear_pass = torch.nn.Linear(3 * c_g1, c_p1, bias=True)
-            self.act_pass = act(self.activation)
-            self.linear_pass2 = torch.nn.Linear(c_p1, self.num_policy_outputs, bias=False)
+        if not modelconfigs.is_quoridor(config):
+            if config["version"] <= 14:
+                self.linear_pass = torch.nn.Linear(3 * c_g1, self.num_policy_outputs, bias=False)
+            else:
+                self.linear_pass = torch.nn.Linear(3 * c_g1, c_p1, bias=True)
+                self.act_pass = act(self.activation)
+                self.linear_pass2 = torch.nn.Linear(c_p1, self.num_policy_outputs, bias=False)
 
         self.bias2 = BiasMask(
             c_p1,
@@ -2673,24 +2676,26 @@ class PolicyHead(torch.nn.Module):
         init_weights(self.conv1p.weight, self.activation, scale=p_scale)
         init_weights(self.conv1g.weight, self.activation, scale=1.0)
         init_weights(self.linear_g.weight, self.activation, scale=g_scale)
-        if self.config["version"] <= 14:
-            init_weights(self.linear_pass.weight, "identity", scale=scale_output)
-        else:
-            init_weights(self.linear_pass.weight, self.activation, scale=1.0)
-            init_weights(self.linear_pass.bias, self.activation, scale=bias_scale, fan_tensor=self.linear_pass.weight)
-            init_weights(self.linear_pass2.weight, "identity", scale=scale_output)
+        if not modelconfigs.is_quoridor(self.config):
+            if self.config["version"] <= 14:
+                init_weights(self.linear_pass.weight, "identity", scale=scale_output)
+            else:
+                init_weights(self.linear_pass.weight, self.activation, scale=1.0)
+                init_weights(self.linear_pass.bias, self.activation, scale=bias_scale, fan_tensor=self.linear_pass.weight)
+                init_weights(self.linear_pass2.weight, "identity", scale=scale_output)
         init_weights(self.conv2p.weight, "identity", scale=scale_output)
 
     def add_reg_dict(self, reg_dict:Dict[str,List]):
         reg_dict["output"].append(self.conv1p.weight)
         reg_dict["output"].append(self.conv1g.weight)
         reg_dict["output"].append(self.linear_g.weight)
-        if self.config["version"] <= 14:
-            reg_dict["output"].append(self.linear_pass.weight)
-        else:
-            reg_dict["output"].append(self.linear_pass.weight)
-            reg_dict["output_noreg"].append(self.linear_pass.bias)
-            reg_dict["output"].append(self.linear_pass2.weight)
+        if not modelconfigs.is_quoridor(self.config):
+            if self.config["version"] <= 14:
+                reg_dict["output"].append(self.linear_pass.weight)
+            else:
+                reg_dict["output"].append(self.linear_pass.weight)
+                reg_dict["output_noreg"].append(self.linear_pass.bias)
+                reg_dict["output"].append(self.linear_pass2.weight)
 
         reg_dict["output"].append(self.conv2p.weight)
         self.biasg.add_reg_dict(reg_dict)
@@ -2710,12 +2715,13 @@ class PolicyHead(torch.nn.Module):
         outg = self.actg(outg)
         outg = self.gpool(outg, mask=mask, mask_sum_hw=mask_sum_hw).squeeze(-1).squeeze(-1) # NC
 
-        if self.config["version"] <= 14:
-            outpass = self.linear_pass(outg) # NC
-        else:
-            outpass = self.linear_pass(outg) # NC
-            outpass = self.act_pass(outpass) # NC
-            outpass = self.linear_pass2(outpass) # NC
+        if not modelconfigs.is_quoridor(self.config):
+            if self.config["version"] <= 14:
+                outpass = self.linear_pass(outg) # NC
+            else:
+                outpass = self.linear_pass(outg) # NC
+                outpass = self.act_pass(outpass) # NC
+                outpass = self.linear_pass2(outpass) # NC
 
         outg = self.linear_g(outg).unsqueeze(-1).unsqueeze(-1) # NCHW
 
@@ -2727,6 +2733,10 @@ class PolicyHead(torch.nn.Module):
 
         # mask out parts outside the board by making them a huge neg number, so that they're 0 after softmax
         outpolicy = outpolicy - (1.0 - mask) * 5000.0
+
+        if modelconfigs.is_quoridor(self.config):
+            return outpolicy
+
         # NC(HW) concat with NC1
         return torch.cat((outpolicy.view(outpolicy.shape[0],outpolicy.shape[1],-1), outpass.unsqueeze(-1)),dim=2)
 
@@ -2893,6 +2903,135 @@ class ValueHead(torch.nn.Module):
             out_futurepos,
             out_seki,
             out_scorebelief_logprobs,
+        )
+
+
+class QuoridorValueHead(torch.nn.Module):
+    def __init__(self, c_in, c_v1, c_v2, config, activation, pos_len):
+        super(QuoridorValueHead, self).__init__()
+        self.c_in = c_in
+        self.c_v1 = c_v1
+        self.c_v2 = c_v2
+        self.config = config
+        self.activation = activation
+        self.pos_len = pos_len
+        self.num_value_outputs = config.get("num_value_outputs", 2)
+
+        self.conv1 = torch.nn.Conv2d(c_in, c_v1, kernel_size=1, padding="same", bias=False)
+        self.bias1 = BiasMask(
+            c_v1,
+            config=config,
+            is_after_batchnorm=True,
+        )
+        self.act1 = act(activation)
+        self.gpool = KataValueHeadGPool()
+
+        self.linear2 = torch.nn.Linear(3 * c_v1, c_v2, bias=True)
+        self.act2 = act(activation)
+
+        # 1. Main Game Outcome (2 logits: Win, Loss)
+        self.linear_value = torch.nn.Linear(c_v2, self.num_value_outputs, bias=True)
+
+        # 2. TD-Value (4 horizons x num_value_outputs logits)
+        self.linear_td_value = torch.nn.Linear(c_v2, 4 * self.num_value_outputs, bias=True)
+
+        # 3. Variance Time (1 scalar)
+        self.linear_variance_time = torch.nn.Linear(c_v2, 1, bias=True)
+
+        # 4. Game Margin (1 scalar: terminal shortest-distance margin +D / -D)
+        self.linear_game_margin = torch.nn.Linear(c_v2, 1, bias=True)
+
+        # 5. Trajectory Head (2 x 9 x 9: current player future path, opp future path)
+        self.conv_trajectory = torch.nn.Conv2d(c_v1, 2, kernel_size=1, padding="same", bias=False)
+
+        # 6. Wall Graph Head (2 x 9 x 9: terminal V-walls, terminal H-walls)
+        self.conv_wall_graph = torch.nn.Conv2d(c_v1, 2, kernel_size=1, padding="same", bias=False)
+
+    def initialize(self):
+        bias_scale = 0.2
+        init_weights(self.conv1.weight, self.activation, scale=1.0)
+        init_weights(self.linear2.weight, self.activation, scale=1.0)
+        init_weights(self.linear2.bias, self.activation, scale=bias_scale, fan_tensor=self.linear2.weight)
+
+        init_weights(self.linear_value.weight, "identity", scale=1.0)
+        init_weights(self.linear_value.bias, "identity", scale=bias_scale, fan_tensor=self.linear_value.weight)
+
+        init_weights(self.linear_td_value.weight, "identity", scale=1.0)
+        init_weights(self.linear_td_value.bias, "identity", scale=bias_scale, fan_tensor=self.linear_td_value.weight)
+
+        init_weights(self.linear_variance_time.weight, "identity", scale=1.0)
+        init_weights(self.linear_variance_time.bias, "identity", scale=bias_scale, fan_tensor=self.linear_variance_time.weight)
+
+        init_weights(self.linear_game_margin.weight, "identity", scale=1.0)
+        init_weights(self.linear_game_margin.bias, "identity", scale=bias_scale, fan_tensor=self.linear_game_margin.weight)
+
+        init_weights(self.conv_trajectory.weight, "identity", scale=0.5)
+        init_weights(self.conv_wall_graph.weight, "identity", scale=0.5)
+
+    def add_reg_dict(self, reg_dict: Dict[str, List]):
+        reg_dict["output"].append(self.conv1.weight)
+        reg_dict["output"].append(self.linear2.weight)
+        reg_dict["output_noreg"].append(self.linear2.bias)
+
+        reg_dict["output"].append(self.linear_value.weight)
+        reg_dict["output_noreg"].append(self.linear_value.bias)
+
+        reg_dict["output"].append(self.linear_td_value.weight)
+        reg_dict["output_noreg"].append(self.linear_td_value.bias)
+
+        reg_dict["output"].append(self.linear_variance_time.weight)
+        reg_dict["output_noreg"].append(self.linear_variance_time.bias)
+
+        reg_dict["output"].append(self.linear_game_margin.weight)
+        reg_dict["output_noreg"].append(self.linear_game_margin.bias)
+
+        reg_dict["output"].append(self.conv_trajectory.weight)
+        reg_dict["output"].append(self.conv_wall_graph.weight)
+        self.bias1.add_reg_dict(reg_dict)
+
+    def set_brenorm_params(self, renorm_avg_momentum: float, rmax: float, dmax: float):
+        pass
+
+    def add_brenorm_clippage(self, upper_rclippage, lower_rclippage, dclippage):
+        pass
+
+    def forward(self, x, mask, mask_sum_hw, mask_sum: float, input_global, extra_outputs: Optional[ExtraOutputs] = None):
+        outv1 = x
+        outv1 = self.conv1(outv1)
+        outv1 = self.bias1(outv1, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
+        outv1 = self.act1(outv1)
+
+        outpooled = self.gpool(outv1, mask=mask, mask_sum_hw=mask_sum_hw).squeeze(-1).squeeze(-1)
+
+        outv2 = self.linear2(outpooled)
+        outv2 = self.act2(outv2)
+
+        # 1. Main Game Outcome (B, 2)
+        out_value = self.linear_value(outv2)
+
+        # 2. TD-Value (B, 4, 2)
+        batch_size = x.shape[0]
+        out_td_value = self.linear_td_value(outv2).view(batch_size, 4, self.num_value_outputs)
+
+        # 3. Variance Time (B, 1)
+        out_variance_time = self.linear_variance_time(outv2)
+
+        # 4. Game Margin (B, 1)
+        out_game_margin = self.linear_game_margin(outv2)
+
+        # 5. Trajectory Head (B, 2, pos_len, pos_len)
+        out_trajectory = self.conv_trajectory(outv1) * mask
+
+        # 6. Wall Graph Head (B, 2, pos_len, pos_len)
+        out_wall_graph = self.conv_wall_graph(outv1) * mask
+
+        return (
+            out_value,
+            out_td_value,
+            out_variance_time,
+            out_game_margin,
+            out_trajectory,
+            out_wall_graph,
         )
 
 class MetadataEncoder(torch.nn.Module):
@@ -3062,8 +3201,8 @@ class Model(torch.nn.Module):
         self.c_g1 = config["g1_num_channels"]
         self.c_v1 = config["v1_num_channels"]
         self.c_v2 = config["v2_size"]
-        self.c_sv2 = config["sbv2_num_channels"]
-        self.num_scorebeliefs = config["num_scorebeliefs"]
+        self.c_sv2 = config.get("sbv2_num_channels", 0)
+        self.num_scorebeliefs = config.get("num_scorebeliefs", 0)
         self.num_total_blocks = len(self.block_kind)
         self.pos_len = pos_len
 
@@ -3096,19 +3235,22 @@ class Model(torch.nn.Module):
 
         self.activation = "relu" if "activation" not in config else config["activation"]
 
+        c_bin = modelconfigs.get_num_bin_input_features(config)
+        c_global = modelconfigs.get_num_global_input_features(config)
+
         if config["initial_conv_1x1"]:
-            self.conv_spatial = torch.nn.Conv2d(22, self.c_trunk, kernel_size=1, padding="same", bias=False)
+            self.conv_spatial = torch.nn.Conv2d(c_bin, self.c_trunk, kernel_size=1, padding="same", bias=False)
         else:
-            self.conv_spatial = torch.nn.Conv2d(22, self.c_trunk, kernel_size=3, padding="same", bias=False)
-        self.linear_global = torch.nn.Linear(19, self.c_trunk, bias=False)
+            self.conv_spatial = torch.nn.Conv2d(c_bin, self.c_trunk, kernel_size=3, padding="same", bias=False)
+        self.linear_global = torch.nn.Linear(c_global, self.c_trunk, bias=False)
 
         if "metadata_encoder" in config and config["metadata_encoder"] is not None:
             self.metadata_encoder = MetadataEncoder(config)
         else:
             self.metadata_encoder = None
 
-        self.bin_input_shape = [22, pos_len, pos_len]
-        self.global_input_shape = [19]
+        self.bin_input_shape = [c_bin, pos_len, pos_len]
+        self.global_input_shape = [c_global]
 
         # Create shared GAB template MLP if any block uses GAB
         has_gab = any(_block_kind_uses_gab(bk[1]) for bk in self.block_kind)
@@ -3514,16 +3656,26 @@ class Model(torch.nn.Module):
             self.config,
             self.activation,
         )
-        self.value_head = ValueHead(
-            self.c_trunk,
-            self.c_v1,
-            self.c_v2,
-            self.c_sv2,
-            self.num_scorebeliefs,
-            self.config,
-            self.activation,
-            self.pos_len,
-        )
+        if modelconfigs.is_quoridor(self.config):
+            self.value_head = QuoridorValueHead(
+                self.c_trunk,
+                self.c_v1,
+                self.c_v2,
+                self.config,
+                self.activation,
+                self.pos_len,
+            )
+        else:
+            self.value_head = ValueHead(
+                self.c_trunk,
+                self.c_v1,
+                self.c_v2,
+                self.c_sv2,
+                self.num_scorebeliefs,
+                self.config,
+                self.activation,
+                self.pos_len,
+            )
         if self.has_intermediate_head:
             self.norm_intermediate_trunkfinal = NormMask(self.c_trunk, self.config, fixup_use_gamma=False, is_last_batchnorm=True)
             self.act_intermediate_trunkfinal = act(self.activation)
@@ -3534,16 +3686,26 @@ class Model(torch.nn.Module):
                 self.config,
                 self.activation,
             )
-            self.intermediate_value_head = ValueHead(
-                self.c_trunk,
-                self.c_v1,
-                self.c_v2,
-                self.c_sv2,
-                self.num_scorebeliefs,
-                self.config,
-                self.activation,
-                self.pos_len,
-            )
+            if modelconfigs.is_quoridor(self.config):
+                self.intermediate_value_head = QuoridorValueHead(
+                    self.c_trunk,
+                    self.c_v1,
+                    self.c_v2,
+                    self.config,
+                    self.activation,
+                    self.pos_len,
+                )
+            else:
+                self.intermediate_value_head = ValueHead(
+                    self.c_trunk,
+                    self.c_v1,
+                    self.c_v2,
+                    self.c_sv2,
+                    self.num_scorebeliefs,
+                    self.config,
+                    self.activation,
+                    self.pos_len,
+                )
 
     @property
     def device(self):
@@ -3743,7 +3905,10 @@ class Model(torch.nn.Module):
         # float_formatter = "{:.3f}".format
         # np.set_printoptions(formatter={'float_kind':float_formatter}, threshold=1000000, linewidth=10000)
 
-        mask = input_spatial[:, 0:1, :, :].contiguous()
+        if modelconfigs.is_quoridor(self.config):
+            mask = torch.ones_like(input_spatial[:, 0:1, :, :]).contiguous()
+        else:
+            mask = input_spatial[:, 0:1, :, :].contiguous()
         mask_sum_hw = torch.sum(mask,dim=(2,3),keepdim=True)
         mask_sum = torch.sum(mask)
         # Save original mask/dims for restoring NCHW after trunk when using inline registers.
@@ -3900,23 +4065,40 @@ class Model(torch.nn.Module):
                     mask_sum=mask_sum_fp32,
                     extra_outputs=extra_outputs
                 )
-                (
-                    iout_value,
-                    iout_miscvalue,
-                    iout_moremiscvalue,
-                    iout_ownership,
-                    iout_scoring,
-                    iout_futurepos,
-                    iout_seki,
-                    iout_scorebelief_logprobs,
-                ) = self.intermediate_value_head(
-                    iout_fp32,
-                    mask=mask_fp32,
-                    mask_sum_hw=mask_sum_hw_fp32,
-                    mask_sum=mask_sum_fp32,
-                    input_global=input_global_fp32,
-                    extra_outputs=extra_outputs
-                )
+                if modelconfigs.is_quoridor(self.config):
+                    (
+                        iout_value,
+                        iout_td_value,
+                        iout_variance_time,
+                        iout_game_margin,
+                        iout_trajectory,
+                        iout_wall_graph,
+                    ) = self.intermediate_value_head(
+                        iout_fp32,
+                        mask=mask_fp32,
+                        mask_sum_hw=mask_sum_hw_fp32,
+                        mask_sum=mask_sum_fp32,
+                        input_global=input_global_fp32,
+                        extra_outputs=extra_outputs
+                    )
+                else:
+                    (
+                        iout_value,
+                        iout_miscvalue,
+                        iout_moremiscvalue,
+                        iout_ownership,
+                        iout_scoring,
+                        iout_futurepos,
+                        iout_seki,
+                        iout_scorebelief_logprobs,
+                    ) = self.intermediate_value_head(
+                        iout_fp32,
+                        mask=mask_fp32,
+                        mask_sum_hw=mask_sum_hw_fp32,
+                        mask_sum=mask_sum_fp32,
+                        input_global=input_global_fp32,
+                        extra_outputs=extra_outputs
+                    )
 
             for i, block in enumerate(self.blocks[self.intermediate_head_blocks:], start=self.intermediate_head_blocks):
                 if self.use_trunk_residual_backout:
@@ -4012,27 +4194,101 @@ class Model(torch.nn.Module):
                 mask_sum=mask_sum_fp32,
                 extra_outputs=extra_outputs
             )
-            (
-                out_value,
-                out_miscvalue,
-                out_moremiscvalue,
-                out_ownership,
-                out_scoring,
-                out_futurepos,
-                out_seki,
-                out_scorebelief_logprobs,
-            ) = self.value_head(
-                out,
-                mask=mask_fp32,
-                mask_sum_hw=mask_sum_hw_fp32,
-                mask_sum=mask_sum_fp32,
-                input_global=input_global_fp32,
-                extra_outputs=extra_outputs
-            )
-
-        if self.has_intermediate_head:
-            return (
+            if modelconfigs.is_quoridor(self.config):
                 (
+                    out_value,
+                    out_td_value,
+                    out_variance_time,
+                    out_game_margin,
+                    out_trajectory,
+                    out_wall_graph,
+                ) = self.value_head(
+                    out,
+                    mask=mask_fp32,
+                    mask_sum_hw=mask_sum_hw_fp32,
+                    mask_sum=mask_sum_fp32,
+                    input_global=input_global_fp32,
+                    extra_outputs=extra_outputs
+                )
+            else:
+                (
+                    out_value,
+                    out_miscvalue,
+                    out_moremiscvalue,
+                    out_ownership,
+                    out_scoring,
+                    out_futurepos,
+                    out_seki,
+                    out_scorebelief_logprobs,
+                ) = self.value_head(
+                    out,
+                    mask=mask_fp32,
+                    mask_sum_hw=mask_sum_hw_fp32,
+                    mask_sum=mask_sum_fp32,
+                    input_global=input_global_fp32,
+                    extra_outputs=extra_outputs
+                )
+
+        if modelconfigs.is_quoridor(self.config):
+            if self.has_intermediate_head:
+                return (
+                    (
+                        out_policy,
+                        out_value,
+                        out_td_value,
+                        out_variance_time,
+                        out_game_margin,
+                        out_trajectory,
+                        out_wall_graph,
+                    ),
+                    (
+                        iout_policy,
+                        iout_value,
+                        iout_td_value,
+                        iout_variance_time,
+                        iout_game_margin,
+                        iout_trajectory,
+                        iout_wall_graph,
+                    ),
+                )
+            else:
+                return ((
+                    out_policy,
+                    out_value,
+                    out_td_value,
+                    out_variance_time,
+                    out_game_margin,
+                    out_trajectory,
+                    out_wall_graph,
+                ),)
+        else:
+            if self.has_intermediate_head:
+                return (
+                    (
+                        out_policy,
+                        out_value,
+                        out_miscvalue,
+                        out_moremiscvalue,
+                        out_ownership,
+                        out_scoring,
+                        out_futurepos,
+                        out_seki,
+                        out_scorebelief_logprobs,
+                    ),
+                    (
+                        iout_policy,
+                        iout_value,
+                        iout_miscvalue,
+                        iout_moremiscvalue,
+                        iout_ownership,
+                        iout_scoring,
+                        iout_futurepos,
+                        iout_seki,
+                        iout_scorebelief_logprobs,
+                    ),
+                )
+            else:
+                return ((
                     out_policy,
                     out_value,
                     out_miscvalue,
@@ -4042,36 +4298,31 @@ class Model(torch.nn.Module):
                     out_futurepos,
                     out_seki,
                     out_scorebelief_logprobs,
-                ),
-                (
-                    iout_policy,
-                    iout_value,
-                    iout_miscvalue,
-                    iout_moremiscvalue,
-                    iout_ownership,
-                    iout_scoring,
-                    iout_futurepos,
-                    iout_seki,
-                    iout_scorebelief_logprobs,
-                ),
-            )
-        else:
-            return ((
-                out_policy,
-                out_value,
-                out_miscvalue,
-                out_moremiscvalue,
-                out_ownership,
-                out_scoring,
-                out_futurepos,
-                out_seki,
-                out_scorebelief_logprobs,
-            ),)
+                ),)
 
     def float32ify_output(self, outputs_byheads):
         return tuple(self.float32ify_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def float32ify_single_heads_output(self, outputs):
+        if modelconfigs.is_quoridor(self.config):
+            (
+                out_policy,
+                out_value,
+                out_td_value,
+                out_variance_time,
+                out_game_margin,
+                out_trajectory,
+                out_wall_graph,
+            ) = outputs
+            return (
+                out_policy.to(torch.float32),
+                out_value.to(torch.float32),
+                out_td_value.to(torch.float32),
+                out_variance_time.to(torch.float32),
+                out_game_margin.to(torch.float32),
+                out_trajectory.to(torch.float32),
+                out_wall_graph.to(torch.float32),
+            )
         (
             out_policy,
             out_value,
@@ -4099,6 +4350,25 @@ class Model(torch.nn.Module):
         return tuple(self.postprocess_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def postprocess_single_heads_output(self, outputs):
+        if modelconfigs.is_quoridor(self.config):
+            (
+                out_policy,
+                out_value,
+                out_td_value,
+                out_variance_time,
+                out_game_margin,
+                out_trajectory,
+                out_wall_graph,
+            ) = outputs
+            return (
+                out_policy,
+                out_value,
+                out_td_value,
+                SoftPlusWithGradientFloorFunction.apply(out_variance_time.squeeze(-1), 0.05, True),
+                out_game_margin.squeeze(-1),
+                out_trajectory,
+                out_wall_graph,
+            )
         (
             out_policy,
             out_value,

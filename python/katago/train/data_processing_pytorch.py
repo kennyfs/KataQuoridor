@@ -153,12 +153,18 @@ def read_npz_training_data(
                 )
 
                 if randomize_symmetries:
-                    symm = int(rand.integers(0,8))
-                    batch_binaryInputNCHW = apply_symmetry(batch_binaryInputNCHW, symm)
-                    batch_policyTargetsNCMove = apply_symmetry_policy(batch_policyTargetsNCMove, symm, pos_len)
-                    batch_valueTargetsNCHW = apply_symmetry(batch_valueTargetsNCHW, symm)
-                    if include_qvalues:
-                        batch_qValueTargetsNCMove = apply_symmetry_policy(batch_qValueTargetsNCMove, symm, pos_len)
+                    if modelconfigs.is_quoridor(model_config):
+                        symm = int(rand.integers(0, 2))
+                        batch_binaryInputNCHW = apply_symmetry_quoridor(batch_binaryInputNCHW, symm)
+                        batch_policyTargetsNCMove = apply_symmetry_policy_quoridor(batch_policyTargetsNCMove, symm)
+                        batch_valueTargetsNCHW = apply_symmetry_value_targets_quoridor(batch_valueTargetsNCHW, symm)
+                    else:
+                        symm = int(rand.integers(0, 8))
+                        batch_binaryInputNCHW = apply_symmetry(batch_binaryInputNCHW, symm)
+                        batch_policyTargetsNCMove = apply_symmetry_policy(batch_policyTargetsNCMove, symm, pos_len)
+                        batch_valueTargetsNCHW = apply_symmetry(batch_valueTargetsNCHW, symm)
+                        if include_qvalues:
+                            batch_qValueTargetsNCMove = apply_symmetry_policy(batch_qValueTargetsNCMove, symm, pos_len)
 
                 batch_binaryInputNCHW = batch_binaryInputNCHW.contiguous()
                 batch_policyTargetsNCMove = batch_policyTargetsNCMove.contiguous()
@@ -180,6 +186,86 @@ def read_npz_training_data(
                     batch["qValueTargetsNCMove"] = batch_qValueTargetsNCMove
 
                 yield batch
+
+
+def apply_symmetry_quoridor(tensor, symm):
+    """
+    Apply Quoridor symmetry:
+    symm == 0: Identity
+    symm == 1: Horizontal Reflection (Left-Right flip)
+    """
+    if symm == 0:
+        return tensor
+    assert symm == 1
+
+    out = torch.flip(tensor, dims=[-1]).clone()
+
+    # Swap Channel 5 (Blocked East) <-> Channel 6 (Blocked West)
+    ch5 = out[:, 5, :, :].clone()
+    ch6 = out[:, 6, :, :].clone()
+    out[:, 5, :, :] = ch6
+    out[:, 6, :, :] = ch5
+
+    # Fix wall anchor channels 14 and 15:
+    # Wall anchors are in :8, :8. When 9x9 is flipped, :8 shifts to 1:9.
+    # We must flip :8 within :8 so c -> 7 - c.
+    for ch in (14, 15):
+        orig_wall = tensor[:, ch, :8, :8]
+        out[:, ch, :, :] = 0.0
+        out[:, ch, :8, :8] = torch.flip(orig_wall, dims=[-1])
+
+    return out
+
+
+def apply_symmetry_policy_quoridor(tensor, symm):
+    """
+    tensor shape: (B, 18, 9, 9) or (B, 6, 3, 9, 9) or (B, 18, 81)
+    """
+    if symm == 0:
+        return tensor
+    assert symm == 1
+    assert 3 <= len(orig_shape) <= 5
+    orig_shape = tensor.shape
+    batch_size = orig_shape[0]
+
+    # Reshape to (B, 6, 3, 9, 9)
+    if 3 <= len(orig_shape) <= 4:  # (B, 18, 81) or (B, 18, 9, 9)
+        t = tensor.view(batch_size, 6, 3, 9, 9).clone()
+    else:
+        t = tensor.clone()
+
+    out = torch.zeros_like(t)
+    # Plane 0 (Pawn): flip horizontally across all 9 columns
+    out[:, :, 0, :, :] = torch.flip(t[:, :, 0, :, :], dims=[-1])
+
+    # Plane 1 (V-walls) & Plane 2 (H-walls): flip active 8x8 anchor region (c -> 7 - c)
+    for p in (1, 2):
+        wall_region = t[:, :, p, :8, :8]
+        out[:, :, p, :8, :8] = torch.flip(wall_region, dims=[-1])
+
+    return out.view(orig_shape)
+
+
+def apply_symmetry_value_targets_quoridor(tensor, symm):
+    """
+    Spatial value targets: Trajectory (ch 0..1), Wall Graph (ch 2..3)
+    tensor shape: (B, C, 9, 9)
+    """
+    if symm == 0:
+        return tensor
+    assert symm == 1
+
+    out = torch.zeros_like(tensor)
+    # Ch 0 and 1: Trajectory (pawn visited 9x9)
+    if tensor.shape[1] >= 2:
+        out[:, :2, :, :] = torch.flip(tensor[:, :2, :, :], dims=[-1])
+    # Ch 2 and 3: Wall graph (8x8 active wall anchors)
+    if tensor.shape[1] >= 4:
+        for ch in (2, 3):
+            wall_region = tensor[:, ch, :8, :8]
+            out[:, ch, :8, :8] = torch.flip(wall_region, dims=[-1])
+
+    return out
 
 
 def apply_symmetry_policy(tensor, symm, pos_len):
@@ -224,6 +310,8 @@ def apply_symmetry(tensor, symm):
 
 
 def build_history_matrices(model_config: modelconfigs.ModelConfig, device):
+    if modelconfigs.is_quoridor(model_config):
+        return (None, None)
     num_bin_features = modelconfigs.get_num_bin_input_features(model_config)
     assert num_bin_features == 22, "Currently this code is hardcoded for this many features"
 
@@ -297,6 +385,8 @@ def build_history_matrices(model_config: modelconfigs.ModelConfig, device):
 
 
 def apply_history_matrices(model_config, batch_binaryInputNCHW, batch_globalInputNC, batch_globalTargetsNC, h_base, h_builder):
+    if modelconfigs.is_quoridor(model_config):
+        return batch_binaryInputNCHW, batch_globalInputNC
     num_global_features = modelconfigs.get_num_global_input_features(model_config)
     # include_history = batch_globalTargetsNC[:,36:41]
     should_stop_history = torch.rand_like(batch_globalTargetsNC[:,36:41]) >= 0.98

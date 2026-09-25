@@ -3,6 +3,7 @@ import math
 
 from ..train.model_pytorch import EXTRA_SCORE_DISTR_RADIUS, Model, compute_gain, ExtraOutputs, MetadataEncoder
 from ..train.trainloop_helpers import env_flag
+from ..train import modelconfigs
 
 import torch
 import torch.nn
@@ -27,26 +28,47 @@ class Metrics:
         self.world_size = world_size
         self.pos_len = raw_model.pos_len
         self.pos_area = raw_model.pos_len * raw_model.pos_len
-        self.policy_len = raw_model.pos_len * raw_model.pos_len + 1
-        self.value_len = 3
-        self.num_td_values = 3
-        self.num_futurepos_values = 2
-        self.num_seki_logits = 4
-        self.scorebelief_len = 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
+        self.is_quoridor = modelconfigs.is_quoridor(raw_model.config)
 
-        self.scoremean_multiplier = raw_model.scoremean_multiplier
-
-        self.score_belief_offset_vector = raw_model.value_head.score_belief_offset_vector
-        # Keeping the seki moving average on the model device avoids a per-batch
-        # GPU->CPU sync in the training loss and lets the loss be torch.compiled.
-        self.seki_ema_on_device = env_flag("KATAGO_SEKI_EMA_ON_DEVICE", default=True)
-        if self.seki_ema_on_device:
-            metric_device = self.score_belief_offset_vector.device
-            self.moving_unowned_proportion_sum = torch.zeros([], device=metric_device, dtype=torch.float32)
-            self.moving_unowned_proportion_weight = torch.zeros([], device=metric_device, dtype=torch.float32)
-        else:
+        if self.is_quoridor:
+            self.policy_len = 3 * self.pos_len * self.pos_len
+            self.value_len = 2
+            self.num_td_values = 2
+            self.num_futurepos_values = 0
+            self.num_seki_logits = 0
+            self.scorebelief_len = 0
+            self.scoremean_multiplier = 1.0
+            self.score_belief_offset_vector = None
+            self.seki_ema_on_device = False
             self.moving_unowned_proportion_sum = 0.0
             self.moving_unowned_proportion_weight = 0.0
+
+            valid_mask = torch.zeros((3, self.pos_len, self.pos_len), dtype=torch.float32)
+            valid_mask[0, :, :] = 1.0
+            valid_mask[1, :8, :8] = 1.0
+            valid_mask[2, :8, :8] = 1.0
+            self.valid_action_mask = valid_mask.view(1, 3 * self.pos_len * self.pos_len)
+        else:
+            self.policy_len = raw_model.pos_len * raw_model.pos_len + 1
+            self.value_len = 3
+            self.num_td_values = 3
+            self.num_futurepos_values = 2
+            self.num_seki_logits = 4
+            self.scorebelief_len = 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
+
+            self.scoremean_multiplier = raw_model.scoremean_multiplier
+
+            self.score_belief_offset_vector = raw_model.value_head.score_belief_offset_vector
+            # Keeping the seki moving average on the model device avoids a per-batch
+            # GPU->CPU sync in the training loss and lets the loss be torch.compiled.
+            self.seki_ema_on_device = env_flag("KATAGO_SEKI_EMA_ON_DEVICE", default=True)
+            if self.seki_ema_on_device:
+                metric_device = self.score_belief_offset_vector.device
+                self.moving_unowned_proportion_sum = torch.zeros([], device=metric_device, dtype=torch.float32)
+                self.moving_unowned_proportion_weight = torch.zeros([], device=metric_device, dtype=torch.float32)
+            else:
+                self.moving_unowned_proportion_sum = 0.0
+                self.moving_unowned_proportion_weight = 0.0
 
     def state_dict(self):
         # Checkpoints always store plain floats regardless of where the moving
@@ -329,6 +351,8 @@ class Metrics:
         return torch.sum(global_weight * weight * -torch.sum(target_probs * torch.log(target_probs + 1e-30), dim=-1))
 
     def square_value(self, value_logits, global_weight):
+        if self.is_quoridor:
+            return torch.sum(global_weight * torch.square(torch.sum(torch.softmax(value_logits, dim=1) * constant_like([1, -1], global_weight), dim=1)))
         return torch.sum(global_weight * torch.square(torch.sum(torch.softmax(value_logits,dim=1) * constant_like([1,-1,0],global_weight), dim=1)))
 
     @staticmethod
@@ -510,6 +534,22 @@ class Metrics:
         is_intermediate,
         include_model_norms=True,
     ):
+        if self.is_quoridor:
+            return self.metrics_dict_batchwise_single_heads_output_quoridor(
+                raw_model=raw_model,
+                model_output_postprocessed=model_output_postprocessed,
+                batch=batch,
+                is_training=is_training,
+                soft_policy_weight_scale=soft_policy_weight_scale,
+                disable_optimistic_policy=disable_optimistic_policy,
+                meta_kata_only_soft_policy=meta_kata_only_soft_policy,
+                value_loss_scale=value_loss_scale,
+                td_value_loss_scales=td_value_loss_scales,
+                seki_loss_scale=seki_loss_scale,
+                variance_time_loss_scale=variance_time_loss_scale,
+                is_intermediate=is_intermediate,
+                include_model_norms=include_model_norms,
+            )
         (
             policy_logits,
             value_logits,
@@ -950,5 +990,273 @@ class Metrics:
                 extra_results.update(self.get_model_norm_metrics(raw_model))
 
             for key,value in extra_results.items():
+                results[key] = value
+            return results
+
+    def metrics_dict_batchwise_single_heads_output_quoridor(
+        self,
+        raw_model,
+        model_output_postprocessed,
+        batch,
+        is_training,
+        soft_policy_weight_scale,
+        disable_optimistic_policy,
+        meta_kata_only_soft_policy,
+        value_loss_scale,
+        td_value_loss_scales,
+        seki_loss_scale,
+        variance_time_loss_scale,
+        is_intermediate,
+        include_model_norms=True,
+    ):
+        (
+            policy_logits,
+            value_logits,
+            td_value_logits,
+            pred_variance_time,
+            pred_game_margin,
+            trajectory_pretanh,
+            wall_graph_pretanh,
+        ) = model_output_postprocessed
+
+        input_binary_nchw = batch["binaryInputNCHW"]
+        target_policy_ncmove = batch["policyTargetsNCMove"]
+        target_global_nc = batch["globalTargetsNC"]
+        target_value_nchw = batch["valueTargetsNCHW"]
+
+        n = input_binary_nchw.shape[0]
+
+        valid_mask = self.valid_action_mask.to(device=policy_logits.device)
+        policy_logits = policy_logits.view(n, 6, self.policy_len)
+        policy_logits = policy_logits.masked_fill(valid_mask == 0, -10000.0)
+
+        target_policy_player = target_policy_ncmove[:, 0, :] * valid_mask
+        sum_p0 = torch.sum(target_policy_player, dim=1, keepdim=True)
+        target_policy_player = target_policy_player / torch.clamp(sum_p0, min=1e-8)
+
+        target_policy_opponent = target_policy_ncmove[:, 1, :] * valid_mask
+        sum_p1 = torch.sum(target_policy_opponent, dim=1, keepdim=True)
+        target_policy_opponent = target_policy_opponent / torch.clamp(sum_p1, min=1e-8)
+
+        target_policy_player_soft = (target_policy_player + 1e-7) * valid_mask
+        target_policy_player_soft = torch.pow(target_policy_player_soft, 0.25)
+        target_policy_player_soft /= torch.clamp(torch.sum(target_policy_player_soft, dim=1, keepdim=True), min=1e-8)
+
+        target_policy_opponent_soft = (target_policy_opponent + 1e-7) * valid_mask
+        target_policy_opponent_soft = torch.pow(target_policy_opponent_soft, 0.25)
+        target_policy_opponent_soft /= torch.clamp(torch.sum(target_policy_opponent_soft, dim=1, keepdim=True), min=1e-8)
+
+        global_weight = target_global_nc[:, 25]
+        target_weight_policy_player = target_global_nc[:, 26]
+        target_weight_policy_opponent = target_global_nc[:, 28]
+
+        loss_policy_player = self.loss_policy_player_samplewise(
+            policy_logits[:, 0, :],
+            target_policy_player,
+            target_weight_policy_player,
+            global_weight,
+        ).sum()
+
+        loss_policy_opponent = self.loss_policy_opponent_samplewise(
+            policy_logits[:, 1, :],
+            target_policy_opponent,
+            target_weight_policy_opponent,
+            global_weight,
+        ).sum()
+
+        loss_policy_player_soft = self.loss_policy_player_samplewise(
+            policy_logits[:, 2, :],
+            target_policy_player_soft,
+            target_weight_policy_player,
+            global_weight,
+        ).sum()
+
+        loss_policy_opponent_soft = self.loss_policy_opponent_samplewise(
+            policy_logits[:, 3, :],
+            target_policy_opponent_soft,
+            target_weight_policy_opponent,
+            global_weight,
+        ).sum()
+
+        if disable_optimistic_policy:
+            target_weight_longoptimistic_policy = target_weight_policy_player * 0.5
+            loss_longoptimistic_policy = self.loss_policy_player_samplewise(
+                policy_logits[:, 4, :],
+                target_policy_player,
+                target_weight_longoptimistic_policy,
+                global_weight,
+            ).sum()
+            target_weight_shortoptimistic_policy = target_weight_policy_player * 0.5
+            loss_shortoptimistic_policy = self.loss_policy_player_samplewise(
+                policy_logits[:, 5, :],
+                target_policy_player,
+                target_weight_shortoptimistic_policy,
+                global_weight,
+            ).sum()
+        else:
+            win_squared = torch.square(target_global_nc[:, 0])
+            target_weight_longoptimistic_policy = torch.clamp(
+                win_squared, min=0.0, max=1.0
+            ) * target_weight_policy_player
+            loss_longoptimistic_policy = self.loss_policy_player_samplewise(
+                policy_logits[:, 4, :],
+                target_policy_player,
+                target_weight_longoptimistic_policy,
+                global_weight,
+            ).sum()
+
+            shortterm_value_actual = target_global_nc[:, 4] - target_global_nc[:, 5]
+            shortterm_value_pred = torch.nn.functional.softmax(td_value_logits[:, 0, :].detach(), dim=1)
+            shortterm_value_pred = shortterm_value_pred[:, 0] - shortterm_value_pred[:, 1]
+            shortterm_value_excess = shortterm_value_actual - shortterm_value_pred
+            target_weight_shortoptimistic_policy = torch.clamp(
+                torch.sigmoid((shortterm_value_excess - 0.5) * 3.0), min=0.0, max=1.0
+            ) * target_weight_policy_player
+            loss_shortoptimistic_policy = self.loss_policy_player_samplewise(
+                policy_logits[:, 5, :],
+                target_policy_player,
+                target_weight_shortoptimistic_policy,
+                global_weight,
+            ).sum()
+
+        target_weight_longoptimistic_policy_sum = (global_weight * target_weight_longoptimistic_policy).sum()
+        target_weight_shortoptimistic_policy_sum = (global_weight * target_weight_shortoptimistic_policy).sum()
+
+        # Value loss (2 logits: win, loss)
+        target_value = target_global_nc[:, 0:2]
+        target_value = target_value / torch.clamp(torch.sum(target_value, dim=1, keepdim=True), min=1e-8)
+        target_weight_value = 1.0 - target_global_nc[:, 35]
+        loss_value = (1.50 * global_weight * target_weight_value * cross_entropy(value_logits, target_value, dim=1)).sum()
+
+        # TD-Value loss (4 horizons, each 2 logits)
+        target_td_value = torch.stack(
+            (target_global_nc[:, 4:6], target_global_nc[:, 8:10], target_global_nc[:, 12:14], target_global_nc[:, 16:18]),
+            dim=1,
+        )
+        target_td_value = target_td_value / torch.clamp(torch.sum(target_td_value, dim=2, keepdim=True), min=1e-8)
+        target_weight_td_value = 1.0 - target_global_nc[:, 24]
+
+        td_ce = cross_entropy(td_value_logits, target_td_value, dim=2)  # (N, 4)
+        loss_td_value1 = (global_weight * target_weight_td_value * td_ce[:, 0]).sum()
+        loss_td_value2 = (global_weight * target_weight_td_value * td_ce[:, 1]).sum()
+        loss_td_value3 = (global_weight * target_weight_td_value * td_ce[:, 2]).sum()
+        loss_td_value4 = (global_weight * target_weight_td_value * td_ce[:, 3]).sum()
+        loss_td_value = 0.20 * 0.25 * (loss_td_value1 + loss_td_value2 + loss_td_value3 + loss_td_value4)
+
+        # Game Margin loss (Huber delta=1.0)
+        target_game_margin = target_global_nc[:, 21]
+        target_weight_margin = target_global_nc[:, 29]
+        margin_huber = huber_loss(pred_game_margin, target_game_margin, delta=1.0)
+        loss_game_margin = (0.04 * global_weight * target_weight_margin * margin_huber).sum()
+
+        # Trajectory loss (BCEWithLogits, 2 channels)
+        target_trajectory = target_value_nchw[:, 0:2, :, :]
+        target_weight_aux = target_global_nc[:, 27]
+        bce_traj = torch.nn.functional.binary_cross_entropy_with_logits(trajectory_pretanh, target_trajectory, reduction="none")
+        bce_traj_sample = torch.mean(bce_traj, dim=(1, 2, 3))
+        loss_trajectory = (0.02 * global_weight * target_weight_aux * bce_traj_sample).sum()
+
+        # Wall Graph loss (BCEWithLogits on active 8x8 anchor region, 2 channels)
+        target_wall_graph = target_value_nchw[:, 2:4, :8, :8]
+        pred_wall_graph = wall_graph_pretanh[:, :, :8, :8]
+        bce_wall = torch.nn.functional.binary_cross_entropy_with_logits(pred_wall_graph, target_wall_graph, reduction="none")
+        bce_wall_sample = torch.mean(bce_wall, dim=(1, 2, 3))
+        loss_wall_graph = (0.02 * global_weight * target_weight_aux * bce_wall_sample).sum()
+
+        # Variance Time loss (Huber delta=5.0)
+        target_variance_time = target_global_nc[:, 22]
+        vtime_huber = huber_loss(pred_variance_time, target_variance_time, delta=5.0)
+        loss_variance_time = (0.01 * global_weight * target_weight_aux * vtime_huber).sum()
+
+        # Total Loss sum
+        loss_sum = (
+            loss_policy_player
+            + loss_policy_opponent
+            + loss_policy_player_soft * 0.05 * soft_policy_weight_scale
+            + loss_policy_opponent_soft * 0.02 * soft_policy_weight_scale
+            + loss_longoptimistic_policy * 0.10
+            + loss_shortoptimistic_policy * 0.05
+            + loss_value * value_loss_scale
+            + loss_td_value
+            + loss_game_margin
+            + loss_trajectory
+            + loss_wall_graph
+            + loss_variance_time * variance_time_loss_scale
+        )
+
+        policy_acc1 = self.accuracy1(
+            policy_logits[:, 0, :],
+            target_policy_player,
+            target_weight_policy_player,
+            global_weight,
+        )
+        square_value = self.square_value(value_logits, global_weight)
+
+        results = {
+            "p0loss_sum": loss_policy_player,
+            "p1loss_sum": loss_policy_opponent,
+            "p0softloss_sum": loss_policy_player_soft,
+            "p1softloss_sum": loss_policy_opponent_soft,
+            "p0lopt_sum": loss_longoptimistic_policy,
+            "p0loptw_sum": target_weight_longoptimistic_policy_sum,
+            "p0sopt_sum": loss_shortoptimistic_policy,
+            "p0soptw_sum": target_weight_shortoptimistic_policy_sum,
+            "vloss_sum": loss_value,
+            "tdvloss_sum": loss_td_value,
+            "tdvloss1_sum": loss_td_value1,
+            "tdvloss2_sum": loss_td_value2,
+            "tdvloss3_sum": loss_td_value3,
+            "tdvloss4_sum": loss_td_value4,
+            "gmloss_sum": loss_game_margin,
+            "leadloss_sum": loss_game_margin,
+            "trajloss_sum": loss_trajectory,
+            "wallloss_sum": loss_wall_graph,
+            "vtimeloss_sum": loss_variance_time,
+            "tdsloss_sum": torch.zeros_like(loss_value),
+            "oloss_sum": torch.zeros_like(loss_value),
+            "sloss_sum": torch.zeros_like(loss_value),
+            "fploss_sum": torch.zeros_like(loss_value),
+            "skloss_sum": torch.zeros_like(loss_value),
+            "smloss_sum": torch.zeros_like(loss_value),
+            "sbcdfloss_sum": torch.zeros_like(loss_value),
+            "sbpdfloss_sum": torch.zeros_like(loss_value),
+            "sdregloss_sum": torch.zeros_like(loss_value),
+            "evstloss_sum": torch.zeros_like(loss_value),
+            "esstloss_sum": torch.zeros_like(loss_value),
+            "qwlloss_sum": torch.zeros_like(loss_value),
+            "qscloss_sum": torch.zeros_like(loss_value),
+            "loss_sum": loss_sum,
+            "pacc1_sum": policy_acc1,
+            "vsquare_sum": square_value,
+        }
+
+        if is_intermediate:
+            return results
+        else:
+            weight = global_weight.sum()
+            nsamples = int(global_weight.shape[0])
+            policy_target_entropy = self.target_entropy(
+                target_policy_player,
+                target_weight_policy_player,
+                global_weight,
+            )
+            soft_policy_target_entropy = self.target_entropy(
+                target_policy_player_soft,
+                target_weight_policy_player,
+                global_weight,
+            )
+
+            extra_results = {
+                "wsum": weight * self.world_size,
+                "nsamp": nsamples * self.world_size,
+                "ptentr_sum": policy_target_entropy,
+                "ptsoftentr_sum": soft_policy_target_entropy,
+                "sekiweightscale_sum": torch.zeros_like(weight),
+            }
+
+            if include_model_norms:
+                extra_results.update(self.get_model_norm_metrics(raw_model))
+
+            for key, value in extra_results.items():
                 results[key] = value
             return results

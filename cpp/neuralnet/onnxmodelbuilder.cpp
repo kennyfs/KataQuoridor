@@ -1683,20 +1683,28 @@ LoadResult load(
     reader.fail(Global::strprintf(
       "numInputMetaChannels (%d) != METADATA_INPUT_NUM_CHANNELS (%d)",
       descBuf.numInputMetaChannels, SGFMetadata::METADATA_INPUT_NUM_CHANNELS));
-  // Policy channels: 1 for old nets, 2 once the optimism channel exists, 4 from v16 on.
-  if(!(descBuf.numPolicyChannels == 1 || descBuf.numPolicyChannels == 2 ||
-       (descBuf.numPolicyChannels == 4 && descBuf.modelVersion >= 16)))
-    reader.fail(Global::strprintf(
-      "numPolicyChannels (%d) is not supported for model version %d",
-      descBuf.numPolicyChannels, descBuf.modelVersion));
-  checkChannels("numValueChannels", descBuf.numValueChannels, 3);
-  checkChannels("numOwnershipChannels", descBuf.numOwnershipChannels, 1);
-  {
-    int expectedScoreValueChannels =
-      descBuf.modelVersion >= 9 ? 6 :
-      descBuf.modelVersion >= 8 ? 4 :
-      descBuf.modelVersion >= 4 ? 2 : 1;
-    checkChannels("numScoreValueChannels", descBuf.numScoreValueChannels, expectedScoreValueChannels);
+  if(descBuf.modelVersion <= 1) {
+    checkChannels("numPolicyChannels", descBuf.numPolicyChannels, 3);
+    checkChannels("numValueChannels", descBuf.numValueChannels, 2);
+    checkChannels("numOwnershipChannels", descBuf.numOwnershipChannels, 0);
+    checkChannels("numScoreValueChannels", descBuf.numScoreValueChannels, 0);
+  }
+  else {
+    // Policy channels: 1 for old nets, 2 once the optimism channel exists, 4 from v16 on.
+    if(!(descBuf.numPolicyChannels == 1 || descBuf.numPolicyChannels == 2 ||
+         (descBuf.numPolicyChannels == 4 && descBuf.modelVersion >= 16)))
+      reader.fail(Global::strprintf(
+        "numPolicyChannels (%d) is not supported for model version %d",
+        descBuf.numPolicyChannels, descBuf.modelVersion));
+    checkChannels("numValueChannels", descBuf.numValueChannels, 3);
+    checkChannels("numOwnershipChannels", descBuf.numOwnershipChannels, 1);
+    {
+      int expectedScoreValueChannels =
+        descBuf.modelVersion >= 9 ? 6 :
+        descBuf.modelVersion >= 8 ? 4 :
+        descBuf.modelVersion >= 4 ? 2 : 1;
+      checkChannels("numScoreValueChannels", descBuf.numScoreValueChannels, expectedScoreValueChannels);
+    }
   }
 
   // The score post-processing multipliers entered the .bin.gz header at model version 13; below that
