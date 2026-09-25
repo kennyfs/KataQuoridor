@@ -50,7 +50,7 @@ def is_quoridor(config: ModelConfig) -> bool:
 
 def get_num_bin_input_features(config: ModelConfig):
     if is_quoridor(config):
-        return 16
+        return 17
     version = get_version(config)
     if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16 or version == 17:
         return 22
@@ -59,7 +59,7 @@ def get_num_bin_input_features(config: ModelConfig):
 
 def get_num_global_input_features(config: ModelConfig):
     if is_quoridor(config):
-        return 16
+        return 15
     version = get_version(config)
     if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16 or version == 17:
         return 19

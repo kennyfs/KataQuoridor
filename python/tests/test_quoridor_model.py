@@ -22,14 +22,14 @@ def test_quoridor_config_properties():
         assert name in modelconfigs.config_of_name
         cfg = modelconfigs.config_of_name[name]
         assert modelconfigs.is_quoridor(cfg)
-        assert modelconfigs.get_num_bin_input_features(cfg) == 16
-        assert modelconfigs.get_num_global_input_features(cfg) == 16
+        assert modelconfigs.get_num_bin_input_features(cfg) == 17
+        assert modelconfigs.get_num_global_input_features(cfg) == 15
 
 
 def test_quoridor_forward_shapes():
     B = 2
-    spatial = torch.randn(B, 16, 9, 9)
-    glob = torch.randn(B, 16)
+    spatial = torch.randn(B, 17, 9, 9)
+    glob = torch.randn(B, 15)
 
     # 1. Test b2c64_quoridor
     cfg_b2 = modelconfigs.base_config_of_name["b2c64_quoridor"]
@@ -93,8 +93,8 @@ def test_quoridor_backward_and_gradients():
     model.train()
     metrics = Metrics(world_size=1, raw_model=model)
 
-    spatial = torch.randn(B, 16, 9, 9)
-    glob = torch.randn(B, 16)
+    spatial = torch.randn(B, 17, 9, 9)
+    glob = torch.randn(B, 15)
     out_byheads = model(spatial, glob)
     post = model.postprocess_output(out_byheads)
 
@@ -157,10 +157,10 @@ def test_quoridor_backward_and_gradients():
 
 def test_quoridor_symmetries():
     B = 3
-    # 1. Spatial symmetry (channels 14 and 15 are 8x8 wall anchors; row 8/col 8 are 0)
-    spatial = torch.randn(B, 16, 9, 9)
-    spatial[:, 14:16, 8, :] = 0.0
-    spatial[:, 14:16, :, 8] = 0.0
+    # 1. Spatial symmetry (channels 14..16 are 8x8 wall anchors and domain mask; row 8/col 8 are 0)
+    spatial = torch.randn(B, 17, 9, 9)
+    spatial[:, 14:17, 8, :] = 0.0
+    spatial[:, 14:17, :, 8] = 0.0
 
     symm_0 = apply_symmetry_quoridor(spatial, 0)
     assert torch.allclose(symm_0, spatial)
@@ -211,8 +211,8 @@ def test_quoridor_onnx_export():
         assert meta["katago.metadataVersion"] == "1"
         assert meta["katago.name"] == "test_model_export"
         assert meta["katago.modelVersion"] == "1"
-        assert meta["katago.numInputChannels"] == "16"
-        assert meta["katago.numInputGlobalChannels"] == "16"
+        assert meta["katago.numInputChannels"] == "17"
+        assert meta["katago.numInputGlobalChannels"] == "15"
         assert meta["katago.numPolicyChannels"] == "3"
         assert meta["katago.numValueChannels"] == "2"
         assert meta["katago.numScoreValueChannels"] == "0"

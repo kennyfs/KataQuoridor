@@ -206,10 +206,10 @@ def apply_symmetry_quoridor(tensor, symm):
     out[:, 5, :, :] = ch6
     out[:, 6, :, :] = ch5
 
-    # Fix wall anchor channels 14 and 15:
-    # Wall anchors are in :8, :8. When 9x9 is flipped, :8 shifts to 1:9.
+    # Fix wall anchor and domain mask channels 14, 15, and 16:
+    # Wall anchors/masks are in :8, :8. When 9x9 is flipped, :8 shifts to 1:9.
     # We must flip :8 within :8 so c -> 7 - c.
-    for ch in (14, 15):
+    for ch in (14, 15, 16):
         orig_wall = tensor[:, ch, :8, :8]
         out[:, ch, :, :] = 0.0
         out[:, ch, :8, :8] = torch.flip(orig_wall, dims=[-1])
@@ -224,8 +224,8 @@ def apply_symmetry_policy_quoridor(tensor, symm):
     if symm == 0:
         return tensor
     assert symm == 1
-    assert 3 <= len(orig_shape) <= 5
     orig_shape = tensor.shape
+    assert 3 <= len(orig_shape) <= 5
     batch_size = orig_shape[0]
 
     # Reshape to (B, 6, 3, 9, 9)

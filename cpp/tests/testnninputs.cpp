@@ -155,6 +155,15 @@ static void testInitialBoardSpatialFeatures() {
     testAssert(getSpatial(14, pos) == 0.0f);
     testAssert(getSpatial(15, pos) == 0.0f);
   }
+
+  // Ch 16: Wall anchor domain mask (1.0f on [0..7]x[0..7], 0.0f elsewhere)
+  for(int r = 0; r < 9; r++) {
+    for(int c = 0; c < 9; c++) {
+      int pos = r * 9 + c;
+      if(c < 8 && r < 8) testAssert(getSpatial(16, pos) == 1.0f);
+      else testAssert(getSpatial(16, pos) == 0.0f);
+    }
+  }
 }
 
 static void testCanonicalYFlipInvariance() {
@@ -313,9 +322,8 @@ static void testGlobalFeaturesValues() {
   testAssert(abs(global[10] - exp(-9.0f / 4.0f)) < 1e-6);
   testAssert(abs(global[11] - exp(-9.0f / 8.0f)) < 1e-6);
   testAssert(global[12] == -1.0f); // Parity: at start Black has even distance to White, White has tempo, Black is -1.0f
-  testAssert(global[13] == 0.0f); // Move count 0
-  testAssert(abs(global[14] - (8.0f / 32.0f)) < 1e-6); // My shortest dist
-  testAssert(abs(global[15] - (8.0f / 32.0f)) < 1e-6); // Opp shortest dist
+  testAssert(abs(global[13] - (8.0f / 32.0f)) < 1e-6); // My shortest dist
+  testAssert(abs(global[14] - (8.0f / 32.0f)) < 1e-6); // Opp shortest dist
 
   // Exhaust all fences
   board.blackFences = 0;

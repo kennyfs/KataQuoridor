@@ -12,7 +12,7 @@ except ImportError:
 class QuoridorOnnxExportWrapper(torch.nn.Module):
     """
     Wrapper for KataQuoridor neural net inference export.
-    Exposes InputSpatial (B, 16, 9, 9) and InputGlobal (B, 16) as inputs,
+    Exposes InputSpatial (B, 17, 9, 9) and InputGlobal (B, 15) as inputs,
     and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2) as outputs.
     """
     def __init__(self, model: torch.nn.Module):
@@ -20,8 +20,8 @@ class QuoridorOnnxExportWrapper(torch.nn.Module):
         self.model = model
 
     def forward(self, input_spatial: torch.Tensor, input_global: torch.Tensor):
-        # input_spatial: (B, 16, 9, 9)
-        # input_global:  (B, 16)
+        # input_spatial: (B, 17, 9, 9)
+        # input_global:  (B, 15)
         outputs_byheads = self.model(input_spatial, input_global)
         # Extract main heads
         policy_out = outputs_byheads[0][0]  # (B, 18, 9, 9)
@@ -48,8 +48,8 @@ def export_quoridor_onnx(
     wrapper.eval()
 
     device = next(model.parameters()).device
-    dummy_spatial = torch.zeros(1, 16, 9, 9, dtype=torch.float32, device=device)
-    dummy_global = torch.zeros(1, 16, dtype=torch.float32, device=device)
+    dummy_spatial = torch.zeros(1, 17, 9, 9, dtype=torch.float32, device=device)
+    dummy_global = torch.zeros(1, 15, dtype=torch.float32, device=device)
 
     os.makedirs(os.path.dirname(os.path.abspath(export_path)), exist_ok=True)
 
@@ -78,8 +78,8 @@ def export_quoridor_onnx(
             "katago.metadataVersion": "1",
             "katago.name": model_name,
             "katago.modelVersion": "1",
-            "katago.numInputChannels": "16",
-            "katago.numInputGlobalChannels": "16",
+            "katago.numInputChannels": "17",
+            "katago.numInputGlobalChannels": "15",
             "katago.numInputMetaChannels": "0",
             "katago.numPolicyChannels": "3",
             "katago.numValueChannels": "2",

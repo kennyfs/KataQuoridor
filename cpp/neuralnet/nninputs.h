@@ -89,8 +89,8 @@ struct MiscNNInputParams {
 };
 
 namespace NNInputs {
-  constexpr int NUM_FEATURES_SPATIAL_V1 = 16;
-  constexpr int NUM_FEATURES_GLOBAL_V1 = 16;
+  constexpr int NUM_FEATURES_SPATIAL_V1 = 17;
+  constexpr int NUM_FEATURES_GLOBAL_V1 = 15;
   constexpr int NN_X_LEN = 9;
   constexpr int NN_Y_LEN = 9;
   constexpr int NN_POLICY_SIZE = 3 * NN_X_LEN * NN_Y_LEN; // 243

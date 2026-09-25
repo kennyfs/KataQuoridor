@@ -843,6 +843,7 @@ void NNInputs::fillRowV1(
   const MiscNNInputParams& nnInputParams, int nnXLen, int nnYLen, bool useNHWC, float* rowBin, float* rowGlobal
 ) {
   (void)nnInputParams;
+  (void)boardHistory;
   assert(nnXLen == NN_X_LEN);
   assert(nnYLen == NN_Y_LEN);
   assert(nextPlayer == P_BLACK || nextPlayer == P_WHITE);
@@ -1062,10 +1063,15 @@ void NNInputs::fillRowV1(
         if(hasHWall[c][rWallBoard])
           setRowBin(rowBin, pos, 15, 1.0f, posStride, featureStride);
       }
+
+      // Ch 16: Valid wall anchor domain mask (1.0f on [0..7]x[0..7], 0.0f elsewhere)
+      if(c < 8 && rCanon < 8) {
+        setRowBin(rowBin, pos, 16, 1.0f, posStride, featureStride);
+      }
     }
   }
 
-  // Populate 16 global features
+  // Populate 15 global features
   // Index 0: Next player is White
   rowGlobal[0] = (nextPlayer == P_WHITE) ? 1.0f : 0.0f;
 
@@ -1110,16 +1116,12 @@ void NNInputs::fillRowV1(
   int r2 = Location::getY(board.whitePawnLoc, board.x_size) / 2;
   int manhattanDist = std::abs(c1 - c2) + std::abs(r1 - r2);
   rowGlobal[12] = (manhattanDist % 2 != 0) ? 1.0f : -1.0f;
-  int moveCount = !boardHistory.moveHistory.empty() ? (int)boardHistory.moveHistory.size() : board.movenum;
 
-  // Index 13: Game progress
-  rowGlobal[13] = std::min(1.0f, (float)moveCount / 200.0f);
+  // Index 13: My shortest distance
+  rowGlobal[13] = (shortestDistCur < 0) ? 1.0f : std::min(1.0f, (float)shortestDistCur / 32.0f);
 
-  // Index 14: My shortest distance
-  rowGlobal[14] = (shortestDistCur < 0) ? 1.0f : std::min(1.0f, (float)shortestDistCur / 32.0f);
-
-  // Index 15: Opponent shortest distance
-  rowGlobal[15] = (shortestDistOpp < 0) ? 1.0f : std::min(1.0f, (float)shortestDistOpp / 32.0f);
+  // Index 14: Opponent shortest distance
+  rowGlobal[14] = (shortestDistOpp < 0) ? 1.0f : std::min(1.0f, (float)shortestDistOpp / 32.0f);
 }
 
 void NNInputs::applyPolicyMap(
