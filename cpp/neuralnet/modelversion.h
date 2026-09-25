@@ -4,12 +4,12 @@
 // Model versions
 namespace NNModelVersion {
 
-  constexpr int latestModelVersionImplemented = 17;
-  constexpr int latestInputsVersionImplemented = 7;
-  constexpr int defaultModelVersion = 17;
+  constexpr int latestModelVersionImplemented = 10;
+  constexpr int latestInputsVersionImplemented = 1;
+  constexpr int defaultModelVersion = 0;
 
-  constexpr int oldestModelVersionImplemented = 3;
-  constexpr int oldestInputsVersionImplemented = 3;
+  constexpr int oldestModelVersionImplemented = 0;
+  constexpr int oldestInputsVersionImplemented = 1;
 
   // Which V* feature version from NNInputs does a given model version consume?
   int getInputsVersion(int modelVersion);

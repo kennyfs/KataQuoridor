@@ -380,31 +380,7 @@ ooooox.
     testAssert(histV2.finalWhiteMinusBlackScore == histV3.finalWhiteMinusBlackScore + 1.0f);
   }
 
-  //NN input features 18/19 (current territory) reflect the flag under territory scoring with
-  //TaxRule NONE in encore phase 2: the atari-adjacent eye counts for black only under v2.
-  {
-    const int nnXLen = 7;
-    const int nnYLen = 7;
-    const int numSpatial = NNInputs::NUM_FEATURES_SPATIAL_V7;
-    std::vector<float> rowBinV2(numSpatial*nnXLen*nnYLen);
-    std::vector<float> rowBinV3(numSpatial*nnXLen*nnYLen);
-    std::vector<float> rowGlobalV2(NNInputs::NUM_FEATURES_GLOBAL_V7);
-    std::vector<float> rowGlobalV3(NNInputs::NUM_FEATURES_GLOBAL_V7);
-    MiscNNInputParams nnInputParams;
-    BoardHistory histV2(board,P_BLACK,terrNoTaxRules,2,BoardHistoryModes(false,false));
-    BoardHistory histV3(board,P_BLACK,terrNoTaxRules,2,BoardHistoryModes(false,true));
-    NNInputs::fillRowV7(board,histV2,P_BLACK,nnInputParams,nnXLen,nnYLen,false,rowBinV2.data(),rowGlobalV2.data());
-    NNInputs::fillRowV7(board,histV3,P_BLACK,nnInputParams,nnXLen,nnYLen,false,rowBinV3.data(),rowGlobalV3.data());
-    int eyePos = NNPos::locToPos(eyeLoc,board.x_size,nnXLen,nnYLen);
-    //Feature 18 is the current player's territory; black is to move, so the eye is feature 18 under v2.
-    testAssert(rowBinV2[18*nnXLen*nnYLen + eyePos] == 1.0f);
-    testAssert(rowBinV3[18*nnXLen*nnYLen + eyePos] == 0.0f);
-    //The eye is the sole atari-adjacent counted point on this board, so it is the only difference.
-    for(int i = 0; i<numSpatial*nnXLen*nnYLen; i++) {
-      if(i != 18*nnXLen*nnYLen + eyePos)
-        testAssert(rowBinV2[i] == rowBinV3[i]);
-    }
-  }
+  // Legacy V7 territory features removed for Quoridor V1
 
   //Torazu sanmoku ("three points without capturing")
   {

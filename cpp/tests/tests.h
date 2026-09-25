@@ -41,8 +41,7 @@ namespace Tests {
   void runSgfFileTests();
 
   //testnninputs.cpp
-  void runNNInputsV3V4Tests();
-  void runExcludeTerritoryAtariNNInputsTests();
+  void runNNInputsTests();
 
   //testsymmetries.cpp
   void runBasicSymmetryTests();

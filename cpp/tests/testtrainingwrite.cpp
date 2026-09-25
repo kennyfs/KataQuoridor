@@ -64,15 +64,15 @@ static NNEvaluator* startNNEval(
 static void runReanalysisRowChannelsTest() {
   cout << "Running reanalysis row channels test" << endl;
 
-  int inputsVersion = 3;
+  int inputsVersion = 1;
   int maxRows = 4;
-  int nnXLen = 5;
-  int nnYLen = 5;
+  int nnXLen = 9;
+  int nnYLen = 9;
   TrainingWriteBuffers buffers(
-    inputsVersion, maxRows, NNInputs::NUM_FEATURES_SPATIAL_V3, NNInputs::NUM_FEATURES_GLOBAL_V3, nnXLen, nnYLen, false
+    inputsVersion, maxRows, NNInputs::NUM_FEATURES_SPATIAL_V1, NNInputs::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
   );
 
-  Board board(5,5);
+  Board board(17,17);
   Player nextPla = P_BLACK;
   Rules rules = Rules::getTrompTaylorish();
   BoardHistory hist(board,nextPla,rules,0,BoardHistoryModes(false,false));

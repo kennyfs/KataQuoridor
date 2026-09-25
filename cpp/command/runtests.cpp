@@ -52,6 +52,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("rules"))
     Tests::runRulesTests();
 
+  if(shouldRun("nninputs"))
+    Tests::runNNInputsTests();
+
   if(shouldRun("go")) {
     Tests::runBoardIOTests();
     Tests::runBoardBasicTests();
@@ -88,8 +91,7 @@ int MainCmds::runoutputtests(const vector<string>& args) {
   Board::initHash();
   ScoreValue::initTables();
 
-  Tests::runNNInputsV3V4Tests();
-  Tests::runExcludeTerritoryAtariNNInputsTests();
+  Tests::runNNInputsTests();
   Tests::runNNLessSearchTests();
   Tests::runTrainingWriteTests();
   Tests::runPassAliveSuicideGameTests();

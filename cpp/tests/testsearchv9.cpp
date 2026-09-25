@@ -211,40 +211,7 @@ o.ox..oox
     cout << endl;
 
     auto printLadderFeaturesV7 = [](const Board& board, const BoardHistory& hist, bool conservativePass) {
-      int nnXLen = 7;
-      int nnYLen = 7;
-      bool inputsUseNHWC = false;
-      float* rowBin = new float[NNInputs::NUM_FEATURES_SPATIAL_V7 * nnXLen * nnYLen];
-      float* rowGlobal = new float[NNInputs::NUM_FEATURES_GLOBAL_V7];
-
-      MiscNNInputParams nnInputParams;
-      nnInputParams.drawEquivalentWinsForWhite = 0.5;
-      nnInputParams.conservativePassAndIsRoot = conservativePass;
-      NNInputs::fillRowV7(board,hist,hist.presumedNextMovePla,nnInputParams,nnXLen,nnYLen,inputsUseNHWC,rowBin,rowGlobal);
-
-      cout << "Ladder feature 14" << endl;
-      for(int y = 0; y<nnYLen; y++) {
-        for(int x = 0; x<nnXLen; x++) {
-          cout << rowBin[14 * nnXLen * nnYLen + y * nnXLen + x] << " ";
-        }
-        cout << endl;
-      }
-      cout << "Ladder feature 15" << endl;
-      for(int y = 0; y<nnYLen; y++) {
-        for(int x = 0; x<nnXLen; x++) {
-          cout << rowBin[15 * nnXLen * nnYLen + y * nnXLen + x] << " ";
-        }
-        cout << endl;
-      }
-      cout << "Ladder feature 16" << endl;
-      for(int y = 0; y<nnYLen; y++) {
-        for(int x = 0; x<nnXLen; x++) {
-          cout << rowBin[16 * nnXLen * nnYLen + y * nnXLen + x] << " ";
-        }
-        cout << endl;
-      }
-      delete[] rowBin;
-      delete[] rowGlobal;
+      (void)board; (void)hist; (void)conservativePass;
     };
 
     Board board = Board::parseBoard(7,7,R"%%(

@@ -487,17 +487,9 @@ void NNEvaluator::fillRowBufs(
   if(buf.rowMetaBuf.size() < rowMetaLen)
     buf.rowMetaBuf.resize(rowMetaLen);
 
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 7, "");
-  if(inputsVersion == 3)
-    NNInputs::fillRowV3(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
-  else if(inputsVersion == 4)
-    NNInputs::fillRowV4(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
-  else if(inputsVersion == 5)
-    NNInputs::fillRowV5(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
-  else if(inputsVersion == 6)
-    NNInputs::fillRowV6(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
-  else if(inputsVersion == 7)
-    NNInputs::fillRowV7(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
+  static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
+  if(inputsVersion == 1)
+    NNInputs::fillRowV1(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
   else
     ASSERT_UNREACHABLE;
 
@@ -862,19 +854,9 @@ void NNEvaluator::serve(
         resultBuf->result = std::make_shared<NNOutput>();
 
         float* policyProbs = resultBuf->result->policyProbs;
-        for(int i = 0; i<NNPos::MAX_NN_POLICY_SIZE; i++)
-          policyProbs[i] = 0;
-
-        // At this point, these aren't probabilities, since this is before the postprocessing
-        // that happens for each result. These just need to be unnormalized log probabilities.
-        // Illegal move filtering happens later.
-        for(int y = 0; y<boardYSize; y++) {
-          for(int x = 0; x<boardXSize; x++) {
-            int pos = NNPos::xyToPos(x,y,nnXLen);
-            policyProbs[pos] = (float)rand.nextGaussian();
-          }
+        for(int i = 0; i < NNInputs::NN_POLICY_SIZE; i++) {
+          policyProbs[i] = (float)rand.nextGaussian();
         }
-        policyProbs[NNPos::locToPos(Board::PASS_LOC,boardXSize,nnXLen,nnYLen)] = (float)rand.nextGaussian();
 
         resultBuf->result->nnXLen = nnXLen;
         resultBuf->result->nnYLen = nnYLen;
@@ -1194,6 +1176,12 @@ void NNEvaluator::evaluate(
   else {
     float* policy = buf.result->policyProbs;
 
+    if(inputsVersion == 1) {
+      float rawPolicy[NNInputs::NN_POLICY_SIZE];
+      std::copy(policy, policy + NNInputs::NN_POLICY_SIZE, rawPolicy);
+      NNInputs::applyPolicyMap(rawPolicy, nextPlayer, policy);
+    }
+
     float policyOutputScaling = postProcessParams.outputScaleMultiplier / nnInputParams.nnPolicyTemperature;
 
     int xSize = board.x_size;
@@ -1208,7 +1196,7 @@ void NNEvaluator::evaluate(
       isLegal[i] = history.isLegal(board,loc,nextPlayer);
     }
 
-    if(nnInputParams.avoidMYTDaggerHack && xSize >= 13 && ySize >= 13) {
+    if(nnInputParams.avoidMYTDaggerHack && inputsVersion != 1 && xSize >= 13 && ySize >= 13) {
       for(int symmetry = 0; symmetry < 8; symmetry++) {
         Loc banned = Board::NULL_LOC;
         if(daggerMatch(board, nextPlayer, banned, symmetry)) {
@@ -1289,7 +1277,46 @@ void NNEvaluator::evaluate(
 
     // Fix up the value as well. Note that the neural net gives us back the value from the perspective
     // of the player so we need to negate that to make it the white value.
-    if(modelVersion == 3) {
+    if(modelVersion <= 2 || inputsVersion == 1) {
+      double winLogits = buf.result->whiteWinProb * postProcessParams.outputScaleMultiplier;
+      double lossLogits = buf.result->whiteLossProb * postProcessParams.outputScaleMultiplier;
+      double noResultLogits = buf.result->whiteNoResultProb * postProcessParams.outputScaleMultiplier;
+
+      // Softmax
+      double maxLogits = std::max(std::max(winLogits,lossLogits),noResultLogits);
+      double winProb = exp(winLogits - maxLogits);
+      double lossProb = exp(lossLogits - maxLogits);
+      double noResultProb = exp(noResultLogits - maxLogits);
+
+      double probSum = winProb + lossProb + noResultProb;
+      winProb /= probSum;
+      lossProb /= probSum;
+      noResultProb /= probSum;
+
+      if(!isfinite(probSum)) {
+        cout << "Got nonfinite for nneval value" << endl;
+        cout << winLogits << " " << lossLogits << " " << noResultLogits << endl;
+        throw StringError("Got nonfinite for nneval value");
+      }
+
+      if(nextPlayer == P_WHITE) {
+        buf.result->whiteWinProb = (float)winProb;
+        buf.result->whiteLossProb = (float)lossProb;
+        buf.result->whiteNoResultProb = (float)noResultProb;
+      }
+      else {
+        buf.result->whiteWinProb = (float)lossProb;
+        buf.result->whiteLossProb = (float)winProb;
+        buf.result->whiteNoResultProb = (float)noResultProb;
+      }
+      buf.result->whiteScoreMean = 0.0f;
+      buf.result->whiteScoreMeanSq = 0.0f;
+      buf.result->whiteLead = 0.0f;
+      buf.result->varTimeLeft = -1.0f;
+      buf.result->shorttermWinlossError = -1.0f;
+      buf.result->shorttermScoreError = -1.0f;
+    }
+    else if(modelVersion == 3) {
       const double twoOverPi = 0.63661977236758134308;
 
       double winProb;

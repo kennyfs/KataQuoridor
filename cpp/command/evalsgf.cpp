@@ -689,7 +689,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
       MiscNNInputParams nnInputParams;
       nnInputParams.symmetry = 0;
       nnInputParams.policyOptimism = params.rootPolicyOptimism;
-      NNInputs::fillRowV7(board, hist, nextPla, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, binaryInputNCHW.data, globalInputNC.data);
+      NNInputs::fillRowV1(board, hist, nextPla, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, binaryInputNCHW.data, globalInputNC.data);
 
       ZipFile zipFile(dumpNpzInputTo);
       uint64_t numBytes;
