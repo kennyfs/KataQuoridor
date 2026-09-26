@@ -356,24 +356,6 @@ Board::Board(int x, int y) {
   init(x, y);
 }
 
-Board::Board(const Board& other) {
-  x_size = other.x_size;
-  y_size = other.y_size;
-  memcpy(colors, other.colors, sizeof(Color) * MAX_ARR_SIZE);
-  blackFences = other.blackFences;
-  whiteFences = other.whiteFences;
-  blackPawnLoc = other.blackPawnLoc;
-  whitePawnLoc = other.whitePawnLoc;
-  movenum = other.movenum;
-  pos_hash = other.pos_hash;
-  memcpy(adj_offsets, other.adj_offsets, sizeof(short) * 8);
-  nextPla = other.nextPla;
-  ko_loc = other.ko_loc;
-  numBlackCaptures = other.numBlackCaptures;
-  numWhiteCaptures = other.numWhiteCaptures;
-  cachedPathP1 = other.cachedPathP1;
-  cachedPathP2 = other.cachedPathP2;
-}
 
 void Board::init(int xS, int yS) {
   assert(IS_ZOBRIST_INITALIZED);
@@ -719,7 +701,7 @@ vector<Loc> Board::getLegalPawnDestinations(Player pla) const {
   return moves;
 }
 
-bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
+bool Board::bfsReachable(Loc start, int targetY, CompactPath* outPath, Loc blockedArm1, Loc blockedArm2) const {
   if(!isOnBoardPawn(start))
     return false;
 
@@ -755,12 +737,17 @@ bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
       if(nx < 0 || nx >= x_size || ny < 0 || ny >= y_size)
         continue;
       Loc next = Location::getLoc(nx, ny, x_size);
-      if(!visited[next] && canPawnStep(curr, next)) {
-        visited[next] = true;
-        if(outPath != nullptr)
-          parent[next] = curr;
-        q[qTail++] = next;
-      }
+      if(visited[next])
+        continue;
+
+      Loc mid = Location::getLoc(cx + dirs[d][0] / 2, cy + dirs[d][1] / 2, x_size);
+      if(mid == blockedArm1 || mid == blockedArm2 || colors[mid] == C_FENCE)
+        continue;
+
+      visited[next] = true;
+      if(outPath != nullptr)
+        parent[next] = curr;
+      q[qTail++] = next;
     }
   }
 
@@ -769,19 +756,34 @@ bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
 
   if(outPath != nullptr) {
     outPath->clear();
-    outPath->reserve(81);
     Loc curr = goalFound;
-    while(curr != NULL_LOC) {
-      outPath->push_back(curr);
+    Loc temp[81];
+    int count = 0;
+    while(curr != NULL_LOC && count < 81) {
+      temp[count++] = curr;
       curr = parent[curr];
     }
-    reverse(outPath->begin(), outPath->end());
+    for(int i = count - 1; i >= 0; i--) {
+      outPath->push_back(temp[i]);
+    }
   }
 
   return true;
 }
 
-static bool pathCrossesWall(const vector<Loc>& path, Loc arm1, Loc arm2) {
+bool Board::bfsReachable(Loc start, int targetY, vector<Loc>* outPath) const {
+  if(outPath == nullptr)
+    return bfsReachable(start, targetY, (CompactPath*)nullptr);
+  CompactPath cp;
+  bool ok = bfsReachable(start, targetY, &cp);
+  if(ok)
+    *outPath = cp.toVector();
+  else
+    outPath->clear();
+  return ok;
+}
+
+static bool pathCrossesWall(const CompactPath& path, Loc arm1, Loc arm2) {
   if(path.size() < 2) return false;
   for(size_t i = 0; i + 1 < path.size(); i++) {
     Loc edgeMid = (path[i] + path[i+1]) >> 1;
@@ -802,22 +804,8 @@ bool Board::checkNoFullBlockLazy(int c, int r, bool isVertical) const {
   if(!cutP1 && !cutP2)
     return true;
 
-  Board* mutableThis = const_cast<Board*>(this);
-  mutableThis->placeFence(center, isVertical);
-
-  vector<Loc> newPathP1;
-  vector<Loc> newPathP2;
-  bool legal = bfsReachable(blackPawnLoc, 0, cutP1 ? &newPathP1 : nullptr) &&
-               bfsReachable(whitePawnLoc, y_size - 1, cutP2 ? &newPathP2 : nullptr);
-
-  mutableThis->removeFence(center, isVertical);
-
-  if(legal) {
-    if(cutP1) cachedPathP1 = newPathP1;
-    if(cutP2) cachedPathP2 = newPathP2;
-  }
-
-  return legal;
+  return bfsReachable(blackPawnLoc, 0, nullptr, arm1, arm2) &&
+         bfsReachable(whitePawnLoc, y_size - 1, nullptr, arm1, arm2);
 }
 
 bool Board::isLegalWallPlacement(int c, int r, bool isVertical, Player pla) const {
@@ -1044,7 +1032,7 @@ void Board::undo(MoveRecord record) {
 int Board::getShortestPathDistance(Player pla) const {
   Loc start = (pla == P_BLACK) ? blackPawnLoc : whitePawnLoc;
   int targetY = (pla == P_BLACK) ? 0 : (y_size - 1);
-  vector<Loc> path;
+  CompactPath path;
   if(bfsReachable(start, targetY, &path))
     return (int)path.size() - 1;
   return -1;
@@ -1053,9 +1041,10 @@ int Board::getShortestPathDistance(Player pla) const {
 vector<Loc> Board::findShortestPath(Player pla) const {
   Loc start = (pla == P_BLACK) ? blackPawnLoc : whitePawnLoc;
   int targetY = (pla == P_BLACK) ? 0 : (y_size - 1);
-  vector<Loc> path;
-  bfsReachable(start, targetY, &path);
-  return path;
+  CompactPath path;
+  if(bfsReachable(start, targetY, &path))
+    return path.toVector();
+  return vector<Loc>();
 }
 
 void Board::calDistMap(Player pla, int32_t* res) const {

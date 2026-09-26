@@ -129,6 +129,40 @@ namespace Location {
 
 STRUCT_NAMED_PAIR(Loc, loc, Player, pla, Move);
 
+struct CompactPath {
+  int8_t len = 0;
+  Loc path[81] = {};
+
+  void clear() { len = 0; }
+  void push_back(Loc loc) {
+    assert(len < 81);
+    path[len++] = loc;
+  }
+  size_t size() const { return (size_t)len; }
+  bool empty() const { return len == 0; }
+  Loc operator[](size_t idx) const { return path[idx]; }
+  Loc& operator[](size_t idx) { return path[idx]; }
+  const Loc* begin() const { return path; }
+  const Loc* end() const { return path + len; }
+  Loc* begin() { return path; }
+  Loc* end() { return path + len; }
+
+  bool operator==(const CompactPath& other) const {
+    if(len != other.len) return false;
+    for(int i = 0; i < len; i++) {
+      if(path[i] != other.path[i]) return false;
+    }
+    return true;
+  }
+  bool operator!=(const CompactPath& other) const {
+    return !(*this == other);
+  }
+
+  std::vector<Loc> toVector() const {
+    return std::vector<Loc>(path, path + len);
+  }
+};
+
 struct Board {
   static void initHash();
 
@@ -174,7 +208,7 @@ struct Board {
 
   Board();
   Board(int x, int y);
-  Board(const Board& other);
+  Board(const Board& other) = default;
   Board& operator=(const Board&) = default;
 
   // Primary Quoridor gameplay functions
@@ -210,7 +244,8 @@ struct Board {
   std::vector<Loc> getLegalPawnDestinations(Player pla) const;
   bool isLegalWallPlacement(int c, int r, bool isVertical, Player pla) const;
   bool checkNoFullBlockLazy(int c, int r, bool isVertical) const;
-  bool bfsReachable(Loc start, int targetY, std::vector<Loc>* outPath = nullptr) const;
+  bool bfsReachable(Loc start, int targetY, CompactPath* outPath = nullptr, Loc blockedArm1 = NULL_LOC, Loc blockedArm2 = NULL_LOC) const;
+  bool bfsReachable(Loc start, int targetY, std::vector<Loc>* outPath) const;
   int getShortestPathDistance(Player pla) const;
   std::vector<Loc> findShortestPath(Player pla) const;
   void calDistMap(Player pla, int32_t* res) const;
@@ -275,9 +310,9 @@ struct Board {
   int numBlackCaptures;
   int numWhiteCaptures;
 
-  // Cached paths for Grant's Lazy BFS
-  mutable std::vector<Loc> cachedPathP1;
-  mutable std::vector<Loc> cachedPathP2;
+  // Cached paths for Grant's Lazy BFS (Flattened POD, zero heap allocations, non-mutable)
+  CompactPath cachedPathP1;
+  CompactPath cachedPathP2;
 
 private:
   void init(int xS, int yS);
