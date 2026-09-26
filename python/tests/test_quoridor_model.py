@@ -14,7 +14,7 @@ from katago.train.data_processing_pytorch import (
     apply_symmetry_policy_quoridor,
     apply_symmetry_value_targets_quoridor,
 )
-from katago.train.export_onnx import export_quoridor_onnx, QuoridorOnnxExportWrapper
+from export_model_pytorch import export_quoridor_onnx, QuoridorOnnxExportWrapper
 
 
 def test_quoridor_config_properties():

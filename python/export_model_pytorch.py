@@ -24,24 +24,122 @@ from katago.train.model_pytorch import Model, ResBlock, NestedBottleneckResBlock
 from katago.train.model_pytorch import compute_attn_logit_dataless_bounds
 from katago.train.load_model import load_model
 
-#Command and args-------------------------------------------------------------------
+try:
+    import onnx
+except ImportError:
+    onnx = None
 
-description = """
+
+class QuoridorOnnxExportWrapper(torch.nn.Module):
+    """
+    Wrapper for KataQuoridor neural net inference export.
+    Exposes InputSpatial (B, 17, 9, 9) and InputGlobal (B, 15, 1, 1) as inputs,
+    and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2, 1, 1) as outputs.
+    """
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_spatial: torch.Tensor, input_global: torch.Tensor):
+        if input_global.dim() == 4:
+            input_global_2d = input_global.view(input_global.shape[0], -1)
+        else:
+            input_global_2d = input_global
+        outputs_byheads = self.model(input_spatial, input_global_2d)
+        policy_out = outputs_byheads[0][0]  # (B, 18, 9, 9)
+        value_out = outputs_byheads[0][1]   # (B, 2)
+
+        # Extract Target 0 (first 3 channels: pawn, v-wall, h-wall)
+        raw_policy = policy_out[:, 0:3, :, :].contiguous()  # (B, 3, 9, 9)
+        raw_value = value_out.view(value_out.shape[0], 2, 1, 1).contiguous()  # (B, 2, 1, 1)
+        return raw_policy, raw_value
+
+
+def export_quoridor_onnx(
+    model: torch.nn.Module,
+    export_path: str,
+    model_name: str = "kataquoridor",
+    opset_version: int = 18,
+    verbose: bool = False,
+) -> str:
+    """
+    Exports a KataQuoridor PyTorch model to ONNX format with KataGo metadata props.
+    """
+    model.eval()
+    wrapper = QuoridorOnnxExportWrapper(model)
+    wrapper.eval()
+
+    device = next(model.parameters()).device
+    dummy_spatial = torch.zeros(1, 17, 9, 9, dtype=torch.float32, device=device)
+    dummy_global = torch.zeros(1, 15, 1, 1, dtype=torch.float32, device=device)
+
+    os.makedirs(os.path.dirname(os.path.abspath(export_path)), exist_ok=True)
+
+    torch.onnx.export(
+        wrapper,
+        (dummy_spatial, dummy_global),
+        export_path,
+        export_params=True,
+        opset_version=opset_version,
+        do_constant_folding=True,
+        input_names=["InputSpatial", "InputGlobal"],
+        output_names=["OutputPolicy", "OutputValue"],
+        dynamic_axes={
+            "InputSpatial": {0: "batch"},
+            "InputGlobal": {0: "batch"},
+            "OutputPolicy": {0: "batch"},
+            "OutputValue": {0: "batch"},
+        },
+        verbose=verbose,
+    )
+
+    if onnx is not None:
+        model_proto = onnx.load(export_path)
+
+        meta: Dict[str, str] = {
+            "katago.metadataVersion": "1",
+            "katago.name": model_name,
+            "katago.modelVersion": "1",
+            "katago.numInputChannels": "17",
+            "katago.numInputGlobalChannels": "15",
+            "katago.numInputMetaChannels": "0",
+            "katago.numPolicyChannels": "3",
+            "katago.numValueChannels": "2",
+            "katago.numScoreValueChannels": "0",
+            "katago.numOwnershipChannels": "0",
+            "katago.build.nnXLen": "9",
+            "katago.build.nnYLen": "9",
+            "katago.build.requireExactNNLen": "true",
+        }
+
+        del model_proto.metadata_props[:]
+        for k, v in meta.items():
+            entry = model_proto.metadata_props.add()
+            entry.key = k
+            entry.value = v
+
+        onnx.checker.check_model(model_proto)
+        onnx.save(model_proto, export_path)
+
+    return export_path
+
+
+def parse_args():
+    description = """
 Export neural net weights to file for KataGo engine.
 """
-
-parser = argparse.ArgumentParser(description=description)
-parser.add_argument('-checkpoint', help='Checkpoint to test', required=False)
-parser.add_argument('-export-random-initialized-model', help='Instead of loading a checkpoint, export a freshly random-initialized model of the given model config name (e.g. b15c512h8nbttflrs-fson-silu-rsnh)', required=False)
-parser.add_argument('-export-dir', help='model file dir to save to', required=True)
-parser.add_argument('-model-name', help='name to record in model file', required=True)
-parser.add_argument('-filename-prefix', help='filename prefix to save to within dir', required=True)
-parser.add_argument('-use-swa', help='Use SWA model', action="store_true", required=False)
-parser.add_argument('-export-14-as-15', help='Export model version 14 as 15', action="store_true", required=False)
-parser.add_argument('-export-15-or-16-as-17', help='Export model version 15 or 16 as 17', action="store_true", required=False)
-parser.add_argument('-attn-logit-bound-limit', help='Refuse to export if the data-free attention logit bound of any layer exceeds this (inference backends mask off-board keys with -3e4 in fp16, so genuine logits must stay well below that)', type=float, default=2.5e4, required=False)
-parser.add_argument('-ignore-attn-logit-bound', help='Export anyway when the attention logit bound limit is exceeded', action="store_true", required=False)
-args = vars(parser.parse_args())
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('-checkpoint', help='Checkpoint to test', required=False)
+    parser.add_argument('-export-random-initialized-model', help='Instead of loading a checkpoint, export a freshly random-initialized model of the given model config name (e.g. b15c512h8nbttflrs-fson-silu-rsnh)', required=False)
+    parser.add_argument('-export-dir', help='model file dir to save to', required=True)
+    parser.add_argument('-model-name', help='name to record in model file', required=True)
+    parser.add_argument('-filename-prefix', help='filename prefix to save to within dir', required=True)
+    parser.add_argument('-use-swa', help='Use SWA model', action="store_true", required=False)
+    parser.add_argument('-export-14-as-15', help='Export model version 14 as 15', action="store_true", required=False)
+    parser.add_argument('-export-15-or-16-as-17', help='Export model version 15 or 16 as 17', action="store_true", required=False)
+    parser.add_argument('-attn-logit-bound-limit', help='Refuse to export if the data-free attention logit bound of any layer exceeds this (inference backends mask off-board keys with -3e4 in fp16, so genuine logits must stay well below that)', type=float, default=2.5e4, required=False)
+    parser.add_argument('-ignore-attn-logit-bound', help='Export anyway when the attention logit bound limit is exceeded', action="store_true", required=False)
+    return vars(parser.parse_args())
 
 
 def main(args):
@@ -119,7 +217,6 @@ def main(args):
     # QUORIDOR ONNX EXPORT ---------------------------------------------------------
     if modelconfigs.is_quoridor(model_config):
         logging.info("Exporting Quoridor model to ONNX format")
-        from katago.train.export_onnx import export_quoridor_onnx
         onnx_path = os.path.join(export_dir, filename_prefix + ".onnx")
         export_quoridor_onnx(model_to_export, onnx_path, model_name=model_name)
         logging.info(f"Exported Quoridor ONNX model to {onnx_path}")
@@ -731,4 +828,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    main(args)
+    main(parse_args())
