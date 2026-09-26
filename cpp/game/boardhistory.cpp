@@ -316,8 +316,20 @@ bool BoardHistory::isLegalTolerant(const Board& board, Loc moveLoc, Player moveP
 }
 
 void BoardHistory::endGameIfAllPassAlive(const Board&) {}
-void BoardHistory::endAndScoreGameNow(const Board&) {}
-void BoardHistory::endAndScoreGameNow(const Board&, Color[Board::MAX_ARR_SIZE]) {}
+void BoardHistory::endAndScoreGameNow(const Board&) {
+  if(!isGameFinished) {
+    isGameFinished = true;
+    winner = C_EMPTY;
+    isNoResult = false;
+    isResignation = false;
+    isScored = true;
+    finalWhiteMinusBlackScore = 0.0f;
+  }
+}
+void BoardHistory::endAndScoreGameNow(const Board& board, Color area[Board::MAX_ARR_SIZE]) {
+  endAndScoreGameNow(board);
+  getAreaNow(board, area);
+}
 
 void BoardHistory::getAreaNow(const Board&, Color area[Board::MAX_ARR_SIZE]) const {
   std::fill(area, area + Board::MAX_ARR_SIZE, C_EMPTY);
@@ -336,9 +348,12 @@ void BoardHistory::printBasicInfo(ostream& out, const Board& board) const {
   out << "Rules: " << rules.toJsonString() << endl;
   out << "Moves played: " << moveHistory.size() << endl;
   if(isGameFinished) {
-    out << "Game finished: winner = " << PlayerIO::playerToString(winner)
-        << (isNoResult ? " (Draw/NoResult)" : "")
-        << (isResignation ? " (Resignation)" : "") << endl;
+    if(winner == C_EMPTY)
+      out << "Game finished: Draw" << (isNoResult ? " (NoResult)" : "") << endl;
+    else
+      out << "Game finished: winner = " << PlayerIO::playerToString(winner)
+          << (isNoResult ? " (Draw/NoResult)" : "")
+          << (isResignation ? " (Resignation)" : "") << endl;
   }
 }
 

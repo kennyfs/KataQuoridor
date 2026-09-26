@@ -252,9 +252,16 @@ int MainCmds::match(const vector<string>& args) {
   std::map<string,double> timeUsedByBotMap;
   std::map<string,double> movesByBotMap;
 
+  struct BotStats {
+    int64_t wins = 0;
+    int64_t losses = 0;
+    int64_t draws = 0;
+  };
+  std::map<string,BotStats> botStatsMap;
+
   auto runMatchLoop = [
     &gameRunner,&matchPairer,&sgfOutputDir,&logger,&gameSeedBase,&patternBonusTables,
-    &statsMutex, &gameCount, &timeUsedByBotMap, &movesByBotMap
+    &statsMutex, &gameCount, &timeUsedByBotMap, &movesByBotMap, &botStatsMap
   ](
     uint64_t threadHash
   ) {
@@ -304,6 +311,32 @@ int MainCmds::match(const vector<string>& args) {
           movesByBotMap[gameData->bName] += (double)gameData->bMoveCount;
           movesByBotMap[gameData->wName] += (double)gameData->wMoveCount;
 
+          string resultStr = WriteSgf::gameResultNoSgfTag(gameData->endHist);
+          string outcomeDesc;
+          if(gameData->endHist.winner == C_BLACK) {
+            botStatsMap[gameData->bName].wins += 1;
+            botStatsMap[gameData->wName].losses += 1;
+            outcomeDesc = gameData->bName + " (Black) won";
+          }
+          else if(gameData->endHist.winner == C_WHITE) {
+            botStatsMap[gameData->wName].wins += 1;
+            botStatsMap[gameData->bName].losses += 1;
+            outcomeDesc = gameData->wName + " (White) won";
+          }
+          else {
+            botStatsMap[gameData->bName].draws += 1;
+            botStatsMap[gameData->wName].draws += 1;
+            outcomeDesc = gameData->hitTurnLimit ? "Draw (cutoff reached)" : "Draw";
+          }
+
+          string gameMsg = "Game " + Global::int64ToString(gameCount) + ": " +
+            gameData->bName + " (B) vs " + gameData->wName + " (W) -> " +
+            resultStr + " (" + outcomeDesc + "), " +
+            Global::intToString(gameData->endHist.moveHistory.size()) + " moves";
+          logger.write(gameMsg);
+          if(!logger.isLoggingToStdout())
+            cout << gameMsg << endl;
+
           int64_t x = gameCount;
           while(x % 2 == 0 && x > 1) x /= 2;
           if(x == 1 || x == 3 || x == 5) {
@@ -313,6 +346,15 @@ int MainCmds::match(const vector<string>& args) {
                 Global::doubleToString(pair.second / movesByBotMap[pair.first]) + " " +
                 Global::doubleToString(movesByBotMap[pair.first]) + " moves"
               );
+            }
+            for(const auto& pair : botStatsMap) {
+              string statsMsg = "Bot " + pair.first + " stats: " +
+                Global::int64ToString(pair.second.wins) + " W / " +
+                Global::int64ToString(pair.second.losses) + " L / " +
+                Global::int64ToString(pair.second.draws) + " D";
+              logger.write(statsMsg);
+              if(!logger.isLoggingToStdout())
+                cout << statsMsg << endl;
             }
           }
         }
@@ -344,6 +386,20 @@ int MainCmds::match(const vector<string>& args) {
   }
   for(int i = 0; i<threads.size(); i++)
     threads[i].join();
+
+  logger.write("--- Match Results ---");
+  if(!logger.isLoggingToStdout())
+    cout << "--- Match Results ---" << endl;
+  for(const auto& pair : botStatsMap) {
+    string finalMsg = "Bot " + pair.first + ": " +
+      Global::int64ToString(pair.second.wins) + " Wins, " +
+      Global::int64ToString(pair.second.losses) + " Losses, " +
+      Global::int64ToString(pair.second.draws) + " Draws (Total " +
+      Global::int64ToString(pair.second.wins + pair.second.losses + pair.second.draws) + " games)";
+    logger.write(finalMsg);
+    if(!logger.isLoggingToStdout())
+      cout << finalMsg << endl;
+  }
 
   delete matchPairer;
   delete gameRunner;

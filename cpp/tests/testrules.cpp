@@ -9,6 +9,8 @@
 #include "../game/rules.h"
 #include "../game/boardhistory.h"
 #include "../game/graphhash.h"
+#include "../dataio/sgf.h"
+#include "../core/config_parser.h"
 #include "../core/global.h"
 
 #include <cassert>
@@ -660,6 +662,66 @@ static void testQTPDistanceAndWalls() {
   cout << "    -> Passed (Fences left and shortest path distance verified)!" << endl;
 }
 
+// Step 8: 300-step cutoff and endAndScoreGameNow draw adjudication
+static void testCutoffAndEndAndScoreGameNow() {
+  cout << "  [Step 8] 300-Step Cutoff and endAndScoreGameNow Draw Adjudication..." << endl;
+  Board b;
+  BoardHistory hist(b, P_BLACK);
+
+  // 1. Initially unfinished
+  testAssert(!hist.isGameFinished);
+  testAssert(hist.winner == C_EMPTY);
+
+  // 2. Call endAndScoreGameNow on unfinished game (mimics cutoff adjudication)
+  hist.endAndScoreGameNow(b);
+  testAssert(hist.isGameFinished);
+  testAssert(hist.winner == C_EMPTY);
+  testAssert(hist.isScored);
+  testAssert(!hist.isResignation);
+  testAssert(!hist.isNoResult);
+  testAssert(hist.finalWhiteMinusBlackScore == 0.0f);
+
+  // 3. SGF tag generation for draw (RE[0])
+  string resultStr = WriteSgf::gameResultNoSgfTag(hist);
+  testAssert(resultStr == "0");
+
+  // 4. Idempotency on decisive game (should not overwrite winner)
+  Board b2;
+  BoardHistory hist2(b2, P_BLACK);
+  hist2.isGameFinished = true;
+  hist2.winner = P_BLACK;
+  hist2.endAndScoreGameNow(b2);
+  testAssert(hist2.isGameFinished);
+  testAssert(hist2.winner == P_BLACK);
+
+  // 5. Config parsing for maxMovesPerGame and cutoffMoves alias
+  {
+    istringstream sin("");
+    ConfigParser cfg1(sin);
+    testAssert(!cfg1.contains("maxMovesPerGame"));
+    testAssert(!cfg1.contains("cutoffMoves"));
+    int cutoff1 = cfg1.contains("maxMovesPerGame") ? cfg1.getInt("maxMovesPerGame", 0, 1 << 30) :
+                  cfg1.contains("cutoffMoves") ? cfg1.getInt("cutoffMoves", 0, 1 << 30) : 300;
+    testAssert(cutoff1 == 300);
+  }
+  {
+    istringstream sin("cutoffMoves = 250\n");
+    ConfigParser cfg2(sin);
+    int cutoff2 = cfg2.contains("maxMovesPerGame") ? cfg2.getInt("maxMovesPerGame", 0, 1 << 30) :
+                  cfg2.contains("cutoffMoves") ? cfg2.getInt("cutoffMoves", 0, 1 << 30) : 300;
+    testAssert(cutoff2 == 250);
+  }
+  {
+    istringstream sin("maxMovesPerGame = 400\n");
+    ConfigParser cfg3(sin);
+    int cutoff3 = cfg3.contains("maxMovesPerGame") ? cfg3.getInt("maxMovesPerGame", 0, 1 << 30) :
+                  cfg3.contains("cutoffMoves") ? cfg3.getInt("cutoffMoves", 0, 1 << 30) : 300;
+    testAssert(cutoff3 == 400);
+  }
+
+  cout << "    -> Passed (Cutoff adjudication, Draw SGF RE[0], and config parsing verified)!" << endl;
+}
+
 } // namespace
 
 void Tests::runRulesTests() {
@@ -679,6 +741,7 @@ void Tests::runRulesTests() {
   testRulesParsingValidation();
   testMoveStringParsingAntiFool();
   testQTPDistanceAndWalls();
-  cout << "=== All Quoridor Step 1, Step 6 & Step 7 Tests Passed Successfully! ===" << endl;
+  testCutoffAndEndAndScoreGameNow();
+  cout << "=== All Quoridor Step 1, Step 6, Step 7 & Step 8 Tests Passed Successfully! ===" << endl;
 }
 

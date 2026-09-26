@@ -1941,11 +1941,14 @@ FinishedGameData* Play::runGame(
     pla = getOpp(pla);
   }
 
-  gameData->endHist = hist;
-  if(hist.isGameFinished)
+  if(hist.isGameFinished) {
     gameData->hitTurnLimit = false;
-  else
+  }
+  else {
     gameData->hitTurnLimit = true;
+    hist.endAndScoreGameNow(board);
+  }
+  gameData->endHist = hist;
 
   // In self-play or match play, it should ALWAYS be the case that the entire game history is legal.
   if(hist.numConsecValidTurnsThisGame != hist.moveHistory.size()) {
@@ -2046,7 +2049,7 @@ FinishedGameData* Play::runGame(
     //After the game, select some of the positions that got only cheap searches and redo them with full searches,
     //so that they get recorded as full training positions. This happens entirely after the game so it cannot
     //affect the game's moves or outcome in any way.
-    if(playSettings.useReanalyze && playSettings.reanalyzeProp > 0.0) {
+    if(!gameData->hitTurnLimit && playSettings.useReanalyze && playSettings.reanalyzeProp > 0.0) {
       reanalyzeCheapSearchPositions(
         botB, botW, playSettings, otherGameProps, clearBotBeforeSearch,
         wasCheapSearchByTurn, valueSurpriseByTurn, historicalMctsWinLossValues,
@@ -2169,98 +2172,106 @@ FinishedGameData* Play::runGame(
     }
 
     //Also evaluate all the side positions as well that we queued up to be searched
-    NNResultBuf nnResultBuf;
-    for(int i = 0; i<sidePositionsToSearch.size(); i++) {
-      SidePosition* sp = sidePositionsToSearch[i];
-
-      if(shouldPause != nullptr)
-        shouldPause->waitUntilFalse();
-      if(shouldStop != nullptr && shouldStop()) {
-        delete sp;
-        continue;
+    if(gameData->hitTurnLimit) {
+      for(size_t i = 0; i < sidePositionsToSearch.size(); i++) {
+        delete sidePositionsToSearch[i];
       }
+      sidePositionsToSearch.clear();
+    }
+    else {
+      NNResultBuf nnResultBuf;
+      for(int i = 0; i<sidePositionsToSearch.size(); i++) {
+        SidePosition* sp = sidePositionsToSearch[i];
 
-      Search* toMoveBot = sp->pla == P_BLACK ? botB : botW;
-      toMoveBot->setPosition(sp->pla,sp->board,sp->hist);
-      //We do NOT apply playoutDoublingAdvantage here. If changing this, note that it is coordinated with train data writing
-      //not using playoutDoublingAdvantage for these rows too.
-      testAssert(toMoveBot->searchParams.playoutDoublingAdvantage == 0.0);
-      testAssert(toMoveBot->searchParams.playoutDoublingAdvantagePla == C_EMPTY);
-      sp->playoutDoublingAdvantagePla = C_EMPTY;
-      sp->playoutDoublingAdvantage = 0.0;
-      Loc responseLoc = toMoveBot->runWholeSearchAndGetMove(sp->pla);
+        if(shouldPause != nullptr)
+          shouldPause->waitUntilFalse();
+        if(shouldStop != nullptr && shouldStop()) {
+          delete sp;
+          continue;
+        }
 
-      Play::extractPolicyTarget(sp->policyTarget, toMoveBot, toMoveBot->rootNode, locsBuf, playSelectionValuesBuf);
-      extractValueTargets(sp->whiteValueTargets, toMoveBot, toMoveBot->rootNode);
-      extractQValueTargets(sp->whiteQValueTargets.targets, toMoveBot, toMoveBot->rootNode);
+        Search* toMoveBot = sp->pla == P_BLACK ? botB : botW;
+        toMoveBot->setPosition(sp->pla,sp->board,sp->hist);
+        //We do NOT apply playoutDoublingAdvantage here. If changing this, note that it is coordinated with train data writing
+        //not using playoutDoublingAdvantage for these rows too.
+        testAssert(toMoveBot->searchParams.playoutDoublingAdvantage == 0.0);
+        testAssert(toMoveBot->searchParams.playoutDoublingAdvantagePla == C_EMPTY);
+        sp->playoutDoublingAdvantagePla = C_EMPTY;
+        sp->playoutDoublingAdvantage = 0.0;
+        Loc responseLoc = toMoveBot->runWholeSearchAndGetMove(sp->pla);
 
-      double policySurprise = 0.0, policyEntropy = 0.0, searchEntropy = 0.0;
-      bool success = toMoveBot->getPolicySurpriseAndEntropy(policySurprise, searchEntropy, policyEntropy);
-      testAssert(success);
-      (void)success; //Avoid warning when asserts are disabled
-      sp->policySurprise = policySurprise;
-      sp->policyEntropy = policyEntropy;
-      sp->searchEntropy = searchEntropy;
+        Play::extractPolicyTarget(sp->policyTarget, toMoveBot, toMoveBot->rootNode, locsBuf, playSelectionValuesBuf);
+        extractValueTargets(sp->whiteValueTargets, toMoveBot, toMoveBot->rootNode);
+        extractQValueTargets(sp->whiteQValueTargets.targets, toMoveBot, toMoveBot->rootNode);
 
-      sp->nnRawStats = computeNNRawStats(toMoveBot, sp->board, sp->hist, sp->pla);
-      sp->targetWeight = 1.0f;
-      sp->unreducedNumVisits = toMoveBot->getRootVisits();
-      sp->numNeuralNetChangesSoFar = (int)gameData->changedNeuralNets.size();
+        double policySurprise = 0.0, policyEntropy = 0.0, searchEntropy = 0.0;
+        bool success = toMoveBot->getPolicySurpriseAndEntropy(policySurprise, searchEntropy, policyEntropy);
+        testAssert(success);
+        (void)success; //Avoid warning when asserts are disabled
+        sp->policySurprise = policySurprise;
+        sp->policyEntropy = policyEntropy;
+        sp->searchEntropy = searchEntropy;
 
-      gameData->sidePositions.push_back(sp);
+        sp->nnRawStats = computeNNRawStats(toMoveBot, sp->board, sp->hist, sp->pla);
+        sp->targetWeight = 1.0f;
+        sp->unreducedNumVisits = toMoveBot->getRootVisits();
+        sp->numNeuralNetChangesSoFar = (int)gameData->changedNeuralNets.size();
 
-      //If enabled, also record subtree positions from the search as training positions
-      if(playSettings.recordTreePositions && playSettings.recordTreeTargetWeight > 0.0f) {
-        if(playSettings.recordTreeTargetWeight > 1.0f)
-          throw StringError("playSettings.recordTreeTargetWeight > 1.0f");
-        recordTreePositions(
-          gameData,
-          sp->board,sp->hist,sp->pla,
-          toMoveBot,
-          playSettings.recordTreeThreshold,playSettings.recordTreeTargetWeight,
-          (int)gameData->changedNeuralNets.size(),
-          locsBuf,playSelectionValuesBuf,
-          Board::NULL_LOC, Board::NULL_LOC
-        );
-      }
+        gameData->sidePositions.push_back(sp);
 
-      //Occasionally continue the fork a second move or more, to provide some situations where the opponent has played "weird" moves not
-      //only on the most immediate turn, but rather the turns before.
-      if(gameRand.nextBool(0.25)) {
-        if(responseLoc == Board::NULL_LOC || !sp->hist.isLegal(sp->board,responseLoc,sp->pla))
-          failIllegalMove(toMoveBot,logger,sp->board,responseLoc);
-
-        SidePosition* sp2 = new SidePosition(sp->board,sp->hist,sp->pla,(int)gameData->changedNeuralNets.size());
-        sp2->hist.makeBoardMoveAssumeLegal(sp2->board,responseLoc,sp2->pla,NULL);
-        sp2->pla = getOpp(sp2->pla);
-        if(sp2->hist.isGameFinished)
-          delete sp2;
-        else {
-          Search* toMoveBot2 = sp2->pla == P_BLACK ? botB : botW;
-          MiscNNInputParams nnInputParams;
-          nnInputParams.drawEquivalentWinsForWhite = toMoveBot2->searchParams.drawEquivalentWinsForWhite;
-          //Featurize the way this bot's own searches would, even if the game-level history differs.
-          nnInputParams.passAliveSuicideRulesOverride =
-            Search::resolveAlwaysComputePassAliveUnderSuicideRules(toMoveBot2->searchParams, toMoveBot2->nnEvaluator) ? 1 : 0;
-          nnInputParams.excludeTerritoryAdjAtariOverride =
-            Search::resolveExcludeTerritoryAdjacentToAtari(toMoveBot2->searchParams, toMoveBot2->nnEvaluator) ? 1 : 0;
-          toMoveBot2->nnEvaluator->evaluate(
-            sp2->board,sp2->hist,sp2->pla,nnInputParams,
-            nnResultBuf,false,false
+        //If enabled, also record subtree positions from the search as training positions
+        if(playSettings.recordTreePositions && playSettings.recordTreeTargetWeight > 0.0f) {
+          if(playSettings.recordTreeTargetWeight > 1.0f)
+            throw StringError("playSettings.recordTreeTargetWeight > 1.0f");
+          recordTreePositions(
+            gameData,
+            sp->board,sp->hist,sp->pla,
+            toMoveBot,
+            playSettings.recordTreeThreshold,playSettings.recordTreeTargetWeight,
+            (int)gameData->changedNeuralNets.size(),
+            locsBuf,playSelectionValuesBuf,
+            Board::NULL_LOC, Board::NULL_LOC
           );
-          Loc banMove = Board::NULL_LOC;
-          Loc forkLoc = chooseRandomForkingMove(nnResultBuf.result.get(), sp2->board, sp2->hist, sp2->pla, gameRand, banMove);
-          if(forkLoc != Board::NULL_LOC) {
-            sp2->hist.makeBoardMoveAssumeLegal(sp2->board,forkLoc,sp2->pla,NULL);
-            sp2->pla = getOpp(sp2->pla);
-            if(sp2->hist.isGameFinished) delete sp2;
-            else sidePositionsToSearch.push_back(sp2);
+        }
+
+        //Occasionally continue the fork a second move or more, to provide some situations where the opponent has played "weird" moves not
+        //only on the most immediate turn, but rather the turns before.
+        if(gameRand.nextBool(0.25)) {
+          if(responseLoc == Board::NULL_LOC || !sp->hist.isLegal(sp->board,responseLoc,sp->pla))
+            failIllegalMove(toMoveBot,logger,sp->board,responseLoc);
+
+          SidePosition* sp2 = new SidePosition(sp->board,sp->hist,sp->pla,(int)gameData->changedNeuralNets.size());
+          sp2->hist.makeBoardMoveAssumeLegal(sp2->board,responseLoc,sp2->pla,NULL);
+          sp2->pla = getOpp(sp2->pla);
+          if(sp2->hist.isGameFinished)
+            delete sp2;
+          else {
+            Search* toMoveBot2 = sp2->pla == P_BLACK ? botB : botW;
+            MiscNNInputParams nnInputParams;
+            nnInputParams.drawEquivalentWinsForWhite = toMoveBot2->searchParams.drawEquivalentWinsForWhite;
+            //Featurize the way this bot's own searches would, even if the game-level history differs.
+            nnInputParams.passAliveSuicideRulesOverride =
+              Search::resolveAlwaysComputePassAliveUnderSuicideRules(toMoveBot2->searchParams, toMoveBot2->nnEvaluator) ? 1 : 0;
+            nnInputParams.excludeTerritoryAdjAtariOverride =
+              Search::resolveExcludeTerritoryAdjacentToAtari(toMoveBot2->searchParams, toMoveBot2->nnEvaluator) ? 1 : 0;
+            toMoveBot2->nnEvaluator->evaluate(
+              sp2->board,sp2->hist,sp2->pla,nnInputParams,
+              nnResultBuf,false,false
+            );
+            Loc banMove = Board::NULL_LOC;
+            Loc forkLoc = chooseRandomForkingMove(nnResultBuf.result.get(), sp2->board, sp2->hist, sp2->pla, gameRand, banMove);
+            if(forkLoc != Board::NULL_LOC) {
+              sp2->hist.makeBoardMoveAssumeLegal(sp2->board,forkLoc,sp2->pla,NULL);
+              sp2->pla = getOpp(sp2->pla);
+              if(sp2->hist.isGameFinished) delete sp2;
+              else sidePositionsToSearch.push_back(sp2);
+            }
           }
         }
-      }
 
-      testAssert(gameData->endHist.moveHistory.size() < 0x1FFFffff);
-      maybeCheckForNewNNEval((int)gameData->endHist.moveHistory.size());
+        testAssert(gameData->endHist.moveHistory.size() < 0x1FFFffff);
+        maybeCheckForNewNNEval((int)gameData->endHist.moveHistory.size());
+      }
     }
 
     if(playSettings.scaleDataWeight != 1.0) {
@@ -2610,7 +2621,12 @@ GameRunner::GameRunner(ConfigParser& cfg, const PlaySettings& pSettings, Logger&
 {
   logSearchInfo = cfg.getBool("logSearchInfo");
   logMoves = cfg.getBool("logMoves");
-  maxMovesPerGame = cfg.contains("maxMovesPerGame") ? cfg.getInt("maxMovesPerGame",0,1 << 30) : 300;
+  if(cfg.contains("maxMovesPerGame"))
+    maxMovesPerGame = cfg.getInt("maxMovesPerGame", 0, 1 << 30);
+  else if(cfg.contains("cutoffMoves"))
+    maxMovesPerGame = cfg.getInt("cutoffMoves", 0, 1 << 30);
+  else
+    maxMovesPerGame = 300;
   clearBotBeforeSearch = cfg.contains("clearBotBeforeSearch") ? cfg.getBool("clearBotBeforeSearch") : false;
 
   //Initialize object for randomizing game settings
@@ -2623,7 +2639,12 @@ GameRunner::GameRunner(ConfigParser& cfg, const string& gameInitRandSeed, const 
 {
   logSearchInfo = cfg.getBool("logSearchInfo");
   logMoves = cfg.getBool("logMoves");
-  maxMovesPerGame = cfg.contains("maxMovesPerGame") ? cfg.getInt("maxMovesPerGame",0,1 << 30) : 300;
+  if(cfg.contains("maxMovesPerGame"))
+    maxMovesPerGame = cfg.getInt("maxMovesPerGame", 0, 1 << 30);
+  else if(cfg.contains("cutoffMoves"))
+    maxMovesPerGame = cfg.getInt("cutoffMoves", 0, 1 << 30);
+  else
+    maxMovesPerGame = 300;
   clearBotBeforeSearch = cfg.contains("clearBotBeforeSearch") ? cfg.getBool("clearBotBeforeSearch") : false;
 
   //Initialize object for randomizing game settings
