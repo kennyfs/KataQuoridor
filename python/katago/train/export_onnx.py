@@ -12,8 +12,8 @@ except ImportError:
 class QuoridorOnnxExportWrapper(torch.nn.Module):
     """
     Wrapper for KataQuoridor neural net inference export.
-    Exposes InputSpatial (B, 17, 9, 9) and InputGlobal (B, 15) as inputs,
-    and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2) as outputs.
+    Exposes InputSpatial (B, 17, 9, 9) and InputGlobal (B, 15, 1, 1) as inputs,
+    and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2, 1, 1) as outputs.
     """
     def __init__(self, model: torch.nn.Module):
         super().__init__()
@@ -21,15 +21,19 @@ class QuoridorOnnxExportWrapper(torch.nn.Module):
 
     def forward(self, input_spatial: torch.Tensor, input_global: torch.Tensor):
         # input_spatial: (B, 17, 9, 9)
-        # input_global:  (B, 15)
-        outputs_byheads = self.model(input_spatial, input_global)
+        # input_global:  (B, 15, 1, 1) or (B, 15)
+        if input_global.dim() == 4:
+            input_global_2d = input_global.view(input_global.shape[0], -1)
+        else:
+            input_global_2d = input_global
+        outputs_byheads = self.model(input_spatial, input_global_2d)
         # Extract main heads
         policy_out = outputs_byheads[0][0]  # (B, 18, 9, 9)
         value_out = outputs_byheads[0][1]   # (B, 2)
 
         # Extract strictly Target 0 (first 3 channels: pawn, v-wall, h-wall)
         raw_policy = policy_out[:, 0:3, :, :].contiguous()  # (B, 3, 9, 9)
-        raw_value = value_out.contiguous()                  # (B, 2)
+        raw_value = value_out.view(value_out.shape[0], 2, 1, 1).contiguous()  # (B, 2, 1, 1)
         return raw_policy, raw_value
 
 
@@ -49,7 +53,7 @@ def export_quoridor_onnx(
 
     device = next(model.parameters()).device
     dummy_spatial = torch.zeros(1, 17, 9, 9, dtype=torch.float32, device=device)
-    dummy_global = torch.zeros(1, 15, dtype=torch.float32, device=device)
+    dummy_global = torch.zeros(1, 15, 1, 1, dtype=torch.float32, device=device)
 
     os.makedirs(os.path.dirname(os.path.abspath(export_path)), exist_ok=True)
 

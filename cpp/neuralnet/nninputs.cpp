@@ -509,8 +509,73 @@ static void copyWithSymmetry(const float* src, float* dst, int nSize, int hSize,
 }
 
 
+static void copyInputsWithSymmetryQuoridor(const float* src, float* dst, int nSize, bool useNHWC, int symmetry) {
+  bool flipX = (symmetry % 2 != 0);
+  if(!flipX) {
+    std::copy(src, src + (size_t)nSize * 9 * 9 * NNInputs::NUM_FEATURES_SPATIAL_V1, dst);
+    return;
+  }
+
+  constexpr int H = 9;
+  constexpr int W = 9;
+  constexpr int C = NNInputs::NUM_FEATURES_SPATIAL_V1;
+
+  for(int n = 0; n < nSize; n++) {
+    auto getSrcIdx = [&](int ch, int r, int c) {
+      return useNHWC ? (n * H * W * C + r * W * C + c * C + ch)
+                     : (n * C * H * W + ch * H * W + r * W + c);
+    };
+    auto getDstIdx = [&](int ch, int r, int c) {
+      return useNHWC ? (n * H * W * C + r * W * C + c * C + ch)
+                     : (n * C * H * W + ch * H * W + r * W + c);
+    };
+
+    // Standard channels: pawn, blocked N/S, distances, goal mask, etc.
+    static const int stdChannels[] = {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13};
+    for(int ch : stdChannels) {
+      for(int r = 0; r < 9; r++) {
+        for(int c = 0; c < 9; c++) {
+          dst[getDstIdx(ch, r, 8 - c)] = src[getSrcIdx(ch, r, c)];
+        }
+      }
+    }
+
+    // East-blocked (Ch 5) and West-blocked (Ch 6) swap and flip horizontally
+    for(int r = 0; r < 9; r++) {
+      for(int c = 0; c < 9; c++) {
+        dst[getDstIdx(6, r, 8 - c)] = src[getSrcIdx(5, r, c)];
+        dst[getDstIdx(5, r, 8 - c)] = src[getSrcIdx(6, r, c)];
+      }
+    }
+
+    // Wall channels (Ch 14: V-wall, Ch 15: H-wall)
+    // Active anchor range is [0..7]x[0..7], flipped with (7 - c).
+    // Row 8 and Column 8 remain 0.0f.
+    for(int ch : {14, 15}) {
+      for(int r = 0; r < 8; r++) {
+        for(int c = 0; c < 8; c++) {
+          dst[getDstIdx(ch, r, 7 - c)] = src[getSrcIdx(ch, r, c)];
+        }
+        dst[getDstIdx(ch, r, 8)] = 0.0f;
+      }
+      for(int c = 0; c < 9; c++) {
+        dst[getDstIdx(ch, 8, c)] = 0.0f;
+      }
+    }
+
+    // Ch 16: Wall domain mask (1.0f on [0..7]x[0..7], 0.0f elsewhere) - invariant under horizontal reflection
+    for(int r = 0; r < 9; r++) {
+      for(int c = 0; c < 9; c++) {
+        dst[getDstIdx(16, r, c)] = src[getSrcIdx(16, r, c)];
+      }
+    }
+  }
+}
+
 void SymmetryHelpers::copyInputsWithSymmetry(const float* src, float* dst, int nSize, int hSize, int wSize, int cSize, bool useNHWC, int symmetry) {
-  copyWithSymmetry(src, dst, nSize, hSize, wSize, cSize, useNHWC, symmetry, false);
+  // Replace KataGo's version.
+  copyInputsWithSymmetryQuoridor(src, dst, nSize, useNHWC, symmetry);
+  // copyWithSymmetry(src, dst, nSize, hSize, wSize, cSize, useNHWC, symmetry, false);
 }
 
 void SymmetryHelpers::copyOutputsWithSymmetry(const float* src, float* dst, int nSize, int hSize, int wSize, int symmetry) {
@@ -1127,36 +1192,42 @@ void NNInputs::fillRowV1(
 void NNInputs::applyPolicyMap(
   const float* rawPolicy243,
   Player nextPlayer,
-  float* policyProbs290
+  float* policyProbs290,
+  int symmetry
 ) {
+  bool flipX = (symmetry % 2 != 0);
+
   for(int i = 0; i < NNPos::MAX_NN_POLICY_SIZE; i++) {
     policyProbs290[i] = -1e30f;
   }
 
-  // Plane 0: Pawn moves to (c, r)
+  // Plane 0: Pawn moves to (c, r) - horizontal reflection in [0..8]
   for(int r = 0; r < 9; r++) {
     for(int c = 0; c < 9; c++) {
       int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
+      int cCanon = flipX ? (8 - c) : c;
       int pos = NNPos::locToPos(Location::pawnLoc(c, r, 17), 17, 17, 17);
-      policyProbs290[pos] = rawPolicy243[0 * 81 + rCanon * 9 + c];
+      policyProbs290[pos] = rawPolicy243[0 * 81 + rCanon * 9 + cCanon];
     }
   }
 
-  // Plane 1: Vertical walls at (c, r) [Upper arm]
+  // Plane 1: Vertical walls at (c, r) [Upper arm] - horizontal reflection in [0..7]
   for(int r = 0; r < 8; r++) {
     for(int c = 0; c < 8; c++) {
       int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+      int cCanon = flipX ? (7 - c) : c;
       int pos = NNPos::locToPos(Location::vWallLoc(c, r, 17), 17, 17, 17);
-      policyProbs290[pos] = rawPolicy243[1 * 81 + rCanon * 9 + c];
+      policyProbs290[pos] = rawPolicy243[1 * 81 + rCanon * 9 + cCanon];
     }
   }
 
-  // Plane 2: Horizontal walls at (c, r) [Center]
+  // Plane 2: Horizontal walls at (c, r) [Center] - horizontal reflection in [0..7]
   for(int r = 0; r < 8; r++) {
     for(int c = 0; c < 8; c++) {
       int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+      int cCanon = flipX ? (7 - c) : c;
       int pos = NNPos::locToPos(Location::hWallLoc(c, r, 17), 17, 17, 17);
-      policyProbs290[pos] = rawPolicy243[2 * 81 + rCanon * 9 + c];
+      policyProbs290[pos] = rawPolicy243[2 * 81 + rCanon * 9 + cCanon];
     }
   }
 }

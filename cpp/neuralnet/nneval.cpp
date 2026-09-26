@@ -914,7 +914,10 @@ void NNEvaluator::serve(
 
       for(int row = 0; row<numRows; row++) {
         if(resultBufs[row]->symmetry == NNInputs::SYMMETRY_NOTSPECIFIED) {
-          if(doRandomize)
+          if(inputsVersion == 1) {
+            resultBufs[row]->symmetry = doRandomize ? rand.nextUInt(2) : (defaultSymmetry >= 0 ? (defaultSymmetry % 2) : 0);
+          }
+          else if(doRandomize)
             resultBufs[row]->symmetry = rand.nextUInt(SymmetryHelpers::NUM_SYMMETRIES);
           else {
             testAssert(defaultSymmetry >= 0 && defaultSymmetry <= SymmetryHelpers::NUM_SYMMETRIES-1);
@@ -1040,8 +1043,10 @@ std::shared_ptr<NNOutput>* NNEvaluator::averageMultipleSymmetries(
   vector<std::shared_ptr<NNOutput>> ptrs;
   std::array<int, SymmetryHelpers::NUM_SYMMETRIES> symmetryIndexes;
   std::iota(symmetryIndexes.begin(), symmetryIndexes.end(), 0);
-  for(int i = 0; i<numSymmetriesToSample; i++) {
-    std::swap(symmetryIndexes[i], symmetryIndexes[rand.nextInt(i,SymmetryHelpers::NUM_SYMMETRIES-1)]);
+  int numPossibleSymmetries = (inputsVersion == 1) ? 2 : SymmetryHelpers::NUM_SYMMETRIES;
+  int numToSample = std::min(numSymmetriesToSample, numPossibleSymmetries);
+  for(int i = 0; i<numToSample; i++) {
+    std::swap(symmetryIndexes[i], symmetryIndexes[rand.nextInt(i,numPossibleSymmetries-1)]);
     nnInputParams.symmetry = symmetryIndexes[i];
     bool skipCacheThisIteration = true; // Skip cache since there's no guarantee which symmetry is in the cache
     evaluate(
@@ -1179,7 +1184,7 @@ void NNEvaluator::evaluate(
     if(inputsVersion == 1) {
       float rawPolicy[NNInputs::NN_POLICY_SIZE];
       std::copy(policy, policy + NNInputs::NN_POLICY_SIZE, rawPolicy);
-      NNInputs::applyPolicyMap(rawPolicy, nextPlayer, policy);
+      NNInputs::applyPolicyMap(rawPolicy, nextPlayer, policy, buf.symmetry);
     }
 
     float policyOutputScaling = postProcessParams.outputScaleMultiplier / nnInputParams.nnPolicyTemperature;

@@ -109,7 +109,8 @@ namespace NNInputs {
   void applyPolicyMap(
     const float* rawPolicy243,
     Player nextPlayer,
-    float* policyProbs290
+    float* policyProbs290,
+    int symmetry = 0
   );
 
   // Backward compatibility alias / stub

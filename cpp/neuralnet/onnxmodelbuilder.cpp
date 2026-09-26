@@ -1772,15 +1772,19 @@ LoadResult load(
     expectedInputs.push_back({INPUT_GLOBAL, descBuf.numInputGlobalChannels, false});
     if(descBuf.metaEncoderVersion > 0)
       expectedInputs.push_back({INPUT_META, descBuf.numInputMetaChannels, false});
-    expectedInputs.push_back({INPUT_MASK, 1, true});
+    if(descBuf.modelVersion > 1)
+      expectedInputs.push_back({INPUT_MASK, 1, true});
     checkGraphIO(reader, model.graph(), expectedInputs, true, nnXLen, nnYLen);
 
     vector<ExpectedTensor> expectedOutputs;
-    expectedOutputs.push_back({OUTPUT_POLICY_PASS, descBuf.numPolicyChannels, false});
+    if(descBuf.modelVersion > 1)
+      expectedOutputs.push_back({OUTPUT_POLICY_PASS, descBuf.numPolicyChannels, false});
     expectedOutputs.push_back({OUTPUT_POLICY, descBuf.numPolicyChannels, true});
     expectedOutputs.push_back({OUTPUT_VALUE, descBuf.numValueChannels, false});
-    expectedOutputs.push_back({OUTPUT_SCORE_VALUE, descBuf.numScoreValueChannels, false});
-    expectedOutputs.push_back({OUTPUT_OWNERSHIP, descBuf.numOwnershipChannels, true});
+    if(descBuf.modelVersion > 1) {
+      expectedOutputs.push_back({OUTPUT_SCORE_VALUE, descBuf.numScoreValueChannels, false});
+      expectedOutputs.push_back({OUTPUT_OWNERSHIP, descBuf.numOwnershipChannels, true});
+    }
     checkGraphIO(reader, model.graph(), expectedOutputs, false, nnXLen, nnYLen);
   }
 
