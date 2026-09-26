@@ -58,6 +58,7 @@ static constexpr Color C_WALL = 4;  // Board boundary / off-board
 static constexpr int NUM_BOARD_COLORS = 5;
 
 static inline Color getOpp(Color c) {
+  assert(c == C_BLACK || c == C_WHITE);
   return c ^ 3;
 }
 

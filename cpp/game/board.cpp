@@ -483,7 +483,8 @@ bool Board::isOnBoardFence(Loc loc) const {
 }
 
 bool Board::isEmpty() const {
-  return numStonesOnBoard() == 0;
+  // Stub, as Quoridor doesn't need this.
+  return true;
 }
 
 int Board::numStonesOnBoard() const {
