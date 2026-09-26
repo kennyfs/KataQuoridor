@@ -248,6 +248,8 @@ struct Board {
   bool bfsReachable(Loc start, int targetY, std::vector<Loc>* outPath) const;
   int getShortestPathDistance(Player pla) const;
   std::vector<Loc> findShortestPath(Player pla) const;
+  // Computes shortest distance from every pawn cell (c, r) (0 <= c, r < 9) to pla's goal row.
+  // Unreachable cells are assigned -1.
   void calDistMap(Player pla, int32_t* res) const;
   bool isBoardNotConnected() const;
 

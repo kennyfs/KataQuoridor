@@ -1330,10 +1330,10 @@ void NNEvaluator::evaluate(
         double noResultLogits = buf.result->whiteNoResultProb * postProcessParams.outputScaleMultiplier;
 
         // Softmax
-        double maxLogits = std::max(std::max(winLogits,lossLogits),noResultLogits);
+        double maxLogits = (noResultLogits <= -1e20) ? std::max(winLogits, lossLogits) : std::max(std::max(winLogits,lossLogits),noResultLogits);
         winProb = exp(winLogits - maxLogits);
         lossProb = exp(lossLogits - maxLogits);
-        noResultProb = exp(noResultLogits - maxLogits);
+        noResultProb = (noResultLogits <= -1e20) ? 0.0 : exp(noResultLogits - maxLogits);
 
         double probSum = winProb + lossProb + noResultProb;
         winProb /= probSum;
@@ -1396,10 +1396,10 @@ void NNEvaluator::evaluate(
           noResultLogits -= 100000.0;
 
         // Softmax
-        double maxLogits = std::max(std::max(winLogits,lossLogits),noResultLogits);
+        double maxLogits = (noResultLogits <= -1e20) ? std::max(winLogits, lossLogits) : std::max(std::max(winLogits,lossLogits),noResultLogits);
         winProb = exp(winLogits - maxLogits);
         lossProb = exp(lossLogits - maxLogits);
-        noResultProb = exp(noResultLogits - maxLogits);
+        noResultProb = (noResultLogits <= -1e20) ? 0.0 : exp(noResultLogits - maxLogits);
 
         if(history.rules.koRule != Rules::KO_SIMPLE && history.rules.scoringRule != Rules::SCORING_TERRITORY)
           noResultProb = 0.0;

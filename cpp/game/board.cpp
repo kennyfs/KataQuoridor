@@ -1052,6 +1052,7 @@ void Board::calDistMap(Player pla, int32_t* res) const {
     res[i] = -1;
 
   int targetY = (pla == P_BLACK) ? 0 : (y_size - 1);
+  int targetR = targetY / 2;
 
   Loc q[81];
   int qHead = 0;
@@ -1063,7 +1064,7 @@ void Board::calDistMap(Player pla, int32_t* res) const {
     Loc goal = Location::getLoc(2 * c, targetY, x_size);
     q[qTail++] = goal;
     visited[goal] = true;
-    res[c * 9 + targetY / 2] = 0;
+    res[targetR * 9 + c] = 0;
   }
 
   const int dirs[4][2] = {{0, -2}, {-2, 0}, {2, 0}, {0, 2}};
@@ -1073,7 +1074,7 @@ void Board::calDistMap(Player pla, int32_t* res) const {
 
     int cx = Location::getX(curr, x_size);
     int cy = Location::getY(curr, x_size);
-    int curDist = res[(cx / 2) * 9 + (cy / 2)];
+    int curDist = res[(cy / 2) * 9 + (cx / 2)];
 
     for(int d = 0; d < 4; d++) {
       int nx = cx + dirs[d][0];
@@ -1083,7 +1084,7 @@ void Board::calDistMap(Player pla, int32_t* res) const {
       Loc next = Location::getLoc(nx, ny, x_size);
       if(!visited[next] && canPawnStep(curr, next)) {
         visited[next] = true;
-        res[(nx / 2) * 9 + (ny / 2)] = curDist + 1;
+        res[(ny / 2) * 9 + (nx / 2)] = curDist + 1;
         q[qTail++] = next;
       }
     }

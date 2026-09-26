@@ -2292,10 +2292,10 @@ ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats) {
     throw StringError(
       name +
       Global::strprintf(": v2Mul.outChannels (%d) != v3Mul.inChannels (%d)", v2Mul.outChannels, v3Mul.inChannels));
-  if(v3Mul.outChannels != 3)
-    throw StringError(name + Global::strprintf(": v3Mul.outChannels (%d) != 3", v3Mul.outChannels));
-  if(v3Bias.numChannels != 3)
-    throw StringError(name + Global::strprintf(": v3Bias.numChannels (%d) != 3", v3Bias.numChannels));
+  if(v3Mul.outChannels != 3 && v3Mul.outChannels != 2)
+    throw StringError(name + Global::strprintf(": v3Mul.outChannels (%d) != 3 and != 2", v3Mul.outChannels));
+  if(v3Bias.numChannels != v3Mul.outChannels)
+    throw StringError(name + Global::strprintf(": v3Bias.numChannels (%d) != v3Mul.outChannels (%d)", v3Bias.numChannels, v3Mul.outChannels));
 
   if(sv3Mul.inChannels != v2Mul.outChannels)
     throw StringError(
