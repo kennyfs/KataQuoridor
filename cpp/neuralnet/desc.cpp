@@ -381,7 +381,7 @@ ActivationLayerDesc::ActivationLayerDesc() : name(), activation(ACTIVATION_RELU)
 
 ActivationLayerDesc::ActivationLayerDesc(istream& in, int modelVersion) {
   in >> name;
-  if(modelVersion >= 11) {
+  if(modelVersion >= 11 || modelVersion <= 1) {
     string kind;
     in >> kind;
     if(kind == "ACTIVATION_IDENTITY")
@@ -2067,6 +2067,8 @@ PolicyHeadDesc::PolicyHeadDesc(istream& in, int vrsn, bool binaryFloats) {
     policyOutChannels = 4; // added q value predictions
   else if(modelVersion >= 12)
     policyOutChannels = 2;
+  else if(modelVersion <= 1)
+    policyOutChannels = 3;
   else
     policyOutChannels = 1;
 
@@ -2134,7 +2136,11 @@ PolicyHeadDesc::PolicyHeadDesc(istream& in, int vrsn, bool binaryFloats) {
                ": gpoolToPassMul.inChannels (%d) != g1BN.numChannels*3 (%d)",
                gpoolToPassMul.inChannels,
                g1BN.numChannels * 3));
-  if(modelVersion >= 15) {
+  if(modelVersion <= 1) {
+    if(p2Conv.outChannels != policyOutChannels)
+      throw StringError(name + Global::strprintf(": p2Conv.outChannels (%d) != %d", p2Conv.outChannels, policyOutChannels));
+  }
+  else if(modelVersion >= 15) {
     if(p2Conv.outChannels != policyOutChannels)
       throw StringError(name + Global::strprintf(": p2Conv.outChannels (%d) != %d", p2Conv.outChannels, policyOutChannels));
     if(gpoolToPassMul.outChannels != gpoolToPassBias.numChannels)
@@ -2471,7 +2477,7 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
 
   if(modelVersion < 0)
     throw StringError("This neural net has an invalid version, you probably specified the wrong file. Supposed model version: " + Global::intToString(modelVersion));
-  if(modelVersion < 3)
+  if(modelVersion < NNModelVersion::oldestModelVersionImplemented)
     throw StringError("This neural net is from an extremely old version of KataGo and is no longer supported by the engine. Model version: " + Global::intToString(modelVersion));
   if(modelVersion > NNModelVersion::latestModelVersionImplemented)
     throw StringError("This neural net requires a newer KataGo version. Obtain a newer KataGo at https://github.com/lightvector/KataGo. Model version: " + Global::intToString(modelVersion));
@@ -2605,8 +2611,8 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
 
   numPolicyChannels = policyHead.policyOutChannels;
   numValueChannels = valueHead.v3Mul.outChannels;
-  numScoreValueChannels = valueHead.sv3Mul.outChannels;
-  numOwnershipChannels = valueHead.vOwnershipConv.outChannels;
+  numScoreValueChannels = (modelVersion <= 1 ? 0 : valueHead.sv3Mul.outChannels);
+  numOwnershipChannels = (modelVersion <= 1 ? 0 : valueHead.vOwnershipConv.outChannels);
 
   if(in.fail())
     throw StringError(name + ": model desc istream fail after parsing model");

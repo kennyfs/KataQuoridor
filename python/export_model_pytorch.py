@@ -249,21 +249,6 @@ def main(args):
         export_quoridor_onnx(model_to_export, onnx_path, model_name=model_name)
         logging.info(f"Exported Quoridor ONNX model to {onnx_path}")
 
-        with open(os.path.join(export_dir, "metadata.json"), "w") as f:
-            train_state = other_state_dict.get("train_state", {})
-            data = {}
-            if "global_step_samples" in train_state:
-                data["global_step_samples"] = train_state["global_step_samples"]
-            if "total_num_data_rows" in train_state:
-                data["total_num_data_rows"] = train_state["total_num_data_rows"]
-            json.dump(data, f)
-
-        logging.info("Exported at: ")
-        logging.info(str(datetime.datetime.utcnow()) + " UTC")
-        sys.stdout.flush()
-        sys.stderr.flush()
-        return
-
     # WRITING MODEL ----------------------------------------------------------------
     extension = ".bin"
     mode = "wb"
@@ -273,9 +258,12 @@ def main(args):
     def writestr(s):
         f.write(s.encode(encoding="ascii",errors="backslashreplace"))
 
-    # Ignore what's in the config if less than 11 since a lot of testing models
-    # are on old version but actually have various new architectures.
-    version = max(model_config["version"],11)
+    if modelconfigs.is_quoridor(model_config):
+        version = model_config.get("version", 1)
+    else:
+        # Ignore what's in the config if less than 11 since a lot of testing models
+        # are on old version but actually have various new architectures.
+        version = max(model_config["version"],11)
     true_version = version
     # Hack to be able to export version 14 as version 15
     if version == 14 and export_14_as_15:
@@ -320,7 +308,9 @@ def main(args):
     writeln(modelconfigs.get_num_bin_input_features(model_config))
     writeln(modelconfigs.get_num_global_input_features(model_config))
 
-    if version <= 12:
+    if modelconfigs.is_quoridor(model_config):
+        pass
+    elif version <= 12:
         assert model.td_score_multiplier == 20.0
         assert model.scoremean_multiplier == 20.0
         assert model.scorestdev_multiplier == 20.0
@@ -738,7 +728,12 @@ def main(args):
         write_activation(name+".act2", policyhead.act2)
 
         # Write the this-move prediction and the optimistic policy prediction
-        if version <= 11:
+        if modelconfigs.is_quoridor(model_config):
+            assert policyhead.conv2p.weight.shape[0] >= 3
+            write_conv_weight(name+".conv2p", policyhead.conv2p.weight[0:3])
+            c_g1 = policyhead.conv1g.weight.shape[0]
+            write_matmul(name+".linear_pass", torch.zeros((3, 3 * c_g1), dtype=torch.float32))
+        elif version <= 11:
             assert policyhead.conv2p.weight.shape[0] == 4
             write_conv_weight(name+".conv2p", torch.stack((policyhead.conv2p.weight[0],), dim=0))
             assert policyhead.linear_pass.weight.shape[0] == 4
@@ -798,6 +793,17 @@ def main(args):
         write_matmul(name+".linear2", valuehead.linear2.weight)
         write_matbias(name+".bias2", valuehead.linear2.bias)
         write_activation(name+".act2", valuehead.act2)
+
+        if modelconfigs.is_quoridor(model_config):
+            write_matmul(name+".linear_valuehead", valuehead.linear_value.weight)
+            write_matbias(name+".bias_valuehead", valuehead.linear_value.bias)
+            c_v2 = valuehead.linear2.weight.shape[0]
+            c_v1 = valuehead.conv1.weight.shape[0]
+            write_matmul(name+".linear_miscvaluehead", torch.zeros((1, c_v2), dtype=torch.float32))
+            write_matbias(name+".bias_miscvaluehead", torch.zeros((1,), dtype=torch.float32))
+            write_conv_weight(name+".conv_ownership", torch.zeros((1, c_v1, 1, 1), dtype=torch.float32))
+            return
+
         write_matmul(name+".linear_valuehead", valuehead.linear_valuehead.weight)
         write_matbias(name+".bias_valuehead", valuehead.linear_valuehead.bias)
 
@@ -826,6 +832,14 @@ def main(args):
         logging.info("Writing model")
         write_model(model)
     f.close()
+
+    bin_path = os.path.join(export_dir, filename_prefix + extension)
+    bin_gz_path = os.path.join(export_dir, filename_prefix + ".bin.gz")
+    logging.info(f"Gzipping {bin_path} to {bin_gz_path}")
+    import gzip
+    import shutil
+    with open(bin_path, 'rb') as f_in, gzip.open(bin_gz_path, 'wb') as f_out:
+        shutil.copyfileobj(f_in, f_out)
 
     with open(os.path.join(export_dir,"metadata.json"),"w") as f:
         train_state = other_state_dict.get("train_state", {})

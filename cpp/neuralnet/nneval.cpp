@@ -562,7 +562,9 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
   // SDPA) leniently, falling back to a custom kernel instead of failing hard. Restored when done.
   bool prevIsWarmup = NeuralNet::setIsWarmup(gpuHandle, true);
 
-  InputBuffers* inputBuffers = NeuralNet::createInputBuffers(loadedModel, maxBatchSize, nnXLen, nnYLen);
+  int modelXLen = (inputsVersion == 1 ? NNInputs::NN_X_LEN : nnXLen);
+  int modelYLen = (inputsVersion == 1 ? NNInputs::NN_Y_LEN : nnYLen);
+  InputBuffers* inputBuffers = NeuralNet::createInputBuffers(loadedModel, maxBatchSize, modelXLen, modelYLen);
 
   // Reusable per-row input; identical for every row since it's an empty board.
   std::vector<std::unique_ptr<NNResultBuf>> ownedBufs;

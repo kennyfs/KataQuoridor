@@ -21,7 +21,9 @@ static const vector<string> ACCEPTABLE_MODEL_SUFFIXES {
   ".bin.gz",
   ".bin",
   "model.txt.gz",
-  "model.txt"
+  "model.txt",
+  ".onnx",
+  ".onnx.gz"
 };
 static const vector<string> GENERIC_MODEL_NAMES {
   "model.bin.gz",
@@ -36,6 +38,12 @@ static const vector<string> GENERIC_MODEL_NAMES {
   "MODEL.bin",
   "MODEL.txt.gz",
   "MODEL.txt",
+  "model.onnx",
+  "model.onnx.gz",
+  "Model.onnx",
+  "Model.onnx.gz",
+  "MODEL.onnx",
+  "MODEL.onnx.gz",
   "model.ckpt",
   "Model.ckpt",
   "MODEL.ckpt",

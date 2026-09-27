@@ -2024,7 +2024,10 @@ struct PolicyHead {
     p1BN.apply(&p1Out, &p1Out2, mask);
     p2Conv.apply(handle, &p1Out2, policy, convWorkspace, false);
 
-    if(modelVersion >= 15) {
+    if(modelVersion <= 1) {
+      // Quoridor has no pass move
+    }
+    else if(modelVersion >= 15) {
       gpoolToPassMul.apply(&g1Concat, &p1Pass);
       gpoolToPassBias.apply(&p1Pass);
       passActivation.apply(&p1Pass, &p1Pass);
@@ -2107,10 +2110,12 @@ struct ValueHead {
     v3Mul.apply(&v2Out, value);
     v3Bias.apply(value);
 
-    sv3Mul.apply(&v2Out, scoreValue);
-    sv3Bias.apply(scoreValue);
+    if(modelVersion > 1) {
+      sv3Mul.apply(&v2Out, scoreValue);
+      sv3Bias.apply(scoreValue);
 
-    vOwnershipConv.apply(handle, &v1Out2, ownership, convWorkspace, false);
+      vOwnershipConv.apply(handle, &v1Out2, ownership, convWorkspace, false);
+    }
   }
 };
 
@@ -2550,7 +2555,16 @@ void NeuralNet::getOutput(
     // policy probabilities and white game outcome probabilities
     // Also we don't fill in the nnHash here either
     // Handle version >= 12 policy optimism
-    if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
+    if(modelVersion <= 1) {
+      assert(numPolicyChannels == 3);
+      // Eigen is all NHWC
+      for(int i = 0; i<nnXLen*nnYLen; i++) {
+        policyProbs[i] = policySrcBuf[i*3];
+        policyProbs[i + nnXLen*nnYLen] = policySrcBuf[i*3 + 1];
+        policyProbs[i + 2*nnXLen*nnYLen] = policySrcBuf[i*3 + 2];
+      }
+    }
+    else if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
       // Eigen is all NHWC
       for(int i = 0; i<nnXLen*nnYLen; i++) {
         float p = policySrcBuf[i*numPolicyChannels];
@@ -2581,13 +2595,21 @@ void NeuralNet::getOutput(
 
     //As above, these are NOT actually from white's perspective, but rather the player to move.
     //As usual the client does the postprocessing.
-    if(output->whiteOwnerMap != NULL) {
+    if(output->whiteOwnerMap != NULL && modelVersion > 1) {
       const float* ownershipSrcBuf = ownershipData + row * nnXLen * nnYLen;
       assert(computeHandle->model->numOwnershipChannels == 1);
       SymmetryHelpers::copyOutputsWithSymmetry(ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
     }
 
-    if(modelVersion >= 9) {
+    if(modelVersion <= 1) {
+      output->whiteScoreMean = 0;
+      output->whiteScoreMeanSq = 0;
+      output->whiteLead = 0;
+      output->varTimeLeft = 0;
+      output->shorttermWinlossError = 0;
+      output->shorttermScoreError = 0;
+    }
+    else if(modelVersion >= 9) {
       int numScoreValueChannels = computeHandle->model->numScoreValueChannels;
       assert(numScoreValueChannels == 6);
       output->whiteScoreMean = scoreValueData[row * numScoreValueChannels];
