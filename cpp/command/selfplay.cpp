@@ -43,6 +43,8 @@ int MainCmds::selfplay(const vector<string>& args) {
   string modelsDir;
   string outputDir;
   int64_t maxGamesTotal = ((int64_t)1) << 62;
+  int64_t maxValidGamesTotal = ((int64_t)1) << 62;
+  int64_t maxRowsTotal = ((int64_t)1) << 62;
   try {
     KataGoCommandLine cmd("Generate training data via self play.");
     cmd.addConfigFileArg("","");
@@ -51,9 +53,13 @@ int MainCmds::selfplay(const vector<string>& args) {
     TCLAP::ValueArg<string> modelsDirArg("","models-dir","Dir to poll and load models from",true,string(),"DIR");
     TCLAP::ValueArg<string> outputDirArg("","output-dir","Dir to output files",true,string(),"DIR");
     TCLAP::ValueArg<string> maxGamesTotalArg("","max-games-total","Terminate after this many games",false,string(),"NGAMES");
+    TCLAP::ValueArg<string> maxValidGamesTotalArg("","max-valid-games-total","Terminate after this many valid non-discarded games",false,string(),"NGAMES");
+    TCLAP::ValueArg<string> maxRowsTotalArg("","max-rows-total","Terminate after this many valid data rows",false,string(),"NROWS");
     cmd.add(modelsDirArg);
     cmd.add(outputDirArg);
     cmd.add(maxGamesTotalArg);
+    cmd.add(maxValidGamesTotalArg);
+    cmd.add(maxRowsTotalArg);
     cmd.parseArgs(args);
 
     modelsDir = modelsDirArg.getValue();
@@ -63,6 +69,18 @@ int MainCmds::selfplay(const vector<string>& args) {
       bool suc = Global::tryStringToInt64(maxGamesTotalStr,maxGamesTotal);
       if(!suc || maxGamesTotal <= 0)
         throw StringError("-max-games-total must be a positive integer");
+    }
+    string maxValidGamesTotalStr = maxValidGamesTotalArg.getValue();
+    if(maxValidGamesTotalStr != "") {
+      bool suc = Global::tryStringToInt64(maxValidGamesTotalStr,maxValidGamesTotal);
+      if(!suc || maxValidGamesTotal <= 0)
+        throw StringError("-max-valid-games-total must be a positive integer");
+    }
+    string maxRowsTotalStr = maxRowsTotalArg.getValue();
+    if(maxRowsTotalStr != "") {
+      bool suc = Global::tryStringToInt64(maxRowsTotalStr,maxRowsTotal);
+      if(!suc || maxRowsTotal <= 0)
+        throw StringError("-max-rows-total must be a positive integer");
     }
 
     auto checkDirNonEmpty = [](const char* flag, const string& s) {
@@ -111,6 +129,25 @@ int MainCmds::selfplay(const vector<string>& args) {
 
   const bool switchNetsMidGame = cfg.getBool("switchNetsMidGame");
   const SearchParams baseParams = Setup::loadSingleParams(cfg,Setup::SETUP_FOR_OTHER);
+
+  bool countOnlyValidGamesForMaxGamesTotal = false;
+  if(cfg.contains("countOnlyValidGamesForMaxGamesTotal"))
+    countOnlyValidGamesForMaxGamesTotal = cfg.getBool("countOnlyValidGamesForMaxGamesTotal");
+  if(cfg.contains("maxValidGamesTotal")) {
+    int64_t v = cfg.getInt64("maxValidGamesTotal", 1, ((int64_t)1)<<62);
+    maxValidGamesTotal = std::min(maxValidGamesTotal, v);
+  }
+  if(cfg.contains("maxRowsTotal")) {
+    int64_t r = cfg.getInt64("maxRowsTotal", 1, ((int64_t)1)<<62);
+    maxRowsTotal = std::min(maxRowsTotal, r);
+  }
+
+  if(maxGamesTotal < ((int64_t)1 << 60))
+    logger.write("Limit maxGamesTotal: " + Global::int64ToString(maxGamesTotal) + (countOnlyValidGamesForMaxGamesTotal ? " (counting only valid games)" : " (counting all started games)"));
+  if(maxValidGamesTotal < ((int64_t)1 << 60))
+    logger.write("Limit maxValidGamesTotal: " + Global::int64ToString(maxValidGamesTotal));
+  if(maxRowsTotal < ((int64_t)1 << 60))
+    logger.write("Limit maxRowsTotal: " + Global::int64ToString(maxRowsTotal));
 
   //Initialize object for randomizing game settings and running games
   const bool isDistributed = false;
@@ -246,6 +283,8 @@ int MainCmds::selfplay(const vector<string>& args) {
 
   //Shared across all game loop threads
   std::atomic<int64_t> numGamesStarted(0);
+  std::atomic<int64_t> numValidGamesFinished(0);
+  std::atomic<int64_t> numDataRowsEnqueued(0);
   ForkData* forkData = new ForkData();
   auto gameLoop = [
     &gameRunner,
@@ -253,8 +292,13 @@ int MainCmds::selfplay(const vector<string>& args) {
     &logger,
     switchNetsMidGame,
     &numGamesStarted,
+    &numValidGamesFinished,
+    &numDataRowsEnqueued,
     &forkData,
     maxGamesTotal,
+    maxValidGamesTotal,
+    maxRowsTotal,
+    countOnlyValidGamesForMaxGamesTotal,
     &baseParams,
     &gameSeedBase
   ](int threadIdx) {
@@ -294,8 +338,28 @@ int MainCmds::selfplay(const vector<string>& args) {
 
       FinishedGameData* gameData = NULL;
 
-      int64_t gameIdx = numGamesStarted.fetch_add(1,std::memory_order_acq_rel);
-      if(gameIdx < maxGamesTotal) {
+      bool canStart = true;
+      if(numValidGamesFinished.load(std::memory_order_relaxed) >= maxValidGamesTotal)
+        canStart = false;
+      if(numDataRowsEnqueued.load(std::memory_order_relaxed) >= maxRowsTotal)
+        canStart = false;
+
+      if(maxGamesTotal < ((int64_t)1 << 60)) {
+        if(countOnlyValidGamesForMaxGamesTotal) {
+          if(numValidGamesFinished.load(std::memory_order_relaxed) >= maxGamesTotal)
+            canStart = false;
+        }
+        else {
+          int64_t gameIdx = numGamesStarted.fetch_add(1,std::memory_order_acq_rel);
+          if(gameIdx >= maxGamesTotal)
+            canStart = false;
+        }
+      }
+
+      if(canStart) {
+        if(countOnlyValidGamesForMaxGamesTotal || maxGamesTotal >= ((int64_t)1 << 60))
+          numGamesStarted.fetch_add(1, std::memory_order_relaxed);
+
         manager->countOneGameStarted(nnEval);
         MatchPairer::BotSpec botSpecB;
         botSpecB.botIdx = 0;
@@ -326,6 +390,9 @@ int MainCmds::selfplay(const vector<string>& args) {
           // This is normal for random play.
         }
         else {
+          int64_t rows = (int64_t)gameData->targetWeightByTurn.size();
+          numValidGamesFinished.fetch_add(1, std::memory_order_relaxed);
+          numDataRowsEnqueued.fetch_add(rows, std::memory_order_relaxed);
           manager->enqueueDataToWrite(nnEval,gameData);
         }
       }
@@ -397,7 +464,9 @@ int MainCmds::selfplay(const vector<string>& args) {
   delete manager;
 
   //Overall self-play totals (per-model NN/data/moves breakdowns are logged above by the manager).
-  logger.write("Total games: " + Global::int64ToString(numGamesStarted.load(std::memory_order_relaxed)));
+  logger.write("Total games started: " + Global::int64ToString(numGamesStarted.load(std::memory_order_relaxed)));
+  logger.write("Total valid games: " + Global::int64ToString(numValidGamesFinished.load(std::memory_order_relaxed)));
+  logger.write("Total data rows: " + Global::int64ToString(numDataRowsEnqueued.load(std::memory_order_relaxed)));
   logger.write("Total selfplay runtime (seconds): " + Global::doubleToString(selfplayTimer.getSeconds()));
 
   //Delete and clean up everything else
