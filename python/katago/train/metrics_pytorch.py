@@ -1027,7 +1027,7 @@ class Metrics:
         n = input_binary_nchw.shape[0]
 
         valid_mask = self.valid_action_mask.to(device=policy_logits.device)
-        policy_logits = policy_logits.view(n, 6, self.policy_len)
+        policy_logits = policy_logits.reshape(n, 6, self.policy_len)
         policy_logits = policy_logits.masked_fill(valid_mask == 0, -10000.0)
 
         target_policy_player = target_policy_ncmove[:, 0, :] * valid_mask

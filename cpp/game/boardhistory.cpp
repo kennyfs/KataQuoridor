@@ -272,6 +272,9 @@ void BoardHistory::makeBoardMoveAssumeLegal(
   // 2. Update move history
   moveHistory.push_back({moveLoc, movePla});
   preventEncoreHistory.push_back(preventEncore);
+  numTurnsThisPhase += 1;
+  numApproxValidTurnsThisPhase += 1;
+  numConsecValidTurnsThisGame += 1;
 
   // 3. Update recentBoards ring buffer
   currentRecentBoardIdx = (currentRecentBoardIdx + 1) % NUM_RECENT_BOARDS;

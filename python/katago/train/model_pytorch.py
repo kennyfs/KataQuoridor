@@ -3622,7 +3622,7 @@ class Model(torch.nn.Module):
         # additive -inf attention bias whose handling roughly doubles the cost of
         # the mem-efficient SDPA backend. Same masking semantics (keys only).
         self.use_flex_attention = (
-            env_flag("KATAGO_FLEX_ATTENTION", default=True) and trunk_is_plain_transformer
+            torch.cuda.is_available() and env_flag("KATAGO_FLEX_ATTENTION", default=True) and trunk_is_plain_transformer
         )
 
         # Training-time attention logit penalty. Not part of the model config: set externally

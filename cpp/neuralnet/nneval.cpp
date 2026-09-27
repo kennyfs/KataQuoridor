@@ -36,8 +36,10 @@ NNServerBuf::NNServerBuf(const NNEvaluator& nnEval, const LoadedModel* model)
   :inputBuffers(NULL)
 {
   int maxBatchSize = nnEval.getMaxBatchSize();
+  int modelXLen = (nnEval.getInputsVersion() == 1 ? NNInputs::NN_X_LEN : nnEval.getNNXLen());
+  int modelYLen = (nnEval.getInputsVersion() == 1 ? NNInputs::NN_Y_LEN : nnEval.getNNYLen());
   if(model != NULL)
-    inputBuffers = NeuralNet::createInputBuffers(model,maxBatchSize,nnEval.getNNXLen(),nnEval.getNNYLen());
+    inputBuffers = NeuralNet::createInputBuffers(model,maxBatchSize,modelXLen,modelYLen);
 }
 
 NNServerBuf::~NNServerBuf() {
@@ -142,8 +144,10 @@ NNEvaluator::NNEvaluator(
     modelVersion = desc.modelVersion;
     inputsVersion = NNModelVersion::getInputsVersion(modelVersion);
     numInputMetaChannels = desc.numInputMetaChannels;
+    int modelXLen = (inputsVersion == 1 ? NNInputs::NN_X_LEN : nnXLen);
+    int modelYLen = (inputsVersion == 1 ? NNInputs::NN_Y_LEN : nnYLen);
     computeContext = NeuralNet::createComputeContext(
-      gpuIdxs,logger,nnXLen,nnYLen,
+      gpuIdxs,logger,modelXLen,modelYLen,
       homeDataDirOverride,
       usingFP16Mode,loadedModel,cfg
     );
@@ -287,6 +291,9 @@ bool NNEvaluator::getRequireExactNNLen() const {
 }
 int NNEvaluator::getModelVersion() const {
   return modelVersion;
+}
+int NNEvaluator::getInputsVersion() const {
+  return inputsVersion;
 }
 double NNEvaluator::getTrunkSpatialConvDepth() const {
   return NeuralNet::getModelDesc(loadedModel).getTrunkSpatialConvDepth();
@@ -477,7 +484,9 @@ void NNEvaluator::fillRowBufs(
   const MiscNNInputParams& nnInputParams,
   NNResultBuf& buf
 ) const {
-  const int rowSpatialLen = NNModelVersion::getNumSpatialFeatures(modelVersion) * nnXLen * nnYLen;
+  int modelXLen = (inputsVersion == 1 ? NNInputs::NN_X_LEN : nnXLen);
+  int modelYLen = (inputsVersion == 1 ? NNInputs::NN_Y_LEN : nnYLen);
+  const int rowSpatialLen = NNModelVersion::getNumSpatialFeatures(modelVersion) * modelXLen * modelYLen;
   if(buf.rowSpatialBuf.size() < rowSpatialLen)
     buf.rowSpatialBuf.resize(rowSpatialLen);
   const int rowGlobalLen = NNModelVersion::getNumGlobalFeatures(modelVersion);
@@ -489,7 +498,7 @@ void NNEvaluator::fillRowBufs(
 
   static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
   if(inputsVersion == 1)
-    NNInputs::fillRowV1(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
+    NNInputs::fillRowV1(board, history, nextPlayer, nnInputParams, modelXLen, modelYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
   else
     ASSERT_UNREACHABLE;
 
@@ -1499,7 +1508,7 @@ void NNEvaluator::evaluate(
 
   // Postprocess ownermap
   if(buf.result->whiteOwnerMap != NULL) {
-    if(modelVersion >= 3) {
+    if(modelVersion >= 3 || inputsVersion == 1) {
       for(int pos = 0; pos<nnXLen*nnYLen; pos++) {
         int y = pos / nnXLen;
         int x = pos % nnXLen;

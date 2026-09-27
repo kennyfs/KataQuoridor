@@ -55,6 +55,30 @@ class QuoridorOnnxExportWrapper(torch.nn.Module):
         return raw_policy, raw_value
 
 
+def _register_rms_norm_symbolic(opset: int = 18):
+    try:
+        from torch.onnx import register_custom_op_symbolic
+        def rms_norm_symbolic(g, input, normalized_shape, weight, eps=None):
+            square = g.op('Mul', input, input)
+            axes = g.op('Constant', value_t=torch.tensor([-1], dtype=torch.int64))
+            mean = g.op('ReduceMean', square, axes, keepdims_i=1)
+            if eps is None or (isinstance(eps, torch._C.Value) and eps.node().kind() == 'prim::Constant' and eps.type().kind() == 'NoneType'):
+                eps_val = g.op('Constant', value_t=torch.tensor(1e-5, dtype=torch.float32))
+            elif isinstance(eps, torch._C.Value):
+                eps_val = eps
+            else:
+                eps_val = g.op('Constant', value_t=torch.tensor(float(eps), dtype=torch.float32))
+            denom = g.op('Add', mean, eps_val)
+            rsqrt = g.op('Sqrt', denom)
+            normed = g.op('Div', input, rsqrt)
+            if weight is not None and not (isinstance(weight, torch._C.Value) and weight.node().kind() == 'prim::Constant' and weight.type().kind() == 'NoneType'):
+                return g.op('Mul', normed, weight)
+            return normed
+        register_custom_op_symbolic('::rms_norm', rms_norm_symbolic, opset)
+    except Exception:
+        pass
+
+
 def export_quoridor_onnx(
     model: torch.nn.Module,
     export_path: str,
@@ -65,7 +89,10 @@ def export_quoridor_onnx(
     """
     Exports a KataQuoridor PyTorch model to ONNX format with KataGo metadata props.
     """
+    _register_rms_norm_symbolic(opset_version)
     model.eval()
+    prev_use_flex = getattr(model, "use_flex_attention", False)
+    model.use_flex_attention = False
     wrapper = QuoridorOnnxExportWrapper(model)
     wrapper.eval()
 
@@ -91,6 +118,7 @@ def export_quoridor_onnx(
             "OutputValue": {0: "batch"},
         },
         verbose=verbose,
+        dynamo=False,
     )
 
     if onnx is not None:

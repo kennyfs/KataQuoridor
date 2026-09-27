@@ -153,6 +153,7 @@ class NNEvaluator {
   int getNNYLen() const;
   bool getRequireExactNNLen() const;
   int getModelVersion() const;
+  int getInputsVersion() const;
   double getTrunkSpatialConvDepth() const;
   int64_t getNumModelParameters() const;
   bool modelHasAnyTransformerBlocks() const;

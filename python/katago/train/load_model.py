@@ -73,6 +73,11 @@ def load_model(checkpoint_file, use_swa, device, pos_len=19, verbose=False):
         with open(config_file,"r") as f:
             model_config = json.load(f)
 
+    if "pos_len" in model_config:
+        pos_len = model_config["pos_len"]
+    elif "game" in model_config and model_config["game"] == "quoridor":
+        pos_len = 9
+
     logging.info(str(model_config))
     model = Model(model_config,pos_len)
     model.initialize()
