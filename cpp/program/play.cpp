@@ -888,6 +888,13 @@ static void extractQValueTargets(
 }
 
 static NNRawStats computeNNRawStats(const Search* bot, const Board& board, const BoardHistory& hist, Player pla) {
+  if(hist.isGameFinished) {
+    NNRawStats nnRawStats;
+    nnRawStats.whiteWinLoss = (hist.winner == P_WHITE) ? 1.0 : (hist.winner == P_BLACK) ? -1.0 : 0.0;
+    nnRawStats.whiteScoreMean = nnRawStats.whiteWinLoss;
+    nnRawStats.policyEntropy = 0.0;
+    return nnRawStats;
+  }
   NNResultBuf buf;
   MiscNNInputParams nnInputParams;
   nnInputParams.drawEquivalentWinsForWhite = bot->searchParams.drawEquivalentWinsForWhite;
@@ -966,7 +973,7 @@ static void recordTreePositionsRec(
   ConstSearchNodeChildrenReference children = node->getChildren();
   int numChildren = children.iterateAndCountChildren();
 
-  if(numChildren <= 0)
+  if(numChildren <= 0 || hist.isGameFinished)
     return;
 
   if(plaAlwaysBest && node != toMoveBot->rootNode) {
@@ -2508,9 +2515,15 @@ void Play::maybeForkGame(
       Search::resolveAlwaysComputePassAliveUnderSuicideRules(bot->searchParams, bot->nnEvaluator) ? 1 : 0;
     nnInputParams.excludeTerritoryAdjAtariOverride =
       Search::resolveExcludeTerritoryAdjacentToAtari(bot->searchParams, bot->nnEvaluator) ? 1 : 0;
-    bot->nnEvaluator->evaluate(copy,copyHist,getOpp(pla),nnInputParams,buf,false,false);
-    std::shared_ptr<NNOutput> nnOutput = std::move(buf.result);
-    double whiteScore = nnOutput->whiteScoreMean;
+    double whiteScore = 0.0;
+    if(copyHist.isGameFinished) {
+      whiteScore = (copyHist.winner == P_WHITE) ? 100.0 : (copyHist.winner == P_BLACK) ? -100.0 : 0.0;
+    }
+    else {
+      bot->nnEvaluator->evaluate(copy,copyHist,getOpp(pla),nnInputParams,buf,false,false);
+      std::shared_ptr<NNOutput> nnOutput = std::move(buf.result);
+      whiteScore = nnOutput->whiteScoreMean;
+    }
     if(bestMove == Board::NULL_LOC || (pla == P_WHITE && whiteScore > bestScore) || (pla == P_BLACK && whiteScore < bestScore)) {
       bestMove = loc;
       bestScore = whiteScore;

@@ -1235,52 +1235,56 @@ void NNEvaluator::evaluate(
         maxPolicy = policyValue;
     }
 
-    testAssert(legalCount > 0);
-
-    float policySum = 0.0f;
-
-    if(nnInputParams.enablePassingHacks) {
-      //Cap passing prior policy at 95% (19x other moves)
-      float maxPassPolicySumFactor = 19.0f;
-
-      for(int i = 0; i<policySize-1; i++) {
-        policy[i] = exp(policy[i] - maxPolicy);
-        policySum += policy[i];
-      }
-      int passPos = NNPos::locToPos(Board::PASS_LOC, xSize, nnXLen, nnYLen);
-      testAssert(passPos == policySize-1);
-      int i = passPos;
-      policy[i] = std::max(1e-20f, std::min(exp(policy[i] - maxPolicy), policySum * maxPassPolicySumFactor));
-      policySum += policy[i];
-    }
-    else {
-      for(int i = 0; i<policySize; i++) {
-        policy[i] = exp(policy[i] - maxPolicy);
-        policySum += policy[i];
-      }
-    }
-
-    if(!isfinite(policySum)) {
-      cout << "Got nonfinite for policy sum" << endl;
-      history.printDebugInfo(cout,board);
-      throw StringError("Got nonfinite for policy sum");
-    }
-
-    // Somehow all legal moves rounded to 0 probability
-    if(policySum <= 0.0) {
-      if(!buf.errorLogLockout && logger != NULL) {
-        buf.errorLogLockout = true;
-        logger->write("Warning: all legal moves rounded to 0 probability for " + string(modelFileName));
-      }
-      float uniform = 1.0f / legalCount;
-      for(int i = 0; i<policySize; i++) {
-        policy[i] = isLegal[i] ? uniform : -1.0f;
-      }
-    }
-    // Normal case
-    else {
+    if(legalCount == 0) {
       for(int i = 0; i<policySize; i++)
-        policy[i] = isLegal[i] ? (policy[i] / policySum) : -1.0f;
+        policy[i] = -1.0f;
+    }
+    else {
+      float policySum = 0.0f;
+
+      if(nnInputParams.enablePassingHacks) {
+        //Cap passing prior policy at 95% (19x other moves)
+        float maxPassPolicySumFactor = 19.0f;
+
+        for(int i = 0; i<policySize-1; i++) {
+          policy[i] = exp(policy[i] - maxPolicy);
+          policySum += policy[i];
+        }
+        int passPos = NNPos::locToPos(Board::PASS_LOC, xSize, nnXLen, nnYLen);
+        testAssert(passPos == policySize-1);
+        int i = passPos;
+        policy[i] = std::max(1e-20f, std::min(exp(policy[i] - maxPolicy), policySum * maxPassPolicySumFactor));
+        policySum += policy[i];
+      }
+      else {
+        for(int i = 0; i<policySize; i++) {
+          policy[i] = exp(policy[i] - maxPolicy);
+          policySum += policy[i];
+        }
+      }
+
+      if(!isfinite(policySum)) {
+        cout << "Got nonfinite for policy sum" << endl;
+        history.printDebugInfo(cout,board);
+        throw StringError("Got nonfinite for policy sum");
+      }
+
+      // Somehow all legal moves rounded to 0 probability
+      if(policySum <= 0.0) {
+        if(!buf.errorLogLockout && logger != NULL) {
+          buf.errorLogLockout = true;
+          logger->write("Warning: all legal moves rounded to 0 probability for " + string(modelFileName));
+        }
+        float uniform = 1.0f / legalCount;
+        for(int i = 0; i<policySize; i++) {
+          policy[i] = isLegal[i] ? uniform : -1.0f;
+        }
+      }
+      // Normal case
+      else {
+        for(int i = 0; i<policySize; i++)
+          policy[i] = isLegal[i] ? (policy[i] / policySum) : -1.0f;
+      }
     }
 
     // Fill everything out-of-bounds too, for robustness.

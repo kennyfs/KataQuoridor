@@ -385,12 +385,16 @@ int MainCmds::selfplay(const vector<string>& args) {
       //Note that if we've gotten a newNNEval, we're actually pushing the game as data for the new one, rather than the old one!
       if(gameData != NULL) {
         if(gameData->hitTurnLimit) {
-          logger.write("Game exceeded turn limit (" + Global::intToString(gameData->endHist.moveHistory.size()) + " moves), discarding from training data.");
+          // logger.write("Game exceeded turn limit (" + Global::intToString(gameData->endHist.moveHistory.size()) + " moves), discarding from training data.");
           delete gameData;
           // This is normal for random play.
         }
         else {
-          int64_t rows = (int64_t)gameData->targetWeightByTurn.size();
+          int64_t rows = 0;
+          for(float w : gameData->targetWeightByTurn)
+            rows += (int64_t)std::round(w);
+          for(const auto* sp : gameData->sidePositions)
+            rows += (int64_t)std::round(sp->targetWeight);
           numValidGamesFinished.fetch_add(1, std::memory_order_relaxed);
           numDataRowsEnqueued.fetch_add(rows, std::memory_order_relaxed);
           manager->enqueueDataToWrite(nnEval,gameData);
