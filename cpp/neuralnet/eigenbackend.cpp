@@ -2024,10 +2024,7 @@ struct PolicyHead {
     p1BN.apply(&p1Out, &p1Out2, mask);
     p2Conv.apply(handle, &p1Out2, policy, convWorkspace, false);
 
-    if(modelVersion <= 1) {
-      // Quoridor has no pass move
-    }
-    else if(modelVersion >= 15) {
+    if(modelVersion >= 15) {
       gpoolToPassMul.apply(&g1Concat, &p1Pass);
       gpoolToPassBias.apply(&p1Pass);
       passActivation.apply(&p1Pass, &p1Pass);
@@ -2110,12 +2107,10 @@ struct ValueHead {
     v3Mul.apply(&v2Out, value);
     v3Bias.apply(value);
 
-    if(modelVersion > 1) {
-      sv3Mul.apply(&v2Out, scoreValue);
-      sv3Bias.apply(scoreValue);
+    sv3Mul.apply(&v2Out, scoreValue);
+    sv3Bias.apply(scoreValue);
 
-      vOwnershipConv.apply(handle, &v1Out2, ownership, convWorkspace, false);
-    }
+    vOwnershipConv.apply(handle, &v1Out2, ownership, convWorkspace, false);
   }
 };
 
@@ -2129,6 +2124,9 @@ struct Model {
   const int numInputGlobalChannels;
   const int numInputMetaChannels;
   const int numPolicyChannels;
+  // KataQuoridor: policy planes packed into each policy channel (see PolicyHeadDesc::numPolicyPlanes).
+  // 1 for ordinary Go nets, so the extra factor is a no-op for them.
+  const int numPolicyPlanes;
   const int numValueChannels;
   const int numScoreValueChannels;
   const int numOwnershipChannels;
@@ -2148,6 +2146,7 @@ struct Model {
       numInputGlobalChannels(desc.numInputGlobalChannels),
       numInputMetaChannels(desc.numInputMetaChannels),
       numPolicyChannels(desc.numPolicyChannels),
+      numPolicyPlanes(desc.policyHead.numPolicyPlanes),
       numValueChannels(desc.numValueChannels),
       numScoreValueChannels(desc.numScoreValueChannels),
       numOwnershipChannels(desc.numOwnershipChannels),
@@ -2247,7 +2246,10 @@ struct Buffers {
     trunk(desc.trunk.trunkNumChannels, nnXLen, nnYLen, maxBatchSize),
 
     policyPass(desc.numPolicyChannels, maxBatchSize),
-    policy(desc.numPolicyChannels, nnXLen, nnYLen, maxBatchSize),
+    // KataQuoridor: p2Conv (and thus this buffer) has numPolicyPlanes planes packed per channel,
+    // variant-major (channel = variant*numPolicyPlanes + plane). numPolicyPlanes is 1 for
+    // ordinary Go nets, so this is a no-op multiply for them.
+    policy(desc.numPolicyChannels * desc.policyHead.numPolicyPlanes, nnXLen, nnYLen, maxBatchSize),
 
     value(desc.numValueChannels, maxBatchSize),
     scoreValue(desc.numScoreValueChannels, maxBatchSize),
@@ -2287,7 +2289,8 @@ struct InputBuffers {
     singleInputMetaElts = m.numInputMetaChannels;
 
     singlePolicyPassResultElts = (size_t)(m.numPolicyChannels);
-    singlePolicyResultElts = (size_t)(m.numPolicyChannels * nnXLen * nnYLen);
+    // KataQuoridor: numPolicyPlanes (see Model::numPolicyPlanes) is 1 for ordinary Go nets.
+    singlePolicyResultElts = (size_t)(m.numPolicyChannels * m.policyHead.numPolicyPlanes * nnXLen * nnYLen);
     singleValueResultElts = (size_t)m.numValueChannels;
     singleScoreValueResultElts = (size_t)m.numScoreValueChannels;
     singleOwnershipResultElts = (size_t)m.numOwnershipChannels * nnXLen * nnYLen;
@@ -2528,8 +2531,9 @@ void NeuralNet::getOutput(
     convWorkspace.data()
   );
 
+  const int numPolicyPlanes = computeHandle->model->numPolicyPlanes;
   assert(inputBuffers->singlePolicyPassResultElts == numPolicyChannels);
-  assert(inputBuffers->singlePolicyResultElts == numPolicyChannels * nnXLen * nnYLen);
+  assert(inputBuffers->singlePolicyResultElts == numPolicyChannels * numPolicyPlanes * nnXLen * nnYLen);
 
   assert(outputs.size() == batchSize);
 
@@ -2541,75 +2545,63 @@ void NeuralNet::getOutput(
   float* scoreValueData = scoreValue.data();
   float* ownershipData = ownership.data();
 
+  // NNOutput::policyProbs is used here as a raw nnXLen*nnYLen*numPolicyPlanes staging area (plane
+  // p at policyProbs[p*nnXLen*nnYLen + pos]), NOT as the search-space (17x17+1) policy that the
+  // rest of the engine expects: nneval.cpp (QuoridorNN::mapPolicyToSearch) remaps it into search
+  // space afterwards. numPolicyPlanes is 1 for ordinary Go nets, for which this is just pos.
+  const int posArea = nnXLen * nnYLen;
   for(int row = 0; row < batchSize; row++) {
     NNOutput* output = outputs[row];
-    assert(output->nnXLen == nnXLen);
-    assert(output->nnYLen == nnYLen);
+    assert(numPolicyPlanes * posArea <= NNPos::MAX_NN_POLICY_SIZE);
     float policyOptimism = (float)inputBufs[row]->policyOptimism;
 
+    const int totalPolicyChannels = numPolicyChannels * numPolicyPlanes;
     const float* policyPassSrcBuf = policyPassData + row * numPolicyChannels;
-    const float* policySrcBuf = policyData + row * numPolicyChannels * nnXLen * nnYLen;
+    const float* policySrcBuf = policyData + row * totalPolicyChannels * posArea;
     float* policyProbs = output->policyProbs;
 
     // These are in logits, the client does the postprocessing to turn them into
     // policy probabilities and white game outcome probabilities
     // Also we don't fill in the nnHash here either
-    // Handle version >= 12 policy optimism
-    if(modelVersion <= 1) {
-      assert(numPolicyChannels == 3);
-      // Eigen is all NHWC
-      for(int i = 0; i<nnXLen*nnYLen; i++) {
-        policyProbs[i] = policySrcBuf[i*3];
-        policyProbs[i + nnXLen*nnYLen] = policySrcBuf[i*3 + 1];
-        policyProbs[i + 2*nnXLen*nnYLen] = policySrcBuf[i*3 + 2];
+    // Handle version >= 12 policy optimism. Pass is ignored: KataQuoridor never exports a
+    // meaningful pass value (see export_model_pytorch.py), and Go's pass handling is orthogonal
+    // to numPolicyPlanes, so it is left as plane-less, exactly as before.
+    if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
+      // Eigen is all NHWC. Variant-major layout: channel = variant*numPolicyPlanes + plane.
+      for(int p = 0; p < numPolicyPlanes; p++) {
+        for(int i = 0; i<posArea; i++) {
+          float pol = policySrcBuf[i*totalPolicyChannels + p];
+          float pOpt = policySrcBuf[i*totalPolicyChannels + numPolicyPlanes + p];
+          policyProbsTmp[p*posArea + i] = pol + (pOpt-pol) * policyOptimism;
+        }
       }
-    }
-    else if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
-      // Eigen is all NHWC
-      for(int i = 0; i<nnXLen*nnYLen; i++) {
-        float p = policySrcBuf[i*numPolicyChannels];
-        float pOpt = policySrcBuf[i*numPolicyChannels+1];
-        policyProbsTmp[i] = p + (pOpt-p) * policyOptimism;
-      }
-      SymmetryHelpers::copyOutputsWithSymmetry(policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-      policyProbs[nnXLen*nnYLen] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
+      // Treat the numPolicyPlanes planes as independent nSize "images" sharing one symmetry.
+      SymmetryHelpers::copyOutputsWithSymmetry(policyProbsTmp, policyProbs, numPolicyPlanes, nnYLen, nnXLen, inputBufs[row]->symmetry);
+      if(numPolicyPlanes == 1)
+        policyProbs[posArea] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
     }
     else {
       assert(numPolicyChannels == 1);
+      assert(numPolicyPlanes == 1);
       SymmetryHelpers::copyOutputsWithSymmetry(policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
       policyProbs[inputBuffers->singlePolicyResultElts] = policyPassSrcBuf[0];
     }
 
     int numValueChannels = computeHandle->model->numValueChannels;
-    if(numValueChannels == 2) {
-      output->whiteWinProb = valueData[row * numValueChannels];
-      output->whiteLossProb = valueData[row * numValueChannels + 1];
-      output->whiteNoResultProb = -1e30f;
-    }
-    else {
-      assert(numValueChannels == 3);
-      output->whiteWinProb = valueData[row * numValueChannels];
-      output->whiteLossProb = valueData[row * numValueChannels + 1];
-      output->whiteNoResultProb = valueData[row * numValueChannels + 2];
-    }
+    assert(numValueChannels == 3);
+    output->whiteWinProb = valueData[row * numValueChannels];
+    output->whiteLossProb = valueData[row * numValueChannels + 1];
+    output->whiteNoResultProb = valueData[row * numValueChannels + 2];
 
     //As above, these are NOT actually from white's perspective, but rather the player to move.
     //As usual the client does the postprocessing.
-    if(output->whiteOwnerMap != NULL && modelVersion > 1) {
+    if(output->whiteOwnerMap != NULL) {
       const float* ownershipSrcBuf = ownershipData + row * nnXLen * nnYLen;
       assert(computeHandle->model->numOwnershipChannels == 1);
       SymmetryHelpers::copyOutputsWithSymmetry(ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
     }
 
-    if(modelVersion <= 1) {
-      output->whiteScoreMean = 0;
-      output->whiteScoreMeanSq = 0;
-      output->whiteLead = 0;
-      output->varTimeLeft = 0;
-      output->shorttermWinlossError = 0;
-      output->shorttermScoreError = 0;
-    }
-    else if(modelVersion >= 9) {
+    if(modelVersion >= 9) {
       int numScoreValueChannels = computeHandle->model->numScoreValueChannels;
       assert(numScoreValueChannels == 6);
       output->whiteScoreMean = scoreValueData[row * numScoreValueChannels];

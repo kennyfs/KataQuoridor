@@ -57,7 +57,10 @@ struct NNResultBuf {
   bool hasRowMeta;
   std::shared_ptr<NNOutput> result;
   bool errorLogLockout; // error flag to restrict log to 1 error to prevent spam
-  int symmetry; // The symmetry to use for this eval
+  int symmetry; // The symmetry to use for this eval; forced to 0 before being handed to the
+                // backend (see QuoridorNN::applyInputSymmetry - the backend always sees identity).
+  int quoridorSymmetry; // The real, resolved symmetry (0 or 1) used to mirror the input row,
+                         // preserved for QuoridorNN::mapPolicyToSearch after `symmetry` is zeroed.
   double policyOptimism; // The policy optimism to use for this eval
 
   NNResultBuf();

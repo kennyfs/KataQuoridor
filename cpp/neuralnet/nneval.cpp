@@ -1,5 +1,6 @@
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/modelversion.h"
+#include "../neuralnet/quoridornn.h"
 #include "../core/test.h"
 
 #include <algorithm>
@@ -24,6 +25,7 @@ NNResultBuf::NNResultBuf()
     errorLogLockout(false),
     // If no symmetry is specified, it will use default or random based on config.
     symmetry(NNInputs::SYMMETRY_NOTSPECIFIED),
+    quoridorSymmetry(0),
     policyOptimism(0.0)
 {}
 
@@ -36,8 +38,8 @@ NNServerBuf::NNServerBuf(const NNEvaluator& nnEval, const LoadedModel* model)
   :inputBuffers(NULL)
 {
   int maxBatchSize = nnEval.getMaxBatchSize();
-  int modelXLen = (nnEval.getInputsVersion() == 1 ? NNInputs::NN_X_LEN : nnEval.getNNXLen());
-  int modelYLen = (nnEval.getInputsVersion() == 1 ? NNInputs::NN_Y_LEN : nnEval.getNNYLen());
+  int modelXLen = QuoridorNN::MODEL_LEN;
+  int modelYLen = QuoridorNN::MODEL_LEN;
   if(model != NULL)
     inputBuffers = NeuralNet::createInputBuffers(model,maxBatchSize,modelXLen,modelYLen);
 }
@@ -142,10 +144,14 @@ NNEvaluator::NNEvaluator(
     const ModelDesc& desc = NeuralNet::getModelDesc(loadedModel);
     internalModelName = desc.name;
     modelVersion = desc.modelVersion;
-    inputsVersion = NNModelVersion::getInputsVersion(modelVersion);
+    inputsVersion = desc.quoridorIOVersion;
+    if(inputsVersion < 1 || inputsVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION)
+      throw StringError(
+        "KataQuoridor: model " + modelFileName + " has unsupported Quoridor I/O version " +
+        Global::intToString(inputsVersion) + " (model option D)");
     numInputMetaChannels = desc.numInputMetaChannels;
-    int modelXLen = (inputsVersion == 1 ? NNInputs::NN_X_LEN : nnXLen);
-    int modelYLen = (inputsVersion == 1 ? NNInputs::NN_Y_LEN : nnYLen);
+    int modelXLen = QuoridorNN::MODEL_LEN;
+    int modelYLen = QuoridorNN::MODEL_LEN;
     computeContext = NeuralNet::createComputeContext(
       gpuIdxs,logger,modelXLen,modelYLen,
       homeDataDirOverride,
@@ -159,7 +165,7 @@ NNEvaluator::NNEvaluator(
   else {
     internalModelName = "random";
     modelVersion = NNModelVersion::defaultModelVersion;
-    inputsVersion = NNModelVersion::getInputsVersion(modelVersion);
+    inputsVersion = QuoridorNN::MAX_SUPPORTED_IO_VERSION;
   }
 
   // Reserve a decent amount above the batch size so that allocation is unlikely.
@@ -484,23 +490,20 @@ void NNEvaluator::fillRowBufs(
   const MiscNNInputParams& nnInputParams,
   NNResultBuf& buf
 ) const {
-  int modelXLen = (inputsVersion == 1 ? NNInputs::NN_X_LEN : nnXLen);
-  int modelYLen = (inputsVersion == 1 ? NNInputs::NN_Y_LEN : nnYLen);
-  const int rowSpatialLen = NNModelVersion::getNumSpatialFeatures(modelVersion) * modelXLen * modelYLen;
+  const int modelXLen = QuoridorNN::MODEL_LEN;
+  const int modelYLen = QuoridorNN::MODEL_LEN;
+  const int rowSpatialLen = QuoridorNN::numSpatialFeatures(inputsVersion) * modelXLen * modelYLen;
   if(buf.rowSpatialBuf.size() < rowSpatialLen)
     buf.rowSpatialBuf.resize(rowSpatialLen);
-  const int rowGlobalLen = NNModelVersion::getNumGlobalFeatures(modelVersion);
+  const int rowGlobalLen = QuoridorNN::numGlobalFeatures(inputsVersion);
   if(buf.rowGlobalBuf.size() < rowGlobalLen)
     buf.rowGlobalBuf.resize(rowGlobalLen);
   const int rowMetaLen = numInputMetaChannels;
   if(buf.rowMetaBuf.size() < rowMetaLen)
     buf.rowMetaBuf.resize(rowMetaLen);
 
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
-  if(inputsVersion == 1)
-    NNInputs::fillRowV1(board, history, nextPlayer, nnInputParams, modelXLen, modelYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
-  else
-    ASSERT_UNREACHABLE;
+  QuoridorNN::fillRow(board, history, nextPlayer, nnInputParams, inputsVersion, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
+  // Symmetry (if any) is applied later, once it is finalized, in serve() - see applyInputSymmetry there.
 
   if(rowMetaLen > 0) {
     if(sgfMeta == NULL)
@@ -562,8 +565,8 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
   // SDPA) leniently, falling back to a custom kernel instead of failing hard. Restored when done.
   bool prevIsWarmup = NeuralNet::setIsWarmup(gpuHandle, true);
 
-  int modelXLen = (inputsVersion == 1 ? NNInputs::NN_X_LEN : nnXLen);
-  int modelYLen = (inputsVersion == 1 ? NNInputs::NN_Y_LEN : nnYLen);
+  int modelXLen = QuoridorNN::MODEL_LEN;
+  int modelYLen = QuoridorNN::MODEL_LEN;
   InputBuffers* inputBuffers = NeuralNet::createInputBuffers(loadedModel, maxBatchSize, modelXLen, modelYLen);
 
   // Reusable per-row input; identical for every row since it's an empty board.
@@ -865,7 +868,8 @@ void NNEvaluator::serve(
         resultBuf->result = std::make_shared<NNOutput>();
 
         float* policyProbs = resultBuf->result->policyProbs;
-        for(int i = 0; i < NNInputs::NN_POLICY_SIZE; i++) {
+        constexpr int rawPolicySize = QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
+        for(int i = 0; i < rawPolicySize; i++) {
           policyProbs[i] = (float)rand.nextGaussian();
         }
 
@@ -923,18 +927,19 @@ void NNEvaluator::serve(
         outputBuf.push_back(emptyOutput);
       }
 
+      // Quoridor has only two symmetries (identity and x-mirror: no transpose, no y-flip - the
+      // canonical row-flip for whose turn it is is already baked into QuoridorNN::fillRow).
       for(int row = 0; row<numRows; row++) {
         if(resultBufs[row]->symmetry == NNInputs::SYMMETRY_NOTSPECIFIED) {
-          if(inputsVersion == 1) {
-            resultBufs[row]->symmetry = doRandomize ? rand.nextUInt(2) : (defaultSymmetry >= 0 ? (defaultSymmetry % 2) : 0);
-          }
-          else if(doRandomize)
-            resultBufs[row]->symmetry = rand.nextUInt(SymmetryHelpers::NUM_SYMMETRIES);
-          else {
-            testAssert(defaultSymmetry >= 0 && defaultSymmetry <= SymmetryHelpers::NUM_SYMMETRIES-1);
-            resultBufs[row]->symmetry = defaultSymmetry;
-          }
+          resultBufs[row]->symmetry = doRandomize ? rand.nextUInt(2) : (defaultSymmetry >= 0 ? (defaultSymmetry % 2) : 0);
         }
+        // Physically mirror the already-filled input row for the resolved symmetry, then hand the
+        // backend identity (symmetry 0): the backend's generic copyInputsWithSymmetry /
+        // copyOutputsWithSymmetry don't know Quoridor's wall-anchor / E-W-swap semantics, only
+        // QuoridorNN::applyInputSymmetry and QuoridorNN::mapPolicyToSearch do.
+        resultBufs[row]->quoridorSymmetry = resultBufs[row]->symmetry;
+        QuoridorNN::applyInputSymmetry(resultBufs[row]->rowSpatialBuf.data(), inputsVersion, inputsUseNHWC, resultBufs[row]->symmetry);
+        resultBufs[row]->symmetry = 0;
       }
 
       NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
@@ -1054,7 +1059,8 @@ std::shared_ptr<NNOutput>* NNEvaluator::averageMultipleSymmetries(
   vector<std::shared_ptr<NNOutput>> ptrs;
   std::array<int, SymmetryHelpers::NUM_SYMMETRIES> symmetryIndexes;
   std::iota(symmetryIndexes.begin(), symmetryIndexes.end(), 0);
-  int numPossibleSymmetries = (inputsVersion == 1) ? 2 : SymmetryHelpers::NUM_SYMMETRIES;
+  // Quoridor only has 2 symmetries: identity and x-mirror.
+  int numPossibleSymmetries = 2;
   int numToSample = std::min(numSymmetriesToSample, numPossibleSymmetries);
   for(int i = 0; i<numToSample; i++) {
     std::swap(symmetryIndexes[i], symmetryIndexes[rand.nextInt(i,numPossibleSymmetries-1)]);
@@ -1103,6 +1109,9 @@ void NNEvaluator::evaluate(
 ) {
   testAssert(!isKilled);
   buf.hasResult = false;
+
+  if(includeOwnerMap)
+    throw StringError("KataQuoridor: ownership output is not implemented yet (roadmap Phase 1/2); refusing includeOwnerMap request");
 
   if(board.x_size > nnXLen || board.y_size > nnYLen)
     throw StringError("NNEvaluator was configured with nnXLen = " + Global::intToString(nnXLen) +
@@ -1192,10 +1201,11 @@ void NNEvaluator::evaluate(
   else {
     float* policy = buf.result->policyProbs;
 
-    if(inputsVersion == 1) {
-      float rawPolicy[NNInputs::NN_POLICY_SIZE];
-      std::copy(policy, policy + NNInputs::NN_POLICY_SIZE, rawPolicy);
-      NNInputs::applyPolicyMap(rawPolicy, nextPlayer, policy, buf.symmetry);
+    {
+      constexpr int rawPolicySize = QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
+      float rawPolicy[rawPolicySize];
+      std::copy(policy, policy + rawPolicySize, rawPolicy);
+      QuoridorNN::mapPolicyToSearch(rawPolicy, nextPlayer, policy, buf.quoridorSymmetry);
     }
 
     float policyOutputScaling = postProcessParams.outputScaleMultiplier / nnInputParams.nnPolicyTemperature;
@@ -1212,7 +1222,9 @@ void NNEvaluator::evaluate(
       isLegal[i] = history.isLegal(board,loc,nextPlayer);
     }
 
-    if(nnInputParams.avoidMYTDaggerHack && inputsVersion != 1 && xSize >= 13 && ySize >= 13) {
+    // avoidMYTDaggerHack is a Go-only anti-mirror heuristic; SearchParams::sanitizeForQuoridor()
+    // forces it off, so this branch is unreachable for Quoridor but kept generic for the backend.
+    if(nnInputParams.avoidMYTDaggerHack && xSize >= 13 && ySize >= 13) {
       for(int symmetry = 0; symmetry < 8; symmetry++) {
         Loc banned = Board::NULL_LOC;
         if(daggerMatch(board, nextPlayer, banned, symmetry)) {
@@ -1237,11 +1249,13 @@ void NNEvaluator::evaluate(
         maxPolicy = policyValue;
     }
 
-    if(legalCount == 0) {
-      for(int i = 0; i<policySize; i++)
-        policy[i] = -1.0f;
-    }
-    else {
+    // In Duel Quoridor, a position with no legal move for the side to move is unreachable under
+    // the no-full-block rule: for it to have none, both pawns would have to be sealed into a
+    // two-cell region containing at most one goal row, which means the wall that sealed it would
+    // have been illegal for the other player when placed. So this is a bug, not a real case to
+    // handle quietly.
+    testAssert(legalCount > 0);
+    {
       float policySum = 0.0f;
 
       if(nnInputParams.enablePassingHacks) {
@@ -1297,7 +1311,7 @@ void NNEvaluator::evaluate(
 
     // Fix up the value as well. Note that the neural net gives us back the value from the perspective
     // of the player so we need to negate that to make it the white value.
-    if(modelVersion <= 2 || inputsVersion == 1) {
+    if(modelVersion <= 2) {
       double winLogits = buf.result->whiteWinProb * postProcessParams.outputScaleMultiplier;
       double lossLogits = buf.result->whiteLossProb * postProcessParams.outputScaleMultiplier;
       double noResultLogits = buf.result->whiteNoResultProb * postProcessParams.outputScaleMultiplier;
@@ -1514,7 +1528,7 @@ void NNEvaluator::evaluate(
 
   // Postprocess ownermap
   if(buf.result->whiteOwnerMap != NULL) {
-    if(modelVersion >= 3 || inputsVersion == 1) {
+    if(modelVersion >= 3) {
       for(int pos = 0; pos<nnXLen*nnYLen; pos++) {
         int y = pos / nnXLen;
         int x = pos % nnXLen;
