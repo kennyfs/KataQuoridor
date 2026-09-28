@@ -10,6 +10,7 @@
 #include "../dataio/poswriter.h"
 #include "../dataio/files.h"
 #include "../dataio/trainingwrite.h"
+#include "../neuralnet/quoridornn.h"
 #include "../search/asyncbot.h"
 #include "../program/setup.h"
 #include "../program/playutils.h"
@@ -674,7 +675,7 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
 
   for(int f = 0; f < numFiles; f++) {
     TrainingWriteBuffers buffers(
-      inputsVersion, rowsPerFile, NNInputs::NUM_FEATURES_SPATIAL_V1, NNInputs::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+      inputsVersion, rowsPerFile, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
     );
 
     while(buffers.curRows < rowsPerFile) {

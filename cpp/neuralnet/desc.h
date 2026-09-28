@@ -424,6 +424,10 @@ struct PolicyHeadDesc {
   std::string name;
   int modelVersion;
   int policyOutChannels;
+  // KataQuoridor: number of policy planes per output channel (policy option A, spare slot claimed
+  // for Quoridor's {pawn, vertical wall, horizontal wall} policy layout). 1 for ordinary Go nets.
+  // Channel layout when > 1 is variant-major: channel = variant * numPolicyPlanes + plane.
+  int numPolicyPlanes;
   ConvLayerDesc p1Conv;
   ConvLayerDesc g1Conv;
   BatchNormLayerDesc g1BN;
@@ -518,6 +522,10 @@ struct ModelDesc {
   int numOwnershipChannels;
 
   int metaEncoderVersion;
+
+  // KataQuoridor: model option D, the v17 spare header slot claimed for the Quoridor I/O version
+  // (features + head semantics + policy layout). 0 means "not a Quoridor network".
+  int quoridorIOVersion;
 
   //True if the model expects its pass-alive area input features to be computed as if
   //multi-stone suicide were always legal, regardless of the actual suicide rule.

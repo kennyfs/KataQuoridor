@@ -3,6 +3,7 @@
 #include "../dataio/trainingwrite.h"
 #include "../dataio/sgf.h"
 #include "../neuralnet/nneval.h"
+#include "../neuralnet/quoridornn.h"
 #include "../program/playutils.h"
 #include "../program/play.h"
 
@@ -69,7 +70,7 @@ static void runReanalysisRowChannelsTest() {
   int nnXLen = 9;
   int nnYLen = 9;
   TrainingWriteBuffers buffers(
-    inputsVersion, maxRows, NNInputs::NUM_FEATURES_SPATIAL_V1, NNInputs::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+    inputsVersion, maxRows, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
   );
 
   Board board(17,17);
@@ -165,11 +166,11 @@ static void runQuoridorTrainingWriteTest() {
   int nnXLen = 9;
   int nnYLen = 9;
   TrainingWriteBuffers buffers(
-    inputsVersion, maxRows, NNInputs::NUM_FEATURES_SPATIAL_V1, NNInputs::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+    inputsVersion, maxRows, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
   );
 
   // 1. Verify buffer shapes
-  testAssert(buffers.policyTargetsNCMove.getActualDataLen(1) == 2 * NNInputs::NN_POLICY_SIZE); // 2 * 243
+  testAssert(buffers.policyTargetsNCMove.getActualDataLen(1) == 2 * (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN)); // 2 * 243
   testAssert(buffers.valueTargetsNCHW.getActualDataLen(1) == 4 * 9 * 9); // 4 * 81
   testAssert(buffers.globalTargetsNC.getActualDataLen(1) == 80);
 
@@ -259,14 +260,14 @@ static void runQuoridorTrainingWriteTest() {
   // Pawn (4, 7): rCanon = 7. slot = 0 * 81 + 7 * 9 + 4 = 67.
   // V-wall (2, 3): rCanon = 3. slot = 1 * 81 + 3 * 9 + 2 = 110.
   // H-wall (5, 1): rCanon = 1. slot = 2 * 81 + 1 * 9 + 5 = 176.
-  const int16_t* p0 = buffers.policyTargetsNCMove.data + 0 * 2 * NNInputs::NN_POLICY_SIZE;
+  const int16_t* p0 = buffers.policyTargetsNCMove.data + 0 * 2 * (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
   testAssert(p0[67] == 150);
   testAssert(p0[110] == 75);
   testAssert(p0[176] == 50);
 
   // Policy target 1 (opponent move at pawn (4, 1)):
   // From Black's canonical perspective: rCanon = 1. slot = 0 * 81 + 1 * 9 + 4 = 13.
-  const int16_t* p1 = p0 + NNInputs::NN_POLICY_SIZE;
+  const int16_t* p1 = p0 + (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
   testAssert(p1[13] == 120);
 
   // Value targets spatial (4 x 81)
@@ -325,7 +326,7 @@ static void runQuoridorTrainingWriteTest() {
     NULL, rand, ReanalysisData()
   );
 
-  const int16_t* pWhite = buffers.policyTargetsNCMove.data + 1 * 2 * NNInputs::NN_POLICY_SIZE;
+  const int16_t* pWhite = buffers.policyTargetsNCMove.data + 1 * 2 * (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
   testAssert(pWhite[67] == 200);
   testAssert(pWhite[119] == 80);
   testAssert(pWhite[221] == 60);

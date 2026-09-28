@@ -9,6 +9,7 @@
 #include "../neuralnet/modelversion.h"
 #include "../neuralnet/sgfmetadata.h"
 #include "../neuralnet/nninterface.h"
+#include "../neuralnet/quoridornn.h"
 
 #include "../core/test.h"
 
@@ -381,7 +382,7 @@ ActivationLayerDesc::ActivationLayerDesc() : name(), activation(ACTIVATION_RELU)
 
 ActivationLayerDesc::ActivationLayerDesc(istream& in, int modelVersion) {
   in >> name;
-  if(modelVersion >= 11 || modelVersion <= 1) {
+  if(modelVersion >= 11) {
     string kind;
     in >> kind;
     if(kind == "ACTIVATION_IDENTITY")
@@ -2046,7 +2047,7 @@ void TrunkDesc::releaseWeights() {
 
 //-----------------------------------------------------------------------------
 
-PolicyHeadDesc::PolicyHeadDesc() : modelVersion(-1) {}
+PolicyHeadDesc::PolicyHeadDesc() : modelVersion(-1), numPolicyPlanes(1) {}
 
 PolicyHeadDesc::PolicyHeadDesc(istream& in, int vrsn, bool binaryFloats) {
   in >> name;
@@ -2067,21 +2068,30 @@ PolicyHeadDesc::PolicyHeadDesc(istream& in, int vrsn, bool binaryFloats) {
     policyOutChannels = 4; // added q value predictions
   else if(modelVersion >= 12)
     policyOutChannels = 2;
-  else if(modelVersion <= 1)
-    policyOutChannels = 3;
   else
     policyOutChannels = 1;
 
   if(modelVersion >= 17) {
+    // KataQuoridor claims policy option A as numPolicyPlanes: the number of policy planes packed
+    // into each of policyOutChannels (0 means 1, i.e. an ordinary Go net with a single plane).
+    int numPolicyPlanesOpt = 0;
+    in >> numPolicyPlanesOpt;
+    if(in.fail())
+      throw StringError(name + ": model failed to parse policy option A (numPolicyPlanes)");
+    if(numPolicyPlanesOpt < 0)
+      throw StringError(name + ": policy option A (numPolicyPlanes) unexpected value: " + Global::intToString(numPolicyPlanesOpt));
+    numPolicyPlanes = (numPolicyPlanesOpt == 0) ? 1 : numPolicyPlanesOpt;
+
     int unused = 0;
-    in >> unused;
-    if(unused != 0) throw StringError(name + ": unknown/unsupported policy option A: " + Global::intToString(unused));
     in >> unused;
     if(unused != 0) throw StringError(name + ": unknown/unsupported policy option B: " + Global::intToString(unused));
     in >> unused;
     if(unused != 0) throw StringError(name + ": unknown/unsupported policy option C: " + Global::intToString(unused));
     if(in.fail())
       throw StringError(name + ": model failed to parse unused params");
+  }
+  else {
+    numPolicyPlanes = 1;
   }
 
   p1Conv = ConvLayerDesc(in,binaryFloats);
@@ -2136,13 +2146,9 @@ PolicyHeadDesc::PolicyHeadDesc(istream& in, int vrsn, bool binaryFloats) {
                ": gpoolToPassMul.inChannels (%d) != g1BN.numChannels*3 (%d)",
                gpoolToPassMul.inChannels,
                g1BN.numChannels * 3));
-  if(modelVersion <= 1) {
-    if(p2Conv.outChannels != policyOutChannels)
-      throw StringError(name + Global::strprintf(": p2Conv.outChannels (%d) != %d", p2Conv.outChannels, policyOutChannels));
-  }
-  else if(modelVersion >= 15) {
-    if(p2Conv.outChannels != policyOutChannels)
-      throw StringError(name + Global::strprintf(": p2Conv.outChannels (%d) != %d", p2Conv.outChannels, policyOutChannels));
+  if(modelVersion >= 15) {
+    if(p2Conv.outChannels != policyOutChannels * numPolicyPlanes)
+      throw StringError(name + Global::strprintf(": p2Conv.outChannels (%d) != %d * %d", p2Conv.outChannels, policyOutChannels, numPolicyPlanes));
     if(gpoolToPassMul.outChannels != gpoolToPassBias.numChannels)
       throw StringError(name + Global::strprintf(": gpoolToPassMul.outChannels (%d) != gpoolToPassBias.numChannels (%d)", gpoolToPassMul.outChannels, gpoolToPassBias.numChannels));
     if(gpoolToPassMul.outChannels != gpoolToPassMul2.inChannels)
@@ -2170,6 +2176,7 @@ PolicyHeadDesc& PolicyHeadDesc::operator=(PolicyHeadDesc&& other) {
   name = std::move(other.name);
   modelVersion = other.modelVersion;
   policyOutChannels = other.policyOutChannels;
+  numPolicyPlanes = other.numPolicyPlanes;
   p1Conv = std::move(other.p1Conv);
   g1Conv = std::move(other.g1Conv);
   g1BN = std::move(other.g1BN);
@@ -2298,10 +2305,10 @@ ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats) {
     throw StringError(
       name +
       Global::strprintf(": v2Mul.outChannels (%d) != v3Mul.inChannels (%d)", v2Mul.outChannels, v3Mul.inChannels));
-  if(v3Mul.outChannels != 3 && v3Mul.outChannels != 2)
-    throw StringError(name + Global::strprintf(": v3Mul.outChannels (%d) != 3 and != 2", v3Mul.outChannels));
-  if(v3Bias.numChannels != v3Mul.outChannels)
-    throw StringError(name + Global::strprintf(": v3Bias.numChannels (%d) != v3Mul.outChannels (%d)", v3Bias.numChannels, v3Mul.outChannels));
+  if(v3Mul.outChannels != 3)
+    throw StringError(name + Global::strprintf(": v3Mul.outChannels (%d) != 3", v3Mul.outChannels));
+  if(v3Bias.numChannels != 3)
+    throw StringError(name + Global::strprintf(": v3Bias.numChannels (%d) != 3", v3Bias.numChannels));
 
   if(sv3Mul.inChannels != v2Mul.outChannels)
     throw StringError(
@@ -2460,6 +2467,7 @@ ModelDesc::ModelDesc()
     numScoreValueChannels(0),
     numOwnershipChannels(0),
     metaEncoderVersion(0),
+    quoridorIOVersion(0),
     preferPassAliveUnderSuicideRules(false),
     preferExcludeTerritoryAdjacentToAtari(false),
     postProcessParams(),
@@ -2477,7 +2485,7 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
 
   if(modelVersion < 0)
     throw StringError("This neural net has an invalid version, you probably specified the wrong file. Supposed model version: " + Global::intToString(modelVersion));
-  if(modelVersion < NNModelVersion::oldestModelVersionImplemented)
+  if(modelVersion < 3)
     throw StringError("This neural net is from an extremely old version of KataGo and is no longer supported by the engine. Model version: " + Global::intToString(modelVersion));
   if(modelVersion > NNModelVersion::latestModelVersionImplemented)
     throw StringError("This neural net requires a newer KataGo version. Obtain a newer KataGo at https://github.com/lightvector/KataGo. Model version: " + Global::intToString(modelVersion));
@@ -2584,9 +2592,20 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
     //and the ONNX metadata block needs a matching required "katago." key in onnxmodelbuilder.cpp
     //plus a row in docs/ONNX_Model_Files.md. A .onnx model has no header to parse, so an option
     //left out of that block reads as its default instead of failing the way a spare slot does here.
+    // KataQuoridor claims option D as the Quoridor I/O version. 0 means "not a Quoridor network"
+    // (e.g. a Go network); anything above MAX_SUPPORTED_IO_VERSION is a newer I/O version than
+    // this engine build understands.
+    in >> quoridorIOVersion;
+    if(in.fail())
+      throw StringError(name + ": model failed to parse model option D (quoridorIOVersion)");
+    if(quoridorIOVersion == 0)
+      throw StringError(name + ": model option D (quoridorIOVersion) is 0: this is a Go network, not a KataQuoridor network");
+    if(quoridorIOVersion < 0 || quoridorIOVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION)
+      throw StringError(
+        name + ": model option D (quoridorIOVersion) unsupported, you may need a newer KataQuoridor version, value was: " +
+        Global::intToString(quoridorIOVersion));
+
     int unused = 0;
-    in >> unused;
-    if(unused != 0) throw StringError(name + ": unknown/unsupported model option D: " + Global::intToString(unused));
     in >> unused;
     if(unused != 0) throw StringError(name + ": unknown/unsupported model option E: " + Global::intToString(unused));
     in >> unused;
@@ -2600,6 +2619,7 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
   }
   else {
     metaEncoderVersion = 0;
+    quoridorIOVersion = 0;
     numInputMetaChannels = 0;
     preferPassAliveUnderSuicideRules = false;
     preferExcludeTerritoryAdjacentToAtari = false;
@@ -2611,8 +2631,8 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
 
   numPolicyChannels = policyHead.policyOutChannels;
   numValueChannels = valueHead.v3Mul.outChannels;
-  numScoreValueChannels = (modelVersion <= 1 ? 0 : valueHead.sv3Mul.outChannels);
-  numOwnershipChannels = (modelVersion <= 1 ? 0 : valueHead.vOwnershipConv.outChannels);
+  numScoreValueChannels = valueHead.sv3Mul.outChannels;
+  numOwnershipChannels = valueHead.vOwnershipConv.outChannels;
 
   if(in.fail())
     throw StringError(name + ": model desc istream fail after parsing model");
@@ -2668,6 +2688,7 @@ ModelDesc& ModelDesc::operator=(ModelDesc&& other) {
   numScoreValueChannels = other.numScoreValueChannels;
   numOwnershipChannels = other.numOwnershipChannels;
   metaEncoderVersion = other.metaEncoderVersion;
+  quoridorIOVersion = other.quoridorIOVersion;
   preferPassAliveUnderSuicideRules = other.preferPassAliveUnderSuicideRules;
   preferExcludeTerritoryAdjacentToAtari = other.preferExcludeTerritoryAdjacentToAtari;
   postProcessParams = other.postProcessParams;

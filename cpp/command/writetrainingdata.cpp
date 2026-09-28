@@ -9,6 +9,7 @@
 #include "../dataio/loadmodel.h"
 #include "../dataio/files.h"
 #include "../neuralnet/modelversion.h"
+#include "../neuralnet/quoridornn.h"
 #include "../program/setup.h"
 #include "../program/play.h"
 #include "../command/commandline.h"
@@ -690,10 +691,9 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
   if(dataBoardLen > Board::MAX_LEN)
     throw StringError("dataBoardLen > maximum board len, must recompile to increase");
 
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
-  const int inputsVersion = 1;
-  const int numBinaryChannels = NNInputs::NUM_FEATURES_SPATIAL_V1;
-  const int numGlobalChannels = NNInputs::NUM_FEATURES_GLOBAL_V1;
+  const int inputsVersion = QuoridorNN::MAX_SUPPORTED_IO_VERSION;
+  const int numBinaryChannels = QuoridorNN::NUM_FEATURES_SPATIAL_V1;
+  const int numGlobalChannels = QuoridorNN::NUM_FEATURES_GLOBAL_V1;
 
   const std::set<string> noTrainUsers = loadStrippedTxtFileLines(noTrainUsersFile);
   const std::set<string> onlyTrainUsers =

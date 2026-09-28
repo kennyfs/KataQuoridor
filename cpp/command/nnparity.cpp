@@ -4,7 +4,7 @@
  *
  *   katago dumpnninputs -n 200 -seed parity -output rows.npz
  *     Plays random games and writes, for a sample of non-terminal positions, the V1 input rows exactly as
- *     NNInputs::fillRowV1 produces them, the legal moves in search space, and the raw board state (so that
+ *     QuoridorNN::fillRow produces them, the legal moves in search space, and the raw board state (so that
  *     Python can re-derive the features and the legal moves independently).
  *
  *   katago evalnnparity -model x.bin.gz -n 200 -seed parity -symmetry 0 -output out.npz [-config ...]
@@ -24,6 +24,7 @@
 #include "../game/boardhistory.h"
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/nninputs.h"
+#include "../neuralnet/quoridornn.h"
 #include "../program/setup.h"
 #include "../command/commandline.h"
 #include "../main.h"
@@ -129,10 +130,11 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
     return 1;
   }
 
-  const int C = NNInputs::NUM_FEATURES_SPATIAL_V1;
-  const int G = NNInputs::NUM_FEATURES_GLOBAL_V1;
-  const int X = NNInputs::NN_X_LEN;
-  const int Y = NNInputs::NN_Y_LEN;
+  const int ioVersion = QuoridorNN::MAX_SUPPORTED_IO_VERSION;
+  const int C = QuoridorNN::numSpatialFeatures(ioVersion);
+  const int G = QuoridorNN::numGlobalFeatures(ioVersion);
+  const int X = QuoridorNN::MODEL_LEN;
+  const int Y = QuoridorNN::MODEL_LEN;
 
   vector<ParityPosition> positions = generatePositions(numRows, seed);
 
@@ -149,7 +151,7 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   for(int i = 0; i < numRows; i++) {
     const ParityPosition& p = positions[i];
     const Board& b = p.board;
-    NNInputs::fillRowV1(b, p.hist, p.pla, nnInputParams, X, Y, false, spatial.data + (size_t)i * C * X * Y, global.data + (size_t)i * G);
+    QuoridorNN::fillRow(b, p.hist, p.pla, nnInputParams, ioVersion, false, spatial.data + (size_t)i * C * X * Y, global.data + (size_t)i * G);
 
     for(int pos = 0; pos < POLICY_SIZE; pos++) {
       Loc loc = NNPos::posToLoc(pos, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN);
@@ -162,19 +164,14 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
     pawns.data[i * 4 + 3] = (int8_t)(Location::getY(b.whitePawnLoc, SEARCH_LEN) / 2);
     fencesLeft.data[i * 2 + 0] = (int8_t)b.blackFences;
     fencesLeft.data[i * 2 + 1] = (int8_t)b.whiteFences;
-    // Recover wall anchors from the history rather than from colors, since overlapping arms make the
-    // colors array ambiguous.
-    for(int k = 0; k < 64; k++) {
-      hWalls.data[(size_t)i * 64 + k] = 0;
-      vWalls.data[(size_t)i * 64 + k] = 0;
-    }
-    for(const Move& m : p.hist.moveHistory) {
-      int x = Location::getX(m.loc, SEARCH_LEN);
-      int y = Location::getY(m.loc, SEARCH_LEN);
-      if(Location::isHWallLoc(m.loc))
-        hWalls.data[(size_t)i * 64 + ((y - 1) / 2) * 8 + (x - 1) / 2] = 1;
-      else if(Location::isVWallLoc(m.loc))
-        vWalls.data[(size_t)i * 64 + (y / 2) * 8 + (x - 1) / 2] = 1;
+    // Read wall anchors straight from Board's explicit wall arrays (the single source of truth;
+    // see Board::vWalls/hWalls), rather than reconstructing from `colors`, which is ambiguous
+    // when the arms of neighboring walls touch.
+    for(int r = 0; r < 8; r++) {
+      for(int c = 0; c < 8; c++) {
+        hWalls.data[(size_t)i * 64 + r * 8 + c] = b.hWalls[c][r] ? 1 : 0;
+        vWalls.data[(size_t)i * 64 + r * 8 + c] = b.vWalls[c][r] ? 1 : 0;
+      }
     }
   }
 

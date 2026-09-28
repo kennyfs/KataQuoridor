@@ -8,6 +8,7 @@
 #include "../dataio/trainingwrite.h"
 #include "../dataio/loadmodel.h"
 #include "../neuralnet/modelversion.h"
+#include "../neuralnet/quoridornn.h"
 #include "../search/asyncbot.h"
 #include "../program/setup.h"
 #include "../program/play.h"
@@ -114,12 +115,13 @@ int MainCmds::selfplay(const vector<string>& args) {
   const int inputsVersion =
     cfg.contains("inputsVersion") ?
     cfg.getInt("inputsVersion",0,10000) :
-    NNModelVersion::getInputsVersion(NNModelVersion::defaultModelVersion);
-  //Width and height of the board to use when writing data, typically 9 for Quoridor
+    QuoridorNN::MAX_SUPPORTED_IO_VERSION;
+  //Width and height of the board to use when writing data: the model's 9x9 tensor space, not the
+  //17x17 search space.
   const int dataBoardLen =
     cfg.contains("dataBoardLen") ?
     cfg.getInt("dataBoardLen",3,Board::MAX_LEN) :
-    (inputsVersion == 1 ? NNInputs::NN_X_LEN : Board::MAX_LEN);
+    QuoridorNN::MODEL_LEN;
   //Max number of games that we will allow to be queued up and not written out
   const int maxDataQueueSize = cfg.getInt("maxDataQueueSize",1,1000000);
   const int maxRowsPerTrainFile = cfg.getInt("maxRowsPerTrainFile",1,100000000);
@@ -206,8 +208,10 @@ int MainCmds::selfplay(const vector<string>& args) {
     const string expectedSha256 = "";
 
     Rand rand;
-    int defaultNNXLen = (inputsVersion == 1) ? NNInputs::NN_X_LEN : maxBoardXSizeUsed;
-    int defaultNNYLen = (inputsVersion == 1) ? NNInputs::NN_Y_LEN : maxBoardYSizeUsed;
+    // nnXLen/nnYLen are the 17x17 search space; the model's 9x9 tensor space is handled
+    // internally by nneval via QuoridorNN::MODEL_LEN, decoupled from this.
+    int defaultNNXLen = maxBoardXSizeUsed;
+    int defaultNNYLen = maxBoardYSizeUsed;
     NNEvaluator* nnEval = Setup::initializeNNEvaluator(
       modelName,modelFile,expectedSha256,cfg,logger,rand,expectedConcurrentEvals,
       defaultNNXLen,defaultNNYLen,Setup::MaxBatchSizeRequest::requireFromConfig(),defaultRequireExactNNLen,disableFP16,

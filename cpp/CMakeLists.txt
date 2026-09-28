@@ -1027,6 +1027,7 @@ add_executable(katago
   dataio/homedata.cpp
   dataio/files.cpp
   neuralnet/nninputs.cpp
+  neuralnet/quoridornn.cpp
   neuralnet/sgfmetadata.cpp
   neuralnet/modelversion.cpp
   neuralnet/nneval.cpp

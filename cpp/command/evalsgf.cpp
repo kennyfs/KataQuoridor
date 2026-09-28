@@ -3,6 +3,7 @@
 #include "../core/timer.h"
 #include "../dataio/sgf.h"
 #include "../neuralnet/modelversion.h"
+#include "../neuralnet/quoridornn.h"
 #include "../search/asyncbot.h"
 #include "../search/searchnode.h"
 #include "../program/setup.h"
@@ -677,19 +678,19 @@ int MainCmds::evalsgf(const vector<string>& args) {
 
     if(dumpNpzInputTo != "") {
       bool inputsUseNHWC = false;
-      int nnXLen = nnEval->getNNXLen();
-      int nnYLen = nnEval->getNNYLen();
-      int modelVersion = nnEval->getModelVersion();
-      int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
-      int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
+      int ioVersion = nnEval->getInputsVersion();
+      int modelXLen = QuoridorNN::MODEL_LEN;
+      int modelYLen = QuoridorNN::MODEL_LEN;
+      int numSpatialFeatures = QuoridorNN::numSpatialFeatures(ioVersion);
+      int numGlobalFeatures = QuoridorNN::numGlobalFeatures(ioVersion);
 
-      NumpyBuffer<float> binaryInputNCHW(std::vector<int64_t>({1,numSpatialFeatures,nnXLen,nnYLen}));
+      NumpyBuffer<float> binaryInputNCHW(std::vector<int64_t>({1,numSpatialFeatures,modelXLen,modelYLen}));
       NumpyBuffer<float> globalInputNC(std::vector<int64_t>({1,numGlobalFeatures}));
 
       MiscNNInputParams nnInputParams;
       nnInputParams.symmetry = 0;
       nnInputParams.policyOptimism = params.rootPolicyOptimism;
-      NNInputs::fillRowV1(board, hist, nextPla, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, binaryInputNCHW.data, globalInputNC.data);
+      QuoridorNN::fillRow(board, hist, nextPla, nnInputParams, ioVersion, inputsUseNHWC, binaryInputNCHW.data, globalInputNC.data);
 
       ZipFile zipFile(dumpNpzInputTo);
       uint64_t numBytes;

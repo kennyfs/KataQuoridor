@@ -10,6 +10,7 @@
 #include "../game/rules.h"
 #include "../neuralnet/nninputs.h"
 #include "../neuralnet/modelversion.h"
+#include "../neuralnet/quoridornn.h"
 
 using namespace std;
 
@@ -20,10 +21,10 @@ static void testInitialBoardSpatialFeatures() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float rowSpatial[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float rowGlobal[NNInputs::NUM_FEATURES_GLOBAL_V1];
+  float rowSpatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float rowGlobal[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
 
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, rowSpatial, rowGlobal);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, rowSpatial, rowGlobal);
 
   auto getSpatial = [&](int c, int pos) -> float {
     return rowSpatial[c * 81 + pos];
@@ -174,16 +175,16 @@ static void testCanonicalYFlipInvariance() {
   BoardHistory histWhite(board, P_WHITE, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatialBlack[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float globalBlack[NNInputs::NUM_FEATURES_GLOBAL_V1];
-  float spatialWhite[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float globalWhite[NNInputs::NUM_FEATURES_GLOBAL_V1];
+  float spatialBlack[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float globalBlack[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float spatialWhite[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float globalWhite[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
 
-  NNInputs::fillRowV1(board, histBlack, P_BLACK, params, 9, 9, false, spatialBlack, globalBlack);
-  NNInputs::fillRowV1(board, histWhite, P_WHITE, params, 9, 9, false, spatialWhite, globalWhite);
+  QuoridorNN::fillRow(board, histBlack, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatialBlack, globalBlack);
+  QuoridorNN::fillRow(board, histWhite, P_WHITE, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatialWhite, globalWhite);
 
   // On an empty board, the canonical perspective makes Black to move and White to move completely symmetric!
-  for(int ch = 0; ch < NNInputs::NUM_FEATURES_SPATIAL_V1; ch++) {
+  for(int ch = 0; ch < QuoridorNN::NUM_FEATURES_SPATIAL_V1; ch++) {
     for(int pos = 0; pos < 81; pos++) {
       float bVal = spatialBlack[ch * 81 + pos];
       float wVal = spatialWhite[ch * 81 + pos];
@@ -204,9 +205,9 @@ static void testBFSDistanceFieldsAndOnPathMasks() {
   BoardHistory hist(board, P_WHITE, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatial[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float global[NNInputs::NUM_FEATURES_GLOBAL_V1];
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, spatial, global);
+  float spatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float global[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
 
   auto getSpatial = [&](int c, int pos) -> float {
     return spatial[c * 81 + pos];
@@ -253,47 +254,47 @@ static void testActionParityInvariance() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatial[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float global[NNInputs::NUM_FEATURES_GLOBAL_V1];
+  float spatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float global[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
 
   // 1. Initial position: Black at (4, 8), White at (4, 0).
   // dist = |4 - 4| + |8 - 0| = 8 (even) -> Black (nextPlayer) does NOT have jump tempo -> -1.0f
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[12] == -1.0f);
 
   // 2. Black moves pawn North to (4, 7): dist = 7 (odd)
   // White is nextPlayer -> White HAS jump tempo -> +1.0f
   Loc m1 = Location::pawnLoc(4, 7, board.x_size);
   hist.makeBoardMoveAssumeLegal(board, m1, P_BLACK, NULL);
-  NNInputs::fillRowV1(board, hist, P_WHITE, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_WHITE, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[12] == 1.0f);
 
   // 3. White moves pawn South to (4, 1): dist = 6 (even)
   // Black is nextPlayer -> Black does NOT have jump tempo -> -1.0f
   Loc m2 = Location::pawnLoc(4, 1, board.x_size);
   hist.makeBoardMoveAssumeLegal(board, m2, P_WHITE, NULL);
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[12] == -1.0f);
 
   // 4. Black places a horizontal wall: pawns unchanged, dist = 6 (even)
   // White is nextPlayer -> dist is even, so White does NOT have jump tempo -> -1.0f
   Loc m3 = Location::hWallLoc(0, 0, board.x_size);
   hist.makeBoardMoveAssumeLegal(board, m3, P_BLACK, NULL);
-  NNInputs::fillRowV1(board, hist, P_WHITE, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_WHITE, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[12] == -1.0f);
 
   // 5. White places another wall: dist = 6 (even)
   // Black is nextPlayer -> dist is even -> Black does NOT have jump tempo -> -1.0f
   Loc m4 = Location::vWallLoc(7, 7, board.x_size);
   hist.makeBoardMoveAssumeLegal(board, m4, P_WHITE, NULL);
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[12] == -1.0f);
 
   // 6. Black moves pawn to (4, 6): dist = 5 (odd)
   // White is nextPlayer -> dist is odd -> White HAS jump tempo -> +1.0f
   Loc m5 = Location::pawnLoc(4, 6, board.x_size);
   hist.makeBoardMoveAssumeLegal(board, m5, P_BLACK, NULL);
-  NNInputs::fillRowV1(board, hist, P_WHITE, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_WHITE, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[12] == 1.0f);
 }
 
@@ -304,10 +305,10 @@ static void testGlobalFeaturesValues() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatial[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float global[NNInputs::NUM_FEATURES_GLOBAL_V1];
+  float spatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float global[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
 
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
 
   testAssert(global[0] == 0.0f); // Next player is Black
   testAssert(global[1] == 1.0f); // My fences = 10 / 10 = 1.0
@@ -328,7 +329,7 @@ static void testGlobalFeaturesValues() {
   // Exhaust all fences
   board.blackFences = 0;
   board.whiteFences = 0;
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, spatial, global);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
   testAssert(global[1] == 0.0f);
   testAssert(global[2] == 0.0f);
   testAssert(global[3] == 0.0f);
@@ -344,15 +345,15 @@ static void testGlobalFeaturesValues() {
 
 static void testPolicyScatterAndInverseMapping() {
   cout << "Running testPolicyScatterAndInverseMapping..." << endl;
-  float rawPolicy[NNInputs::NN_POLICY_SIZE];
-  for(int i = 0; i < NNInputs::NN_POLICY_SIZE; i++) {
+  float rawPolicy[(QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN)];
+  for(int i = 0; i < (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN); i++) {
     rawPolicy[i] = 100.0f + (float)i;
   }
 
   float policyProbs[NNPos::MAX_NN_POLICY_SIZE];
 
   // 1. Black to move
-  NNInputs::applyPolicyMap(rawPolicy, P_BLACK, policyProbs);
+  QuoridorNN::mapPolicyToSearch(rawPolicy, P_BLACK, policyProbs, 0);
 
   // Check Plane 0 (Pawn moves)
   for(int r = 0; r < 9; r++) {
@@ -385,7 +386,7 @@ static void testPolicyScatterAndInverseMapping() {
   testAssert(policyProbs[289] == -1e30f);
 
   // 2. White to move (inversion)
-  NNInputs::applyPolicyMap(rawPolicy, P_WHITE, policyProbs);
+  QuoridorNN::mapPolicyToSearch(rawPolicy, P_WHITE, policyProbs, 0);
 
   // For White: pawn (c, r) comes from rawPolicy at (c, 8 - r)
   for(int r = 0; r < 9; r++) {
@@ -422,23 +423,23 @@ static void testMemoryLayoutNHWCvsNCHW() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float rowNCHW[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float rowNHWC[NNInputs::NUM_FEATURES_SPATIAL_V1 * 81];
-  float rowGlobalNCHW[NNInputs::NUM_FEATURES_GLOBAL_V1];
-  float rowGlobalNHWC[NNInputs::NUM_FEATURES_GLOBAL_V1];
+  float rowNCHW[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float rowNHWC[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+  float rowGlobalNCHW[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float rowGlobalNHWC[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
 
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, false, rowNCHW, rowGlobalNCHW);
-  NNInputs::fillRowV1(board, hist, P_BLACK, params, 9, 9, true, rowNHWC, rowGlobalNHWC);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, rowNCHW, rowGlobalNCHW);
+  QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, true, rowNHWC, rowGlobalNHWC);
 
-  for(int ch = 0; ch < NNInputs::NUM_FEATURES_SPATIAL_V1; ch++) {
+  for(int ch = 0; ch < QuoridorNN::NUM_FEATURES_SPATIAL_V1; ch++) {
     for(int pos = 0; pos < 81; pos++) {
       float nchwVal = rowNCHW[ch * 81 + pos];
-      float nhwcVal = rowNHWC[pos * NNInputs::NUM_FEATURES_SPATIAL_V1 + ch];
+      float nhwcVal = rowNHWC[pos * QuoridorNN::NUM_FEATURES_SPATIAL_V1 + ch];
       testAssert(nchwVal == nhwcVal);
     }
   }
 
-  for(int g = 0; g < NNInputs::NUM_FEATURES_GLOBAL_V1; g++) {
+  for(int g = 0; g < QuoridorNN::NUM_FEATURES_GLOBAL_V1; g++) {
     testAssert(rowGlobalNCHW[g] == rowGlobalNHWC[g]);
   }
 }

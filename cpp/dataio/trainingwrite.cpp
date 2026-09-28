@@ -3,6 +3,7 @@
 #include "../core/fileutils.h"
 #include "../core/test.h"
 #include "../neuralnet/modelversion.h"
+#include "../neuralnet/quoridornn.h"
 
 using namespace std;
 
@@ -291,11 +292,11 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    binaryInputNCHWUnpacked(NULL),
    binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
    globalInputNC({maxRws, numFChannels}),
-   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, (iVersion == 1 ? NNInputs::NN_POLICY_SIZE : NNPos::getPolicySize(xLen,yLen))}),
+   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, (iVersion == 1 ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(xLen,yLen))}),
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
    scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
    valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
-   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, (iVersion == 1 ? NNInputs::NN_POLICY_SIZE : NNPos::getPolicySize(xLen,yLen))}),
+   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, (iVersion == 1 ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(xLen,yLen))}),
    metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS})
 {
   binaryInputNCHWUnpacked = new float[numBChannels * xLen * yLen];
@@ -356,7 +357,7 @@ static void fillPolicyTarget(const vector<PolicyTargetMove>& policyTargetMoves, 
 }
 
 static void fillPolicyTargetQuoridor(const vector<PolicyTargetMove>& policyTargetMoves, int policySize, int boardXSize, Player nextPlayer, int16_t* target) {
-  testAssert(policySize == NNInputs::NN_POLICY_SIZE);
+  testAssert(policySize == (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN));
   zeroPolicyTarget(policySize, target);
   size_t size = policyTargetMoves.size();
   for(size_t i = 0; i < size; i++) {
@@ -523,8 +524,7 @@ void TrainingWriteBuffers::addRow(
   Rand& rand,
   const ReanalysisData& reanalysisData
 ) {
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
-  if(inputsVersion < 1 || inputsVersion > 1)
+  if(inputsVersion < 1 || inputsVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION)
     throw StringError("Training write buffers: Does not support input version: " + Global::intToString(inputsVersion));
 
   int posArea = dataXLen*dataYLen;
@@ -544,11 +544,10 @@ void TrainingWriteBuffers::addRow(
     bool inputsUseNHWC = false;
     float* rowBin = binaryInputNCHWUnpacked;
     float* rowGlobal = globalInputNC.data + curRows * numGlobalChannels;
-    static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
     if(inputsVersion == 1) {
-      testAssert(NNInputs::NUM_FEATURES_SPATIAL_V1 == numBinaryChannels);
-      testAssert(NNInputs::NUM_FEATURES_GLOBAL_V1 == numGlobalChannels);
-      NNInputs::fillRowV1(board, hist, nextPlayer, nnInputParams, dataXLen, dataYLen, inputsUseNHWC, rowBin, rowGlobal);
+      testAssert(QuoridorNN::NUM_FEATURES_SPATIAL_V1 == numBinaryChannels);
+      testAssert(QuoridorNN::NUM_FEATURES_GLOBAL_V1 == numGlobalChannels);
+      QuoridorNN::fillRow(board, hist, nextPlayer, nnInputParams, inputsVersion, inputsUseNHWC, rowBin, rowGlobal);
     }
     else
       ASSERT_UNREACHABLE;
@@ -566,7 +565,7 @@ void TrainingWriteBuffers::addRow(
   rowGlobal[25] = targetWeight;
 
   //Fill policy
-  const int policySize = (inputsVersion == 1) ? NNInputs::NN_POLICY_SIZE : NNPos::getPolicySize(dataXLen,dataYLen);
+  const int policySize = (inputsVersion == 1) ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(dataXLen,dataYLen);
   int16_t* rowPolicy = policyTargetsNCMove.data + curRows * POLICY_TARGET_NUM_CHANNELS * policySize;
 
   if(inputsVersion == 1) {
@@ -821,21 +820,16 @@ void TrainingWriteBuffers::addRow(
 
       // Channel 2: Terminal Vertical Wall anchors
       // Channel 3: Terminal Horizontal Wall anchors
+      // Read straight from Board's explicit wall arrays (the single source of truth), rather than
+      // reconstructing from `colors`, which is ambiguous when neighboring walls' arms touch.
       const Board& finalB = boards.back();
       for(int r = 0; r < 8; r++) {
         for(int c = 0; c < 8; c++) {
-          Loc center = Location::hWallLoc(c, r, finalB.x_size);
-          if(finalB.colors[center] == C_FENCE) {
-            int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
-            Loc top = center + finalB.adj_offsets[0];
-            if(finalB.colors[top] == C_FENCE) {
-              rowOwnership[2 * posArea + rCanon * 9 + c] = 1;
-            }
-            Loc left = center + finalB.adj_offsets[1];
-            if(finalB.colors[left] == C_FENCE) {
-              rowOwnership[3 * posArea + rCanon * 9 + c] = 1;
-            }
-          }
+          int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+          if(finalB.vWalls[c][r])
+            rowOwnership[2 * posArea + rCanon * 9 + c] = 1;
+          if(finalB.hWalls[c][r])
+            rowOwnership[3 * posArea + rCanon * 9 + c] = 1;
         }
       }
     }
@@ -1135,10 +1129,9 @@ TrainingDataWriter::TrainingDataWriter(const string& outDir, ostream* dbgOut, in
   int numGlobalChannels;
   //Note that this inputsVersion is for data writing, it might be different than the inputsVersion used
   //to feed into a model during selfplay
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 1, "");
   if(inputsVersion == 1) {
-    numBinaryChannels = NNInputs::NUM_FEATURES_SPATIAL_V1;
-    numGlobalChannels = NNInputs::NUM_FEATURES_GLOBAL_V1;
+    numBinaryChannels = QuoridorNN::NUM_FEATURES_SPATIAL_V1;
+    numGlobalChannels = QuoridorNN::NUM_FEATURES_GLOBAL_V1;
   }
   else {
     throw StringError("TrainingDataWriter: Unsupported inputs version: " + Global::intToString(inputsVersion));

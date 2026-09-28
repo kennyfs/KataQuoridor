@@ -89,28 +89,28 @@ struct MiscNNInputParams {
 };
 
 namespace NNInputs {
-  constexpr int NUM_FEATURES_SPATIAL_V1 = 17;
-  constexpr int NUM_FEATURES_GLOBAL_V1 = 15;
-  constexpr int NN_X_LEN = 9;
-  constexpr int NN_Y_LEN = 9;
-  constexpr int NN_POLICY_SIZE = 3 * NN_X_LEN * NN_Y_LEN; // 243
+  // Kept only so that modelversion.cpp's generic (untouched, upstream) architecture-version
+  // tables still compile; KataQuoridor's own featurization lives in QuoridorNN and doesn't use
+  // these. The actual Go V3-V7 fillRow implementations were deleted; only the size constants
+  // remain, matching upstream KataGo fd0723f.
+  const int NUM_FEATURES_SPATIAL_V3 = 22;
+  const int NUM_FEATURES_GLOBAL_V3 = 14;
+
+  const int NUM_FEATURES_SPATIAL_V4 = 22;
+  const int NUM_FEATURES_GLOBAL_V4 = 14;
+
+  const int NUM_FEATURES_SPATIAL_V5 = 13;
+  const int NUM_FEATURES_GLOBAL_V5 = 12;
+
+  const int NUM_FEATURES_SPATIAL_V6 = 22;
+  const int NUM_FEATURES_GLOBAL_V6 = 16;
+
+  const int NUM_FEATURES_SPATIAL_V7 = 22;
+  const int NUM_FEATURES_GLOBAL_V7 = 19;
 
   Hash128 getHash(
     const Board& board, const BoardHistory& boardHistory, Player nextPlayer,
     const MiscNNInputParams& nnInputParams
-  );
-
-  void fillRowV1(
-    const Board& board, const BoardHistory& boardHistory, Player nextPlayer,
-    const MiscNNInputParams& nnInputParams, int nnXLen, int nnYLen, bool useNHWC, float* rowBin, float* rowGlobal
-  );
-
-  // Transform 243(3*9*9)-dim policy to 290(17*17+1)-dim for search
-  void applyPolicyMap(
-    const float* rawPolicy243,
-    Player nextPlayer,
-    float* policyProbs290,
-    int symmetry = 0
   );
 
   // Backward compatibility alias / stub
