@@ -2295,8 +2295,14 @@ struct InputBuffers {
     singleScoreValueResultElts = (size_t)m.numScoreValueChannels;
     singleOwnershipResultElts = (size_t)m.numOwnershipChannels * nnXLen * nnYLen;
 
-    testAssert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
-    testAssert(NNModelVersion::getNumGlobalFeatures(m.modelVersion) == m.numInputGlobalChannels);
+    // KataQuoridor: for a Go net, numInputChannels/numInputGlobalChannels are a fixed function of
+    // modelVersion (this is what the assert below checks). For a Quoridor net, they're instead a
+    // function of the independent quoridorIOVersion (currently always 17/15), so the assert
+    // doesn't apply.
+    if(m.quoridorIOVersion == 0) {
+      testAssert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
+      testAssert(NNModelVersion::getNumGlobalFeatures(m.modelVersion) == m.numInputGlobalChannels);
+    }
     if(m.numInputMetaChannels > 0) {
       testAssert(SGFMetadata::METADATA_INPUT_NUM_CHANNELS == m.numInputMetaChannels);
     }
@@ -2464,10 +2470,13 @@ void NeuralNet::getOutput(
   const int nnYLen = computeHandle->context->nnYLen;
   const int modelVersion = computeHandle->model->modelVersion;
 
-  const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
-  const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
+  // KataQuoridor: for a Go net these equal NNModelVersion::getNumSpatialFeatures/
+  // getNumGlobalFeatures(modelVersion); for a Quoridor net numInputChannels/numInputGlobalChannels
+  // come from quoridorIOVersion instead, independent of modelVersion (see the matching comment in
+  // InputBuffers's constructor above). Reading them directly off the model here works for both.
+  const int numSpatialFeatures = computeHandle->model->numInputChannels;
+  const int numGlobalFeatures = computeHandle->model->numInputGlobalChannels;
   const int numMetaFeatures = inputBuffers->singleInputMetaElts;
-  assert(numSpatialFeatures == computeHandle->model->numInputChannels);
   assert(numSpatialFeatures * nnXLen * nnYLen == inputBuffers->singleInputElts);
   assert(numGlobalFeatures == inputBuffers->singleInputGlobalElts);
   const int numPolicyChannels = computeHandle->model->numPolicyChannels;

@@ -1110,9 +1110,6 @@ void NNEvaluator::evaluate(
   testAssert(!isKilled);
   buf.hasResult = false;
 
-  if(includeOwnerMap)
-    throw StringError("KataQuoridor: ownership output is not implemented yet (roadmap Phase 1/2); refusing includeOwnerMap request");
-
   if(board.x_size > nnXLen || board.y_size > nnYLen)
     throw StringError("NNEvaluator was configured with nnXLen = " + Global::intToString(nnXLen) +
                       " nnYLen = " + Global::intToString(nnYLen) +
@@ -1526,27 +1523,19 @@ void NNEvaluator::evaluate(
     }
   }
 
-  // Postprocess ownermap
+  // Postprocess ownermap.
+  //
+  // KataQuoridor: ownership isn't implemented (roadmap Phase 1/2 defers mapping the model's 9x9
+  // ownership output to the 17x17 search space that whiteOwnerMap is laid out in). Search always
+  // requests it for the root node regardless of whether anyone asked for analysis output
+  // (searchnnhelpers.cpp: `includeOwnerMap = isRoot || alwaysIncludeOwnerMap`), so refusing the
+  // request outright (an earlier version of this code threw here) crashes every search. The
+  // backend still writes its raw 9x9 output into the start of this 17x17-sized buffer (harmless:
+  // 81 < 289, so no overrun, just wrong layout), so zero the whole thing afterwards rather than
+  // reading it as if it were already in search space.
   if(buf.result->whiteOwnerMap != NULL) {
-    if(modelVersion >= 3) {
-      for(int pos = 0; pos<nnXLen*nnYLen; pos++) {
-        int y = pos / nnXLen;
-        int x = pos % nnXLen;
-        if(y >= board.y_size || x >= board.x_size)
-          buf.result->whiteOwnerMap[pos] = 0.0f;
-        else {
-          // Similarly as mentioned above, the result we get back from the net is actually not from white's perspective,
-          // but from the player to move, so we need to flip it to make it white at the same time as we tanh it.
-          if(nextPlayer == P_WHITE)
-            buf.result->whiteOwnerMap[pos] = tanh(buf.result->whiteOwnerMap[pos] * postProcessParams.outputScaleMultiplier);
-          else
-            buf.result->whiteOwnerMap[pos] = -tanh(buf.result->whiteOwnerMap[pos] * postProcessParams.outputScaleMultiplier);
-        }
-      }
-    }
-    else {
-      throw StringError("NNEval value postprocessing not implemented for model version");
-    }
+    for(int pos = 0; pos<nnXLen*nnYLen; pos++)
+      buf.result->whiteOwnerMap[pos] = 0.0f;
   }
 
 
