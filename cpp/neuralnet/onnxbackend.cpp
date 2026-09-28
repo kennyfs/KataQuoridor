@@ -1024,8 +1024,8 @@ void NeuralNet::getOutput(
   int maskIdx = findNameIndex(gpuHandle->inputNames, {"InputMask"});
   int spatialIdx = findNameIndex(gpuHandle->inputNames, {"InputSpatial"});
   int globalIdx = findNameIndex(gpuHandle->inputNames, {"InputGlobal"});
-  if(spatialIdx < 0 || globalIdx < 0 || (modelVersion > 1 && maskIdx < 0))
-    throw StringError("ONNX backend: graph is missing expected inputs InputSpatial/InputGlobal (or InputMask)");
+  if(maskIdx < 0 || spatialIdx < 0 || globalIdx < 0)
+    throw StringError("ONNX backend: graph is missing expected inputs InputMask/InputSpatial/InputGlobal");
   int metaIdx = -1;
   if(numMetaFeatures > 0) {
     metaIdx = findNameIndex(gpuHandle->inputNames, {"InputMeta"});
@@ -1062,30 +1062,22 @@ void NeuralNet::getOutput(
   int valueIdx = findNameIndex(gpuHandle->outputNames, {"OutputValue"});
   int scoreValueIdx = findNameIndex(gpuHandle->outputNames, {"OutputScoreValue"});
   int ownershipIdx = findNameIndex(gpuHandle->outputNames, {"OutputOwnership"});
-  if(modelVersion <= 1) {
-    if(policyIdx < 0 || valueIdx < 0)
-      throw StringError("ONNX backend: graph is missing expected outputs (OutputPolicy/OutputValue)");
-  }
-  else {
-    if(policyPassIdx < 0 || policyIdx < 0 || valueIdx < 0 || scoreValueIdx < 0 || ownershipIdx < 0)
-      throw StringError(
-        "ONNX backend: graph is missing expected outputs "
-        "(OutputPolicyPass/OutputPolicy/OutputValue/OutputScoreValue/OutputOwnership)");
-  }
+  if(policyPassIdx < 0 || policyIdx < 0 || valueIdx < 0 || scoreValueIdx < 0 || ownershipIdx < 0)
+    throw StringError(
+      "ONNX backend: graph is missing expected outputs "
+      "(OutputPolicyPass/OutputPolicy/OutputValue/OutputScoreValue/OutputOwnership)");
 
-  const float* policyPassData = policyPassIdx >= 0 ? outputTensors[policyPassIdx].GetTensorData<float>() : nullptr;
+  const float* policyPassData = outputTensors[policyPassIdx].GetTensorData<float>();
   const float* policyData = outputTensors[policyIdx].GetTensorData<float>();
   const float* valueData = outputTensors[valueIdx].GetTensorData<float>();
-  const float* scoreValueData = scoreValueIdx >= 0 ? outputTensors[scoreValueIdx].GetTensorData<float>() : nullptr;
-  const float* ownershipData = ownershipIdx >= 0 ? outputTensors[ownershipIdx].GetTensorData<float>() : nullptr;
+  const float* scoreValueData = outputTensors[scoreValueIdx].GetTensorData<float>();
+  const float* ownershipData = outputTensors[ownershipIdx].GetTensorData<float>();
 
-  if(modelVersion > 1) {
-    assert(policyPassData != nullptr);
-    assert(scoreValueData != nullptr);
-    assert(ownershipData != nullptr);
-  }
+  assert(policyPassData != nullptr);
   assert(policyData != nullptr);
   assert(valueData != nullptr);
+  assert(scoreValueData != nullptr);
+  assert(ownershipData != nullptr);
   assert((int)outputs.size() == batchSize);
 
   const int numPolicyChannels = (int)inputBuffers->singlePolicyPassResultElts;
@@ -1105,15 +1097,11 @@ void NeuralNet::getOutput(
 
     // Policy: OutputPolicyPass is [N, numPolicyChannels, 1, 1] and OutputPolicy is [N, numPolicyChannels, H, W].
     {
-      const float* policyPassSrcBuf = policyPassData != nullptr ? (policyPassData + row * numPolicyChannels) : nullptr;
+      const float* policyPassSrcBuf = policyPassData + row * numPolicyChannels;
       const float* policySrcBuf = policyData + row * numPolicyChannels * nnXLen * nnYLen;
       float* policyProbs = output->policyProbs;
 
-      if(modelVersion <= 1) {
-        assert(numPolicyChannels == 3);
-        std::copy(policySrcBuf, policySrcBuf + 3 * nnXLen * nnYLen, policyProbs);
-      }
-      else if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
+      if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
         // NCHW: channel 0 = base logits, channel 1 = optimism logits.
         for(int i = 0; i < nnXLen * nnYLen; i++) {
           float p = policySrcBuf[i];
@@ -1122,7 +1110,6 @@ void NeuralNet::getOutput(
         }
         SymmetryHelpers::copyOutputsWithSymmetry(
           policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-        assert(policyPassSrcBuf != nullptr);
         policyProbs[nnXLen * nnYLen] =
           policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
       }
@@ -1130,28 +1117,20 @@ void NeuralNet::getOutput(
         assert(numPolicyChannels == 1);
         SymmetryHelpers::copyOutputsWithSymmetry(
           policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-        assert(policyPassSrcBuf != nullptr);
         policyProbs[nnXLen * nnYLen] = policyPassSrcBuf[0];
       }
     }
 
-    // Value: [N, 3, 1, 1] raw categorical logits (win/loss/noresult) or [N, 2, 1, 1] (win/loss)
+    // Value: [N, 3, 1, 1] raw categorical logits (win/loss/noresult).
     {
-      if(numValueChannels == 2) {
-        output->whiteWinProb = valueData[row * numValueChannels];
-        output->whiteLossProb = valueData[row * numValueChannels + 1];
-        output->whiteNoResultProb = -1e30f;
-      }
-      else {
-        assert(numValueChannels == 3);
-        output->whiteWinProb = valueData[row * numValueChannels];
-        output->whiteLossProb = valueData[row * numValueChannels + 1];
-        output->whiteNoResultProb = valueData[row * numValueChannels + 2];
-      }
+      assert(numValueChannels == 3);
+      output->whiteWinProb = valueData[row * numValueChannels];
+      output->whiteLossProb = valueData[row * numValueChannels + 1];
+      output->whiteNoResultProb = valueData[row * numValueChannels + 2];
     }
 
     // Ownership: [N, 1, H, W] raw, inverse-symmetried back to canonical orientation.
-    if(output->whiteOwnerMap != NULL && ownershipData != nullptr) {
+    if(output->whiteOwnerMap != NULL) {
       assert(inputBuffers->singleOwnershipResultElts == (size_t)nnXLen * nnYLen);
       const float* ownershipSrcBuf = ownershipData + row * nnXLen * nnYLen;
       SymmetryHelpers::copyOutputsWithSymmetry(
@@ -1160,15 +1139,7 @@ void NeuralNet::getOutput(
 
     // ScoreValue: [N, numScoreValueChannels, 1, 1] raw, version-dependent channel interpretation.
     {
-      if(modelVersion <= 1) {
-        output->whiteScoreMean = 0;
-        output->whiteScoreMeanSq = 0;
-        output->whiteLead = 0;
-        output->varTimeLeft = 0;
-        output->shorttermWinlossError = 0;
-        output->shorttermScoreError = 0;
-      }
-      else if(modelVersion >= 9) {
+      if(modelVersion >= 9) {
         assert(numScoreValueChannels == 6);
         output->whiteScoreMean = scoreValueData[row * numScoreValueChannels];
         output->whiteScoreMeanSq = scoreValueData[row * numScoreValueChannels + 1];

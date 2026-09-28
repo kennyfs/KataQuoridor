@@ -4243,10 +4243,7 @@ struct PolicyHead {
     p1BN.apply(cudaHandles,batchSize,p1OutBufA,maskFloatBuf,p1OutBufB);
     p2Conv.apply(cudaHandles,scratch,batchSize,false,p1OutBufB,(float*)policyBuf,workspaceBuf,workspaceBytes);
 
-    if(modelVersion <= 1) {
-      // Quoridor has no pass move
-    }
-    else if(modelVersion >= 15) {
+    if(modelVersion >= 15) {
       gpoolToPassMul.apply(cudaHandles,scratch,batchSize,g1Concat.buf,p1Pass.buf,workspaceBuf,workspaceBytes);
       gpoolToPassBias.apply(cudaHandles,batchSize,p1Pass.buf);
       gpoolToPassMul2.apply(cudaHandles,scratch,batchSize,p1Pass.buf,policyPassBuf,workspaceBuf,workspaceBytes);
@@ -4310,8 +4307,8 @@ struct ValueHead {
     v1Channels(desc->v1Conv.outChannels),
     v2Channels(desc->v2Mul.outChannels),
     valueChannels(desc->v3Mul.outChannels),
-    scoreValueChannels(desc->modelVersion <= 1 ? 0 : desc->sv3Mul.outChannels),
-    ownershipChannels(desc->modelVersion <= 1 ? 0 : desc->vOwnershipConv.outChannels),
+    scoreValueChannels(desc->sv3Mul.outChannels),
+    ownershipChannels(desc->vOwnershipConv.outChannels),
     usingFP16(useFP16),
     usingNHWC(useNHWC),
     v1Conv(cudaHandles,manager,&desc->v1Conv,useFP16,useNHWC),
@@ -4397,18 +4394,22 @@ struct ValueHead {
     v3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,valueBuf,workspaceBuf,workspaceBytes);
     v3Bias.apply(cudaHandles,batchSize,valueBuf);
 
-    if(modelVersion > 1) {
-      sv3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,scoreValueBuf,workspaceBuf,workspaceBytes);
-      sv3Bias.apply(cudaHandles,batchSize,scoreValueBuf);
+    sv3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,scoreValueBuf,workspaceBuf,workspaceBytes);
+    sv3Bias.apply(cudaHandles,batchSize,scoreValueBuf);
 
-      if(!usingFP16) {
-        vOwnershipConv.apply(cudaHandles,scratch,batchSize,false,v1Out2.buf,ownershipBuf,workspaceBuf,workspaceBytes);
-      }
-      else {
-        vOwnershipConv.apply(cudaHandles,scratch,batchSize,false,v1Out2.buf,ownershipScratch.buf,workspaceBuf,workspaceBytes);
-        customCudaCopyFromHalf((const half*)ownershipScratch.buf,(float*)ownershipBuf,batchSize*ownershipChannels*nnXLen*nnYLen,cudaHandles->stream);
-        CUDA_ERR("vOwnership copy",cudaPeekAtLastError());
-      }
+    #ifdef DEBUG_INTERMEDIATE_VALUES
+    CudaUtils::debugPrint3D(string("v1"), v1Out.buf, batchSize, v1Channels, nnXLen*nnYLen, usingNHWC, usingFP16);
+    CudaUtils::debugPrint2D(string("v1 pooled"), v1Mean.buf, batchSize, v1Channels, false);
+    CudaUtils::debugPrint2D(string("v2"), v2Out.buf, batchSize, v2Channels, false);
+    #endif
+
+    if(!usingFP16) {
+      vOwnershipConv.apply(cudaHandles,scratch,batchSize,false,v1Out2.buf,ownershipBuf,workspaceBuf,workspaceBytes);
+    }
+    else {
+      vOwnershipConv.apply(cudaHandles,scratch,batchSize,false,v1Out2.buf,ownershipScratch.buf,workspaceBuf,workspaceBytes);
+      customCudaCopyFromHalf((const half*)ownershipScratch.buf,(float*)ownershipBuf,batchSize*ownershipChannels*nnXLen*nnYLen,cudaHandles->stream);
+      CUDA_ERR("vOwnership copy",cudaPeekAtLastError());
     }
 
   }
@@ -4739,8 +4740,6 @@ struct Buffers {
       testAssert(m.policyHead->p2Channels == 4);
     else if(m.modelVersion >= 12)
       testAssert(m.policyHead->p2Channels == 2);
-    else if(m.modelVersion <= 1)
-      testAssert(m.policyHead->p2Channels == 3);
     else
       testAssert(m.policyHead->p2Channels == 1);
 
@@ -4753,21 +4752,11 @@ struct Buffers {
     CUDA_ERR("Buffers",cudaMalloc(reinterpret_cast<void**>(&valueBuf), valueBufBytes));
 
     scoreValueBufBytes = m.valueHead->scoreValueChannels * batchFloatBytes;
-    if(scoreValueBufBytes > 0) {
-      CUDA_ERR("Buffers",cudaMalloc(reinterpret_cast<void**>(&scoreValueBuf), scoreValueBufBytes));
-    }
-    else {
-      scoreValueBuf = NULL;
-    }
+    CUDA_ERR("Buffers",cudaMalloc(reinterpret_cast<void**>(&scoreValueBuf), scoreValueBufBytes));
 
     //This buf is used for both an intermdiate fp16 result in fp16 mode, and ALSO the final fp32 output, so always must be fp32-sized
     ownershipBufBytes = m.valueHead->ownershipChannels * batchXYFloatBytes;
-    if(ownershipBufBytes > 0) {
-      CUDA_ERR("Buffers",cudaMalloc(&ownershipBuf, ownershipBufBytes));
-    }
-    else {
-      ownershipBuf = NULL;
-    }
+    CUDA_ERR("Buffers",cudaMalloc(&ownershipBuf, ownershipBufBytes));
 
     //In theory the requiredWorkspaceBytes calls could give us values non-monotone in batch size
     //such as if the convolution algorithm changes between batch size 1 and larger.
@@ -5552,8 +5541,8 @@ void NeuralNet::getOutput(
     assert(inputBuffers->singlePolicyResultBytes == numPolicyChannels*nnXLen*nnYLen * sizeof(float));
     assert(inputBuffers->scoreValueResultBufferBytes == buffers->scoreValueBufBytes);
     assert(inputBuffers->ownershipResultBufferBytes == buffers->ownershipBufBytes);
-    assert(inputBuffers->singleOwnershipResultElts == (modelVersion <= 1 ? 0 : nnXLen*nnYLen));
-    assert(inputBuffers->singleOwnershipResultBytes == (modelVersion <= 1 ? 0 : nnXLen*nnYLen * sizeof(float)));
+    assert(inputBuffers->singleOwnershipResultElts == nnXLen*nnYLen);
+    assert(inputBuffers->singleOwnershipResultBytes == nnXLen*nnYLen * sizeof(float));
 
     CUDA_ERR("getOutput",cudaMemcpyAsync(buffers->inputBuf, inputBuffers->userInputBuffer, inputBuffers->singleInputBytes*batchSize, cudaMemcpyHostToDevice, stream));
     CUDA_ERR("getOutput",cudaMemcpyAsync(buffers->inputGlobalBuf, inputBuffers->userInputGlobalBuffer, inputBuffers->singleInputGlobalBytes*batchSize, cudaMemcpyHostToDevice, stream));
@@ -5579,8 +5568,8 @@ void NeuralNet::getOutput(
     assert(inputBuffers->singlePolicyResultBytes == numPolicyChannels*nnXLen*nnYLen * sizeof(float));
     assert(inputBuffers->scoreValueResultBufferBytes == buffers->scoreValueBufBytes);
     assert(inputBuffers->ownershipResultBufferBytes == buffers->ownershipBufBytes);
-    assert(inputBuffers->singleOwnershipResultElts == (modelVersion <= 1 ? 0 : nnXLen*nnYLen));
-    assert(inputBuffers->singleOwnershipResultBytes == (modelVersion <= 1 ? 0 : nnXLen*nnYLen * sizeof(float)));
+    assert(inputBuffers->singleOwnershipResultElts == nnXLen*nnYLen);
+    assert(inputBuffers->singleOwnershipResultBytes == nnXLen*nnYLen * sizeof(float));
 
     CUDA_ERR("getOutput",cudaMemcpyAsync(buffers->inputBufFloat, inputBuffers->userInputBuffer, inputBuffers->singleInputBytes*batchSize, cudaMemcpyHostToDevice, stream));
     CUDA_ERR("getOutput",cudaMemcpyAsync(buffers->inputGlobalBufFloat, inputBuffers->userInputGlobalBuffer, inputBuffers->singleInputGlobalBytes*batchSize, cudaMemcpyHostToDevice, stream));
@@ -5622,12 +5611,8 @@ void NeuralNet::getOutput(
   CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->policyPassResults, buffers->policyPassBuf, inputBuffers->singlePolicyPassResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
   CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->policyResults, buffers->policyBuf, inputBuffers->singlePolicyResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
   CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->valueResults, buffers->valueBuf, inputBuffers->singleValueResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
-  if(buffers->scoreValueBuf != NULL) {
-    CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->scoreValueResults, buffers->scoreValueBuf, inputBuffers->singleScoreValueResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
-  }
-  if(buffers->ownershipBuf != NULL) {
-    CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->ownershipResults, buffers->ownershipBuf, inputBuffers->singleOwnershipResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
-  }
+  CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->scoreValueResults, buffers->scoreValueBuf, inputBuffers->singleScoreValueResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
+  CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->ownershipResults, buffers->ownershipBuf, inputBuffers->singleOwnershipResultBytes*batchSize, cudaMemcpyDeviceToHost, stream));
   CUDA_ERR("getOutput",cudaStreamSynchronize(stream));
 
   assert(outputs.size() == batchSize);
@@ -5648,20 +5633,7 @@ void NeuralNet::getOutput(
     // policy probabilities and white game outcome probabilities
     // Also we don't fill in the nnHash here either
     // Handle version >= 12 policy optimism
-    if(modelVersion <= 1) {
-      assert(numPolicyChannels == 3);
-      if(gpuHandle->usingNHWC) {
-        for(int i = 0; i<nnXLen*nnYLen; i++) {
-          policyProbs[i] = policySrcBuf[i*3];
-          policyProbs[i + nnXLen*nnYLen] = policySrcBuf[i*3 + 1];
-          policyProbs[i + 2*nnXLen*nnYLen] = policySrcBuf[i*3 + 2];
-        }
-      }
-      else {
-        std::copy(policySrcBuf, policySrcBuf + 3 * nnXLen * nnYLen, policyProbs);
-      }
-    }
-    else if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
+    if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
       if(gpuHandle->usingNHWC) {
         for(int i = 0; i<nnXLen*nnYLen; i++) {
           float p = policySrcBuf[i*numPolicyChannels];
@@ -5688,35 +5660,20 @@ void NeuralNet::getOutput(
     }
 
     int numValueChannels = gpuHandle->model->numValueChannels;
-    if(numValueChannels == 2) {
-      output->whiteWinProb = inputBuffers->valueResults[row * numValueChannels];
-      output->whiteLossProb = inputBuffers->valueResults[row * numValueChannels + 1];
-      output->whiteNoResultProb = -1e30f;
-    }
-    else {
-      assert(numValueChannels == 3);
-      output->whiteWinProb = inputBuffers->valueResults[row * numValueChannels];
-      output->whiteLossProb = inputBuffers->valueResults[row * numValueChannels + 1];
-      output->whiteNoResultProb = inputBuffers->valueResults[row * numValueChannels + 2];
-    }
+    assert(numValueChannels == 3);
+    output->whiteWinProb = inputBuffers->valueResults[row * numValueChannels];
+    output->whiteLossProb = inputBuffers->valueResults[row * numValueChannels + 1];
+    output->whiteNoResultProb = inputBuffers->valueResults[row * numValueChannels + 2];
 
     //As above, these are NOT actually from white's perspective, but rather the player to move.
     //As usual the client does the postprocessing.
-    if(output->whiteOwnerMap != NULL && modelVersion > 1) {
+    if(output->whiteOwnerMap != NULL) {
       const float* ownershipSrcBuf = inputBuffers->ownershipResults + row * nnXLen * nnYLen;
       assert(gpuHandle->model->numOwnershipChannels == 1);
       SymmetryHelpers::copyOutputsWithSymmetry(ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
     }
 
-    if(modelVersion <= 1) {
-      output->whiteScoreMean = 0;
-      output->whiteScoreMeanSq = 0;
-      output->whiteLead = 0;
-      output->varTimeLeft = 0;
-      output->shorttermWinlossError = 0;
-      output->shorttermScoreError = 0;
-    }
-    else if(modelVersion >= 9) {
+    if(modelVersion >= 9) {
       int numScoreValueChannels = gpuHandle->model->numScoreValueChannels;
       assert(numScoreValueChannels == 6);
       output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];

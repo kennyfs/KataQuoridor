@@ -819,7 +819,7 @@ InputBuffers::InputBuffers(const LoadedModel* loadedModel, int maxBatchSz, int n
 
   testAssert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
   testAssert(NNModelVersion::getNumGlobalFeatures(m.modelVersion) == m.numInputGlobalChannels);
-  testAssert(singleValueResultElts == 3 || singleValueResultElts == 2);
+  testAssert(singleValueResultElts == 3);
 
   rowSpatialBufferElts = (size_t)maxBatchSz * singleSpatialElts;
   userInputBufferElts = (size_t)maxBatchSize * singleInputElts;
@@ -1028,19 +1028,11 @@ void MetalProcess::processValue(
   NNOutput* currentOutput,
   const size_t row) {
   const size_t singleValueResultElts = inputBuffers->singleValueResultElts;
-  if(singleValueResultElts == 2) {
-    const float* valueOutputBuf = &inputBuffers->valueResults[row * singleValueResultElts];
-    currentOutput->whiteWinProb = valueOutputBuf[0];
-    currentOutput->whiteLossProb = valueOutputBuf[1];
-    currentOutput->whiteNoResultProb = -1e30f;
-  }
-  else {
-    assert(singleValueResultElts == 3);
-    const float* valueOutputBuf = &inputBuffers->valueResults[row * singleValueResultElts];
-    currentOutput->whiteWinProb = valueOutputBuf[0];
-    currentOutput->whiteLossProb = valueOutputBuf[1];
-    currentOutput->whiteNoResultProb = valueOutputBuf[2];
-  }
+  assert(singleValueResultElts == 3);
+  const float* valueOutputBuf = &inputBuffers->valueResults[row * singleValueResultElts];
+  currentOutput->whiteWinProb = valueOutputBuf[0];
+  currentOutput->whiteLossProb = valueOutputBuf[1];
+  currentOutput->whiteNoResultProb = valueOutputBuf[2];
 }
 
 void MetalProcess::processOwnership(
@@ -1148,7 +1140,7 @@ void MetalProcess::getMetalOutput(
     testAssert(SGFMetadata::METADATA_INPUT_NUM_CHANNELS == (int)inputBuffers->singleInputMetaElts);
   }
 
-  testAssert(inputBuffers->singleValueResultElts == 3 || inputBuffers->singleValueResultElts == 2);
+  testAssert(inputBuffers->singleValueResultElts == 3);
 
   for(int row = 0; row < batchSize; row++) {
     MetalProcess::processRowData(row, gpuHandle, inputBuffers, inputBufs);
