@@ -45,8 +45,8 @@ mkdir -p "$BASEDIR"/gatekeepersgf
 
 # Parameters for the training run
 # NOTE: You may want to adjust the below numbers.
-# NOTE: You probably want to edit settings in cpp/configs/training/selfplay1.cfg
-# NOTE: You probably want to edit settings in cpp/configs/training/gatekeeper1.cfg
+# NOTE: You probably want to edit settings in cpp/configs/training/selfplay_quoridor.cfg
+# NOTE: You probably want to edit settings in cpp/configs/training/gatekeeper_quoridor.cfg
 # Such as what board sizes and rules, you want to learn, number of visits to use, etc.
 
 # Also, the parameters below are relatively small, and probably
@@ -67,8 +67,8 @@ SHUFFLE_KEEPROWS=600000 # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, s
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
-SELFPLAY_CONFIG="$GITROOTDIR"/cpp/configs/training/selfplay1.cfg
-GATING_CONFIG="$GITROOTDIR"/cpp/configs/training/gatekeeper1.cfg
+SELFPLAY_CONFIG="$GITROOTDIR"/cpp/configs/training/selfplay_quoridor.cfg
+GATING_CONFIG="$GITROOTDIR"/cpp/configs/training/gatekeeper_quoridor.cfg
 
 # Copy all the relevant scripts and configs and the katago executable to a dated directory.
 # For archival and logging purposes - you can look back and see exactly the python code on a particular date
