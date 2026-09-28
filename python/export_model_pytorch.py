@@ -243,11 +243,16 @@ def main(args):
                 raise Exception(msg)
 
     # QUORIDOR ONNX EXPORT ---------------------------------------------------------
+    # Optional: .bin.gz (written below) is the canonical, and only required, model format. ONNX
+    # export needs the `onnx` package; skip it rather than failing the whole export if unavailable.
     if modelconfigs.is_quoridor(model_config):
-        logging.info("Exporting Quoridor model to ONNX format")
-        onnx_path = os.path.join(export_dir, filename_prefix + ".onnx")
-        export_quoridor_onnx(model_to_export, onnx_path, model_name=model_name)
-        logging.info(f"Exported Quoridor ONNX model to {onnx_path}")
+        if onnx is not None:
+            logging.info("Exporting Quoridor model to ONNX format")
+            onnx_path = os.path.join(export_dir, filename_prefix + ".onnx")
+            export_quoridor_onnx(model_to_export, onnx_path, model_name=model_name)
+            logging.info(f"Exported Quoridor ONNX model to {onnx_path}")
+        else:
+            logging.info("onnx package not available, skipping optional ONNX export")
 
     # WRITING MODEL ----------------------------------------------------------------
     extension = ".bin"
@@ -259,7 +264,10 @@ def main(args):
         f.write(s.encode(encoding="ascii",errors="backslashreplace"))
 
     if modelconfigs.is_quoridor(model_config):
-        version = model_config.get("version", 1)
+        # Quoridor models are always KataGo architecture version 17 (see docs/
+        # KataQuoridor_Review_and_Roadmap.md §4.2): the Quoridor I/O version is a separate number,
+        # written below as model option D.
+        version = 17
     else:
         # Ignore what's in the config if less than 11 since a lot of testing models
         # are on old version but actually have various new architectures.
@@ -308,9 +316,7 @@ def main(args):
     writeln(modelconfigs.get_num_bin_input_features(model_config))
     writeln(modelconfigs.get_num_global_input_features(model_config))
 
-    if modelconfigs.is_quoridor(model_config):
-        pass
-    elif version <= 12:
+    if version <= 12:
         assert model.td_score_multiplier == 20.0
         assert model.scoremean_multiplier == 20.0
         assert model.scorestdev_multiplier == 20.0
@@ -347,8 +353,9 @@ def main(args):
             writeln(1)
         else:
             writeln(0)
-        # Write some dummy placeholders for future features
-        writeln(0)
+        # Model option D: Quoridor I/O version (0 = not a Quoridor network, i.e. a Go network).
+        # Options E-H are unused spare slots for future model options.
+        writeln(1 if modelconfigs.is_quoridor(model_config) else 0)
         writeln(0)
         writeln(0)
         writeln(0)
@@ -709,13 +716,19 @@ def main(args):
     def write_policy_head(name,policyhead):
         writeln(name)
         if version >= 17:
-            assert policyhead.conv2p.weight.shape[0] == 6 or policyhead.conv2p.weight.shape[0] == 8
-            if policyhead.conv2p.weight.shape[0] == 6:
-                writeln(2) # we're going to write 2 policy output channels - regular and optimistic (see below)
+            if modelconfigs.is_quoridor(model_config):
+                assert policyhead.conv2p.weight.shape[0] == 18
+                writeln(2) # regular and (short-term) optimistic policy, each with 3 planes (see policy option A below)
             else:
-                writeln(4) # we're going to write 4 policy output channels - regular, optimistic, q winloss, q score (see below)
-            # Write some dummy placeholders for future features
-            writeln(0)
+                assert policyhead.conv2p.weight.shape[0] == 6 or policyhead.conv2p.weight.shape[0] == 8
+                if policyhead.conv2p.weight.shape[0] == 6:
+                    writeln(2) # we're going to write 2 policy output channels - regular and optimistic (see below)
+                else:
+                    writeln(4) # we're going to write 4 policy output channels - regular, optimistic, q winloss, q score (see below)
+            # Policy option A: numPolicyPlanes, packed variant-major (channel = variant*numPolicyPlanes
+            # + plane). 3 for Quoridor (pawn, vertical wall, horizontal wall); 0 (meaning 1) for Go.
+            writeln(3 if modelconfigs.is_quoridor(model_config) else 0)
+            # Options B and C are unused spare slots for future policy-head options.
             writeln(0)
             writeln(0)
         write_conv(name+".conv1p", policyhead.conv1p)
@@ -727,12 +740,27 @@ def main(args):
         write_biasmask(name+".bias2", policyhead.bias2)
         write_activation(name+".act2", policyhead.act2)
 
-        # Write the this-move prediction and the optimistic policy prediction
+        # Write the this-move prediction and the (short-term) optimistic policy prediction, each
+        # with 3 planes (pawn, vertical wall, horizontal wall): PolicyHead's 18 outputs are
+        # [policy, opp reply, soft, soft opp reply, long-term-optimistic, short-term-optimistic] x
+        # 3 planes each; channels [0,1,2] are target 0 (policy) and [15,16,17] are target 5
+        # (short-term optimistic), matching how upstream Go picks channels 0 and 5.
         if modelconfigs.is_quoridor(model_config):
-            assert policyhead.conv2p.weight.shape[0] >= 3
-            write_conv_weight(name+".conv2p", policyhead.conv2p.weight[0:3])
+            assert policyhead.conv2p.weight.shape[0] == 18
+            write_conv_weight(
+                name+".conv2p",
+                torch.cat((policyhead.conv2p.weight[0:3], policyhead.conv2p.weight[15:18]), dim=0)
+            )
             c_g1 = policyhead.conv1g.weight.shape[0]
-            write_matmul(name+".linear_pass", torch.zeros((3, 3 * c_g1), dtype=torch.float32))
+            c_p1 = int(policyhead.linear_g.weight.shape[0])
+            # Zero-weight pass layers: KataQuoridor never has a meaningful pass move, and the
+            # Eigen backend ignores this output entirely for numPolicyPlanes > 1. Keeping the
+            # structure (rather than the single-matmul pre-v15 form) costs nothing and needs no
+            # parser changes.
+            write_matmul(name+".linear_pass", torch.zeros((c_p1, 3 * c_g1), dtype=torch.float32))
+            write_matbias(name+".linear_pass_bias", torch.zeros((c_p1,), dtype=torch.float32))
+            write_activation(name+".act_pass", torch.nn.Identity())
+            write_matmul(name+".linear_pass2", torch.zeros((2, c_p1), dtype=torch.float32))
         elif version <= 11:
             assert policyhead.conv2p.weight.shape[0] == 4
             write_conv_weight(name+".conv2p", torch.stack((policyhead.conv2p.weight[0],), dim=0))
@@ -795,12 +823,45 @@ def main(args):
         write_activation(name+".act2", valuehead.act2)
 
         if modelconfigs.is_quoridor(model_config):
-            write_matmul(name+".linear_valuehead", valuehead.linear_value.weight)
-            write_matbias(name+".bias_valuehead", valuehead.linear_value.bias)
+            # v17 value channels: [win, loss, noResult]. noResult gets zero weights and bias -30
+            # so the engine never predicts it - self-play never trains on the 300-move-cutoff draw
+            # (docs/KataQuoridor_Review_and_Roadmap.md §4.2).
+            assert valuehead.linear_value.weight.shape[0] == 2
             c_v2 = valuehead.linear2.weight.shape[0]
             c_v1 = valuehead.conv1.weight.shape[0]
-            write_matmul(name+".linear_miscvaluehead", torch.zeros((1, c_v2), dtype=torch.float32))
-            write_matbias(name+".bias_miscvaluehead", torch.zeros((1,), dtype=torch.float32))
+            zero_row_w = torch.zeros((1, c_v2), dtype=torch.float32)
+            value_w = torch.cat((valuehead.linear_value.weight, zero_row_w), dim=0)
+            value_b = torch.cat((valuehead.linear_value.bias, torch.tensor([-30.0], dtype=torch.float32)), dim=0)
+            write_matmul(name+".linear_valuehead", value_w)
+            write_matbias(name+".bias_valuehead", value_b)
+
+            # v17 scoreValue channels: [scoreMean, scoreStdev(pre-softplus), lead, varTimeLeft,
+            # shorttermWinlossError, shorttermScoreError]. scoreMean and lead both take the
+            # terminal distance-margin head (game margin); scoreStdev and the two shortterm-error
+            # channels have no trained head yet, so they get zero weights - "train it (cheap)"
+            # per the roadmap is future work, not required for the Phase 1 parity/value contract.
+            zero_bias = torch.zeros((1,), dtype=torch.float32)
+            misc_w = torch.cat((
+                valuehead.linear_game_margin.weight,
+                zero_row_w,
+                valuehead.linear_game_margin.weight,
+                valuehead.linear_variance_time.weight,
+                zero_row_w,
+                zero_row_w,
+            ), dim=0)
+            misc_b = torch.cat((
+                valuehead.linear_game_margin.bias,
+                zero_bias,
+                valuehead.linear_game_margin.bias,
+                valuehead.linear_variance_time.bias,
+                zero_bias,
+                zero_bias,
+            ), dim=0)
+            write_matmul(name+".linear_miscvaluehead", misc_w)
+            write_matbias(name+".bias_miscvaluehead", misc_b)
+
+            # Ownership: zero weights. nneval.cpp refuses includeOwnership requests for Quoridor
+            # for now (docs/KataQuoridor_Review_and_Roadmap.md §4.2), so this is never read.
             write_conv_weight(name+".conv_ownership", torch.zeros((1, c_v1, 1, 1), dtype=torch.float32))
             return
 

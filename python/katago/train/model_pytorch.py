@@ -3905,10 +3905,9 @@ class Model(torch.nn.Module):
         # float_formatter = "{:.3f}".format
         # np.set_printoptions(formatter={'float_kind':float_formatter}, threshold=1000000, linewidth=10000)
 
-        if modelconfigs.is_quoridor(self.config):
-            mask = torch.ones_like(input_spatial[:, 0:1, :, :]).contiguous()
-        else:
-            mask = input_spatial[:, 0:1, :, :].contiguous()
+        # Input channel 0 is already an all-ones on-board mask for Quoridor (see
+        # QuoridorNN::fillRow), so this needs no special case there.
+        mask = input_spatial[:, 0:1, :, :].contiguous()
         mask_sum_hw = torch.sum(mask,dim=(2,3),keepdim=True)
         mask_sum = torch.sum(mask)
         # Save original mask/dims for restoring NCHW after trunk when using inline registers.

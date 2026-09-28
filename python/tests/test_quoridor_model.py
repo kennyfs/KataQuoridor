@@ -94,6 +94,10 @@ def test_quoridor_backward_and_gradients():
     metrics = Metrics(world_size=1, raw_model=model)
 
     spatial = torch.randn(B, 17, 9, 9)
+    # Channel 0 is the on-board mask and is always all-ones in real feature rows (see
+    # QuoridorNN::fillRow); the model now reads the mask straight from it (no more special-cased
+    # override for Quoridor), so keep that invariant here too.
+    spatial[:, 0, :, :] = 1.0
     glob = torch.randn(B, 15)
     out_byheads = model(spatial, glob)
     post = model.postprocess_output(out_byheads)

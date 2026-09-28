@@ -46,7 +46,10 @@ def get_version(config: ModelConfig):
     return config["version"]
 
 def is_quoridor(config: ModelConfig) -> bool:
-    return config.get("game") == "quoridor" or config.get("version") == 1
+    # Keyed only on the explicit "game" field: "version" means architecture (KataGo's own
+    # versioning; Quoridor models are always version 17), not the game, so a bare version==1
+    # config is an old/test Go config, not necessarily Quoridor.
+    return config.get("game") == "quoridor"
 
 def get_num_bin_input_features(config: ModelConfig):
     if is_quoridor(config):
@@ -1836,7 +1839,7 @@ b5c384h6nbttflrtab2cheaps = {
 
 tf3_b4c192_quoridor = {
     "game": "quoridor",
-    "version": 1,
+    "version": 17,
     "norm_kind": "fixup",
     "bnorm_epsilon": 1e-4,
     "bnorm_running_avg_momentum": 0.001,
@@ -1861,7 +1864,7 @@ tf3_b4c192_quoridor = {
 
 b2c64_quoridor = {
     "game": "quoridor",
-    "version": 1,
+    "version": 17,
     "norm_kind": "fixup",
     "bnorm_epsilon": 1e-4,
     "bnorm_running_avg_momentum": 0.001,
