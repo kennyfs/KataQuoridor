@@ -16,8 +16,13 @@ from katago.train.data_processing_pytorch import read_npz_training_data
 
 
 def test_end_to_end_training():
-    katago_bin = os.path.join(repo_root, "build", "katago")
-    assert os.path.exists(katago_bin), f"KataGo binary not found at {katago_bin}. Please run make -C build first."
+    # $KATAGO_BIN, else the most recently built build/katago or cpp/build*/katago (same as test_nn_parity.py).
+    import glob
+    candidates = [os.environ["KATAGO_BIN"]] if os.environ.get("KATAGO_BIN") else (
+        glob.glob(os.path.join(repo_root, "build", "katago")) + glob.glob(os.path.join(repo_root, "cpp", "build*", "katago")))
+    candidates = [c for c in candidates if os.path.isfile(c)]
+    assert candidates, "KataGo binary not found (set KATAGO_BIN or build under build/ or cpp/build*/)."
+    katago_bin = max(candidates, key=os.path.getmtime)
 
     shuffle_script = os.path.join(repo_root, "python", "shuffle.py")
     assert os.path.exists(shuffle_script), f"shuffle.py not found at {shuffle_script}"
