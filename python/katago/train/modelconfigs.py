@@ -1851,6 +1851,10 @@ tf3_b4c192_quoridor = {
     "transformer_ffn_channels": 384,
     "transformer_heads": 4,
     "transformer_kv_heads": 4,
+    # The attention runs on the mid_num_channels bottleneck, so the default head dim would be
+    # 96 / 4 = 24, which the CUDA FP32 flash-attention kernel does not support (16/32/64 only).
+    "attention_query_head_dim": 64,
+    "attention_value_head_dim": 64,
     "learnable_rope": True,
     "block_kind": [[f"block{i}", "bottlenest2transformerropesg"] for i in range(1, 5)],
     "p1_num_channels": 32,
