@@ -29,6 +29,9 @@ namespace Tests {
   //testrules.cpp
   void runRulesTests();
 
+  //testquoridorperft.cpp
+  void runQuoridorRuleTests();
+
   //testpassalivesuicide.cpp
   void runPassAliveSuicideModeTests();
   void runExcludeTerritoryAtariModeTests();
