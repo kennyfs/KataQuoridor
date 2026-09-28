@@ -22,8 +22,10 @@ static const vector<string> ACCEPTABLE_MODEL_SUFFIXES {
   ".bin",
   "model.txt.gz",
   "model.txt",
+#if defined(USE_TENSORRT_BACKEND) || defined(USE_ONNX_BACKEND)
   ".onnx",
-  ".onnx.gz"
+  ".onnx.gz",
+#endif
 };
 static const vector<string> GENERIC_MODEL_NAMES {
   "model.bin.gz",
