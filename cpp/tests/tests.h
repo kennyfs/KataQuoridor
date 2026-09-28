@@ -141,6 +141,9 @@ namespace Tests {
 
   //testbook.cpp
   void runBookTests();
+
+  //testquoridor.cpp
+  void runQuoridorTests();
 }
 
 namespace TestCommon {
