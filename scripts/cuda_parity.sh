@@ -3,7 +3,8 @@
 #
 #   1. Builds katago with -DUSE_BACKEND=CUDA, RelWithDebInfo, into cpp/build-cuda (incremental).
 #   2. Runs python/tests/test_nn_parity.py against that binary:
-#        - FP32, NCHW   (cudaUseFP16=false, cudaUseNHWC=false), tolerance 1e-4
+#        - FP32, NCHW   (cudaUseFP16=false, cudaUseNHWC=false), tolerance 1e-4, conv net only
+#          (the CUDA backend rejects transformers in NCHW)
 #        - FP32, NHWC   (cudaUseFP16=false, cudaUseNHWC=true),  tolerance 1e-4
 #        - FP16         (cudaUseFP16=true),                      tolerance 2e-2
 #      Each covers a conv and a transformer net at symmetries 0 and 1.
@@ -44,11 +45,12 @@ if [ ! -x "$KATAGO_BIN" ]; then
   record "katago binary at $KATAGO_BIN" FAIL
 else
   # 2. NN parity, FP32 (NCHW and NHWC) and FP16
-  run_parity() {  # label fp16 nhwc tol
+  run_parity() {  # label fp16 nhwc tol [models]
     local label="$1" cfg="$OUT/parity_$1.cfg" dir="$OUT/parity_$1"
     printf 'cudaUseFP16 = %s\ncudaUseNHWC = %s\ncudaDeviceToUse = 0\n' "$2" "$3" > "$cfg"
     echo "==> NN parity $label (tolerance $4; log: $OUT/parity_$label.log)"
     if (cd "$REPO/python" && NN_PARITY_CONFIG="$cfg" NN_PARITY_TOL="$4" NN_PARITY_OUTDIR="$dir" \
+          NN_PARITY_MODELS="${5:-b2c64_quoridor,tf3_b4c192_quoridor}" \
           python -m pytest -q -rA tests/test_nn_parity.py) >"$OUT/parity_$label.log" 2>&1; then
       record "NN parity $label (tol $4)" PASS
     else
@@ -57,7 +59,7 @@ else
     fi
     grep -E "max_policy_diff|max_value_diff|max_misc_reldiff" "$OUT/parity_$label.log" | sort | tail -n 3 | sed 's/^/     worst /'
   }
-  run_parity fp32_nchw false false 1e-4
+  run_parity fp32_nchw false false 1e-4 b2c64_quoridor
   run_parity fp32_nhwc false true 1e-4
   run_parity fp16 true auto 2e-2
 
