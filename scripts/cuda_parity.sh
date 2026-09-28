@@ -29,8 +29,8 @@ record() { NAMES+=("$1"); RESULTS+=("$2"); echo "==> $1: $2"; }
 if [ -z "${KATAGO_BIN:-}" ] && [ -z "${SKIP_BUILD:-}" ]; then
   echo "==> Building CUDA RelWithDebInfo in $BUILD_DIR (log: $OUT/build.log)"
   mkdir -p "$BUILD_DIR"
-  if (cd "$BUILD_DIR" && cmake .. -DUSE_BACKEND=CUDA -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNO_GIT_REVISION=1 \
-        && make -j"$JOBS") >"$OUT/build.log" 2>&1; then
+  if (cmake -S "$REPO/cpp" -B "$BUILD_DIR" -DUSE_BACKEND=CUDA -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNO_GIT_REVISION=1 \
+        && cmake --build "$BUILD_DIR" -j "$JOBS") >"$OUT/build.log" 2>&1; then
     record "build (CUDA, RelWithDebInfo)" PASS
   else
     tail -n 30 "$OUT/build.log"

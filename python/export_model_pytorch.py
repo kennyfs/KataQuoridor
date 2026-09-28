@@ -840,9 +840,26 @@ def main(args):
             # variance time, shortterm winloss error, shortterm margin error]. The post-processing
             # multipliers written in the header (Model.__init__, Quoridor branch) make whiteScoreMean and
             # whiteLead come out in moves of margin, matching Model.postprocess_output.
-            gm, vt, misc = valuehead.linear_game_margin, valuehead.linear_variance_time, valuehead.linear_misc
-            misc_w = torch.cat((gm.weight, misc.weight[0:1], gm.weight, vt.weight, misc.weight[1:3]), dim=0)
-            misc_b = torch.cat((gm.bias, misc.bias[0:1], gm.bias, vt.bias, misc.bias[1:3]), dim=0)
+            linear_game_margin, linear_variance_time, misc = (
+                valuehead.linear_game_margin,
+                valuehead.linear_variance_time,
+                valuehead.linear_misc,
+            )
+            misc_w = torch.cat((
+                linear_game_margin.weight,
+                misc.weight[0:1],
+                linear_game_margin.weight,
+                linear_variance_time.weight,
+                misc.weight[1:3],
+            ) ,dim=0)
+            misc_b = torch.cat((
+                linear_game_margin.bias,
+                misc.bias[0:1],
+                linear_game_margin.bias,
+                linear_variance_time.bias,
+                misc.bias[1:3],
+            ), dim=0)
+
             write_matmul(name+".linear_miscvaluehead", misc_w)
             write_matbias(name+".bias_miscvaluehead", misc_b)
 
