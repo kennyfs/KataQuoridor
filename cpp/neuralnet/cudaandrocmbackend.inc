@@ -4428,6 +4428,9 @@ struct Model {
   const int numInputGlobalChannels;
   const int numInputMetaChannels;
   const int numPolicyChannels;
+  // KataQuoridor: policy planes packed into each policy channel (see PolicyHeadDesc::numPolicyPlanes).
+  // 1 for ordinary Go nets, so the extra factor is a no-op for them.
+  const int numPolicyPlanes;
   const int numValueChannels;
   const int numScoreValueChannels;
   const int numOwnershipChannels;
@@ -4463,6 +4466,7 @@ struct Model {
     numInputGlobalChannels(desc->numInputGlobalChannels),
     numInputMetaChannels(desc->numInputMetaChannels),
     numPolicyChannels(desc->numPolicyChannels),
+    numPolicyPlanes(desc->policyHead.numPolicyPlanes),
     numValueChannels(desc->numValueChannels),
     numScoreValueChannels(desc->numScoreValueChannels),
     numOwnershipChannels(desc->numOwnershipChannels),
@@ -4479,13 +4483,15 @@ struct Model {
         nnYLen, NNPos::MAX_BOARD_LEN
       ));
 
+    // KataQuoridor: these two checks are Go-only. For a Quoridor net the feature counts are a function
+    // of the independent quoridorIOVersion, not modelVersion (same as in the Eigen backend).
     int numFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
-    if(numInputChannels != numFeatures)
+    if(desc->quoridorIOVersion == 0 && numInputChannels != numFeatures)
       throw StringError(Global::strprintf("Neural net numInputChannels (%d) was not the expected number based on version (%d)",
         numInputChannels, numFeatures
       ));
     int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
-    if(numInputGlobalChannels != numGlobalFeatures)
+    if(desc->quoridorIOVersion == 0 && numInputGlobalChannels != numGlobalFeatures)
       throw StringError(Global::strprintf("Neural net numInputGlobalChannels (%d) was not the expected number based on version (%d)",
         numInputGlobalChannels, numGlobalFeatures
       ));
@@ -4734,8 +4740,10 @@ struct Buffers {
       inputMetaBuf = NULL;
     }
 
+    // KataQuoridor: p2Conv has numPolicyPlanes planes packed per channel (1 for Go nets).
+    testAssert(m.policyHead->p2Channels == m.numPolicyChannels * m.numPolicyPlanes);
     if(m.modelVersion >= 17)
-      testAssert(m.policyHead->p2Channels == 2 || m.policyHead->p2Channels == 4);
+      testAssert(m.numPolicyChannels == 2 || m.numPolicyChannels == 4);
     else if(m.modelVersion >= 16)
       testAssert(m.policyHead->p2Channels == 4);
     else if(m.modelVersion >= 12)
@@ -4743,7 +4751,8 @@ struct Buffers {
     else
       testAssert(m.policyHead->p2Channels == 1);
 
-    policyPassBufBytes = m.policyHead->p2Channels * batchFloatBytes;
+    // KataQuoridor: the pass output has numPolicyChannels (not p2Channels) channels; equal for Go nets.
+    policyPassBufBytes = m.numPolicyChannels * batchFloatBytes;
     CUDA_ERR("Buffers",cudaMalloc(reinterpret_cast<void**>(&policyPassBuf), policyPassBufBytes));
     policyBufBytes = m.policyHead->p2Channels * batchXYFloatBytes;
     CUDA_ERR("Buffers",cudaMalloc(reinterpret_cast<void**>(&policyBuf), policyBufBytes));
@@ -5367,8 +5376,10 @@ struct InputBuffers {
     singleInputMetaBytes = (size_t)m.numInputMetaChannels * sizeof(float);
     singlePolicyPassResultElts = (size_t)(m.numPolicyChannels);
     singlePolicyPassResultBytes = (size_t)(m.numPolicyChannels) * sizeof(float);
-    singlePolicyResultElts = (size_t)(m.numPolicyChannels * nnXLen * nnYLen);
-    singlePolicyResultBytes = (size_t)(m.numPolicyChannels * nnXLen * nnYLen) * sizeof(float);
+    // KataQuoridor: numPolicyPlanes (see Model::numPolicyPlanes) is 1 for ordinary Go nets.
+    const int numPolicyPlanes = m.policyHead.numPolicyPlanes;
+    singlePolicyResultElts = (size_t)(m.numPolicyChannels * numPolicyPlanes * nnXLen * nnYLen);
+    singlePolicyResultBytes = (size_t)(m.numPolicyChannels * numPolicyPlanes * nnXLen * nnYLen) * sizeof(float);
     singleValueResultElts = (size_t)m.numValueChannels;
     singleValueResultBytes = (size_t)m.numValueChannels * sizeof(float);
     singleScoreValueResultElts = (size_t)m.numScoreValueChannels;
@@ -5376,8 +5387,11 @@ struct InputBuffers {
     singleOwnershipResultElts = (size_t)m.numOwnershipChannels * nnXLen * nnYLen;
     singleOwnershipResultBytes = (size_t)m.numOwnershipChannels * nnXLen * nnYLen * sizeof(float);
 
-    testAssert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
-    testAssert(NNModelVersion::getNumGlobalFeatures(m.modelVersion) == m.numInputGlobalChannels);
+    // KataQuoridor: Go-only; a Quoridor net's feature counts come from quoridorIOVersion (as in Eigen).
+    if(m.quoridorIOVersion == 0) {
+      testAssert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
+      testAssert(NNModelVersion::getNumGlobalFeatures(m.modelVersion) == m.numInputGlobalChannels);
+    }
     if(m.numInputMetaChannels > 0) {
       testAssert(SGFMetadata::METADATA_INPUT_NUM_CHANNELS == m.numInputMetaChannels);
     }
@@ -5386,7 +5400,7 @@ struct InputBuffers {
     userInputGlobalBufferBytes = (size_t)m.numInputGlobalChannels * maxBatchSize * sizeof(float);
     userInputMetaBufferBytes = (size_t)m.numInputMetaChannels * maxBatchSize * sizeof(float);
     policyPassResultBufferBytes = (size_t)maxBatchSize * m.numPolicyChannels * sizeof(float);
-    policyResultBufferBytes = (size_t)maxBatchSize * m.numPolicyChannels * nnXLen * nnYLen * sizeof(float);
+    policyResultBufferBytes = (size_t)maxBatchSize * m.numPolicyChannels * numPolicyPlanes * nnXLen * nnYLen * sizeof(float);
     valueResultBufferBytes = (size_t)maxBatchSize * m.numValueChannels * sizeof(float);
     scoreValueResultBufferBytes = (size_t)maxBatchSize * m.numScoreValueChannels * sizeof(float);
     ownershipResultBufferBytes = (size_t)maxBatchSize * nnXLen * nnYLen * m.numOwnershipChannels * sizeof(float);
@@ -5408,7 +5422,7 @@ struct InputBuffers {
         userInputMetaBuffer = mallocPinned((size_t)m.numInputMetaChannels * maxBatchSize);
 
       policyPassResults = mallocPinned((size_t)maxBatchSize * m.numPolicyChannels);
-      policyResults = mallocPinned((size_t)maxBatchSize * m.numPolicyChannels * nnXLen * nnYLen);
+      policyResults = mallocPinned((size_t)maxBatchSize * m.numPolicyChannels * numPolicyPlanes * nnXLen * nnYLen);
       valueResults = mallocPinned((size_t)maxBatchSize * m.numValueChannels);
 
       scoreValueResults = mallocPinned((size_t)maxBatchSize * m.numScoreValueChannels);
@@ -5489,13 +5503,16 @@ void NeuralNet::getOutput(
   const int nnYLen = gpuHandle->nnYLen;
   const int modelVersion = gpuHandle->model->modelVersion;
 
-  const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
-  const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
+  // KataQuoridor: for a Go net these equal NNModelVersion::getNumSpatialFeatures/getNumGlobalFeatures
+  // (modelVersion); for a Quoridor net they come from quoridorIOVersion instead. Reading them off the
+  // model works for both (same as in the Eigen backend).
+  const int numSpatialFeatures = gpuHandle->model->numInputChannels;
+  const int numGlobalFeatures = gpuHandle->model->numInputGlobalChannels;
   const int numMetaFeatures = inputBuffers->singleInputMetaElts;
-  assert(numSpatialFeatures == gpuHandle->model->numInputChannels);
   assert(numSpatialFeatures * nnXLen * nnYLen == inputBuffers->singleInputElts);
   assert(numGlobalFeatures == inputBuffers->singleInputGlobalElts);
   const int numPolicyChannels = gpuHandle->model->numPolicyChannels;
+  const int numPolicyPlanes = gpuHandle->model->numPolicyPlanes;
 
   for(int nIdx = 0; nIdx<batchSize; nIdx++) {
     float* rowSpatialInput = inputBuffers->userInputBuffer + (inputBuffers->singleInputElts * nIdx);
@@ -5537,8 +5554,8 @@ void NeuralNet::getOutput(
     assert(inputBuffers->singleInputMetaBytes == inputBuffers->singleInputMetaElts*4);
     assert(inputBuffers->singlePolicyPassResultElts == numPolicyChannels);
     assert(inputBuffers->singlePolicyPassResultBytes == numPolicyChannels * sizeof(float));
-    assert(inputBuffers->singlePolicyResultElts == numPolicyChannels*nnXLen*nnYLen);
-    assert(inputBuffers->singlePolicyResultBytes == numPolicyChannels*nnXLen*nnYLen * sizeof(float));
+    assert(inputBuffers->singlePolicyResultElts == numPolicyChannels*numPolicyPlanes*nnXLen*nnYLen);
+    assert(inputBuffers->singlePolicyResultBytes == numPolicyChannels*numPolicyPlanes*nnXLen*nnYLen * sizeof(float));
     assert(inputBuffers->scoreValueResultBufferBytes == buffers->scoreValueBufBytes);
     assert(inputBuffers->ownershipResultBufferBytes == buffers->ownershipBufBytes);
     assert(inputBuffers->singleOwnershipResultElts == nnXLen*nnYLen);
@@ -5564,8 +5581,8 @@ void NeuralNet::getOutput(
     assert(inputBuffers->singleInputMetaBytes == inputBuffers->singleInputMetaElts*4);
     assert(inputBuffers->singlePolicyPassResultElts == numPolicyChannels);
     assert(inputBuffers->singlePolicyPassResultBytes == numPolicyChannels * sizeof(float));
-    assert(inputBuffers->singlePolicyResultElts == numPolicyChannels*nnXLen*nnYLen);
-    assert(inputBuffers->singlePolicyResultBytes == numPolicyChannels*nnXLen*nnYLen * sizeof(float));
+    assert(inputBuffers->singlePolicyResultElts == numPolicyChannels*numPolicyPlanes*nnXLen*nnYLen);
+    assert(inputBuffers->singlePolicyResultBytes == numPolicyChannels*numPolicyPlanes*nnXLen*nnYLen * sizeof(float));
     assert(inputBuffers->scoreValueResultBufferBytes == buffers->scoreValueBufBytes);
     assert(inputBuffers->ownershipResultBufferBytes == buffers->ownershipBufBytes);
     assert(inputBuffers->singleOwnershipResultElts == nnXLen*nnYLen);
@@ -5619,44 +5636,56 @@ void NeuralNet::getOutput(
 
   float policyProbsTmp[NNPos::MAX_NN_POLICY_SIZE];
 
+  // NNOutput::policyProbs is used here as a raw nnXLen*nnYLen*numPolicyPlanes staging area (plane
+  // p at policyProbs[p*nnXLen*nnYLen + pos]), NOT as the search-space (17x17+1) policy that the
+  // rest of the engine expects: nneval.cpp (QuoridorNN::mapPolicyToSearch) remaps it into search
+  // space afterwards. numPolicyPlanes is 1 for ordinary Go nets, for which this is just pos.
+  const int posArea = nnXLen * nnYLen;
+  const int totalPolicyChannels = numPolicyChannels * numPolicyPlanes;
   for(int row = 0; row < batchSize; row++) {
     NNOutput* output = outputs[row];
-    assert(output->nnXLen == nnXLen);
-    assert(output->nnYLen == nnYLen);
+    assert(numPolicyPlanes * posArea <= NNPos::MAX_NN_POLICY_SIZE);
     float policyOptimism = (float)inputBufs[row]->policyOptimism;
 
     const float* policyPassSrcBuf = inputBuffers->policyPassResults + row * numPolicyChannels;
-    const float* policySrcBuf = inputBuffers->policyResults + row * numPolicyChannels * nnXLen * nnYLen;
+    const float* policySrcBuf = inputBuffers->policyResults + row * totalPolicyChannels * posArea;
     float* policyProbs = output->policyProbs;
 
     // These are in logits, the client does the postprocessing to turn them into
     // policy probabilities and white game outcome probabilities
     // Also we don't fill in the nnHash here either
-    // Handle version >= 12 policy optimism
+    // Handle version >= 12 policy optimism. Pass is ignored for KataQuoridor (numPolicyPlanes > 1),
+    // which never exports a meaningful pass value (see export_model_pytorch.py).
+    // Variant-major layout: channel = variant*numPolicyPlanes + plane.
     if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
       if(gpuHandle->usingNHWC) {
-        for(int i = 0; i<nnXLen*nnYLen; i++) {
-          float p = policySrcBuf[i*numPolicyChannels];
-          float pOpt = policySrcBuf[i*numPolicyChannels+1];
-          policyProbsTmp[i] = p + (pOpt-p) * policyOptimism;
+        for(int p = 0; p < numPolicyPlanes; p++) {
+          for(int i = 0; i<posArea; i++) {
+            float pol = policySrcBuf[i*totalPolicyChannels + p];
+            float pOpt = policySrcBuf[i*totalPolicyChannels + numPolicyPlanes + p];
+            policyProbsTmp[p*posArea + i] = pol + (pOpt-pol) * policyOptimism;
+          }
         }
-        SymmetryHelpers::copyOutputsWithSymmetry(policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-        policyProbs[nnXLen*nnYLen] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
       }
       else {
-        for(int i = 0; i<nnXLen*nnYLen; i++) {
-          float p = policySrcBuf[i];
-          float pOpt = policySrcBuf[i+nnXLen*nnYLen];
-          policyProbsTmp[i] = p + (pOpt-p) * policyOptimism;
+        for(int p = 0; p < numPolicyPlanes; p++) {
+          for(int i = 0; i<posArea; i++) {
+            float pol = policySrcBuf[p*posArea + i];
+            float pOpt = policySrcBuf[(numPolicyPlanes + p)*posArea + i];
+            policyProbsTmp[p*posArea + i] = pol + (pOpt-pol) * policyOptimism;
+          }
         }
-        SymmetryHelpers::copyOutputsWithSymmetry(policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-        policyProbs[nnXLen*nnYLen] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
       }
+      // Treat the numPolicyPlanes planes as independent nSize "images" sharing one symmetry.
+      SymmetryHelpers::copyOutputsWithSymmetry(policyProbsTmp, policyProbs, numPolicyPlanes, nnYLen, nnXLen, inputBufs[row]->symmetry);
+      if(numPolicyPlanes == 1)
+        policyProbs[posArea] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
     }
     else {
       assert(numPolicyChannels == 1);
+      assert(numPolicyPlanes == 1);
       SymmetryHelpers::copyOutputsWithSymmetry(policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-      policyProbs[nnXLen*nnYLen] = policyPassSrcBuf[0];
+      policyProbs[posArea] = policyPassSrcBuf[0];
     }
 
     int numValueChannels = gpuHandle->model->numValueChannels;

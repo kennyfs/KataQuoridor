@@ -472,6 +472,8 @@ void NeuralNet::globalCleanup() {
 }
 
 LoadedModel* NeuralNet::loadModelFile(const string& file, const string& expectedSha256) {
+  // KataQuoridor: this backend has no N-policy-plane support (docs/KataQuoridor_Review_and_Roadmap.md §4.4).
+  throw StringError("Metal is not supported by KataQuoridor; use CUDA or Eigen");
   LoadedModel* loadedModel = new LoadedModel(file, expectedSha256);
   return loadedModel;
 }
