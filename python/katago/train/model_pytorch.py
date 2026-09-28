@@ -2941,6 +2941,12 @@ class QuoridorValueHead(torch.nn.Module):
         # 4. Game Margin (1 scalar: terminal shortest-distance margin +D / -D)
         self.linear_game_margin = torch.nn.Linear(c_v2, 1, bias=True)
 
+        # 4b. Margin uncertainty (3 scalars, all pre-softplus): [game-margin stdev,
+        # shortterm winloss error, shortterm game-margin error]. Exported into the v17 scoreValue slots
+        # [1], [4] and [5] (see export_model_pytorch.py); the search uses them for dynamic score utility
+        # and uncertainty-weighted playouts.
+        self.linear_misc = torch.nn.Linear(c_v2, 3, bias=True)
+
         # 5. Trajectory Head (2 x 9 x 9: current player future path, opp future path)
         self.conv_trajectory = torch.nn.Conv2d(c_v1, 2, kernel_size=1, padding="same", bias=False)
 
@@ -2965,6 +2971,9 @@ class QuoridorValueHead(torch.nn.Module):
         init_weights(self.linear_game_margin.weight, "identity", scale=1.0)
         init_weights(self.linear_game_margin.bias, "identity", scale=bias_scale, fan_tensor=self.linear_game_margin.weight)
 
+        init_weights(self.linear_misc.weight, "identity", scale=1.0)
+        init_weights(self.linear_misc.bias, "identity", scale=bias_scale, fan_tensor=self.linear_misc.weight)
+
         init_weights(self.conv_trajectory.weight, "identity", scale=0.5)
         init_weights(self.conv_wall_graph.weight, "identity", scale=0.5)
 
@@ -2984,6 +2993,9 @@ class QuoridorValueHead(torch.nn.Module):
 
         reg_dict["output"].append(self.linear_game_margin.weight)
         reg_dict["output_noreg"].append(self.linear_game_margin.bias)
+
+        reg_dict["output"].append(self.linear_misc.weight)
+        reg_dict["output_noreg"].append(self.linear_misc.bias)
 
         reg_dict["output"].append(self.conv_trajectory.weight)
         reg_dict["output"].append(self.conv_wall_graph.weight)
@@ -3019,6 +3031,9 @@ class QuoridorValueHead(torch.nn.Module):
         # 4. Game Margin (B, 1)
         out_game_margin = self.linear_game_margin(outv2)
 
+        # 4b. Margin stdev, shortterm winloss error, shortterm margin error (B, 3), pre-softplus
+        out_misc = self.linear_misc(outv2)
+
         # 5. Trajectory Head (B, 2, pos_len, pos_len)
         out_trajectory = self.conv_trajectory(outv1) * mask
 
@@ -3030,6 +3045,7 @@ class QuoridorValueHead(torch.nn.Module):
             out_td_value,
             out_variance_time,
             out_game_margin,
+            out_misc,
             out_trajectory,
             out_wall_graph,
         )
@@ -3222,6 +3238,24 @@ class Model(torch.nn.Module):
             self.variance_time_multiplier = 40.0
             self.shortterm_value_error_multiplier = 0.25
             self.shortterm_score_error_multiplier = 150.0
+        if modelconfigs.is_quoridor(config):
+            # Quoridor post-processing multipliers, written into the v17 model header by the exporter and
+            # applied identically by nneval.cpp:
+            # - scoremean / lead = 1: whiteScoreMean and whiteLead are the game margin in moves (the
+            #   game-margin head is trained directly in moves; typical |margin| is 0-10).
+            # - td_score = 1: unused by Quoridor (no TD-score head), kept in moves for consistency.
+            # - scorestdev = 2: stdev = softplus(x) * 2 moves, ~1.4 moves at x = 0.
+            # - variance_time = 1: the Python head is trained on the raw target, so C++ must not rescale.
+            # - shortterm_value_error = 0.25 (as upstream): predicted squared winloss error in [0, 4].
+            # - shortterm_score_error = 4: predicted squared margin error in moves^2, ~2 (≈1.4 moves) at x = 0.
+            #   (Upstream uses 150 for Go points; margins are ~an order of magnitude smaller.)
+            self.td_score_multiplier = 1.0
+            self.scoremean_multiplier = 1.0
+            self.scorestdev_multiplier = 2.0
+            self.lead_multiplier = 1.0
+            self.variance_time_multiplier = 1.0
+            self.shortterm_value_error_multiplier = 0.25
+            self.shortterm_score_error_multiplier = 4.0
 
         self.trunk_normless = "trunk_normless" in config and config["trunk_normless"]
         self.trunk_final_rmsnorm = "trunk_final_rmsnorm" in config and config["trunk_final_rmsnorm"]
@@ -4070,6 +4104,7 @@ class Model(torch.nn.Module):
                         iout_td_value,
                         iout_variance_time,
                         iout_game_margin,
+                        iout_misc,
                         iout_trajectory,
                         iout_wall_graph,
                     ) = self.intermediate_value_head(
@@ -4199,6 +4234,7 @@ class Model(torch.nn.Module):
                     out_td_value,
                     out_variance_time,
                     out_game_margin,
+                    out_misc,
                     out_trajectory,
                     out_wall_graph,
                 ) = self.value_head(
@@ -4237,6 +4273,7 @@ class Model(torch.nn.Module):
                         out_td_value,
                         out_variance_time,
                         out_game_margin,
+                        out_misc,
                         out_trajectory,
                         out_wall_graph,
                     ),
@@ -4246,6 +4283,7 @@ class Model(torch.nn.Module):
                         iout_td_value,
                         iout_variance_time,
                         iout_game_margin,
+                        iout_misc,
                         iout_trajectory,
                         iout_wall_graph,
                     ),
@@ -4257,6 +4295,7 @@ class Model(torch.nn.Module):
                     out_td_value,
                     out_variance_time,
                     out_game_margin,
+                    out_misc,
                     out_trajectory,
                     out_wall_graph,
                 ),)
@@ -4310,6 +4349,7 @@ class Model(torch.nn.Module):
                 out_td_value,
                 out_variance_time,
                 out_game_margin,
+                out_misc,
                 out_trajectory,
                 out_wall_graph,
             ) = outputs
@@ -4319,6 +4359,7 @@ class Model(torch.nn.Module):
                 out_td_value.to(torch.float32),
                 out_variance_time.to(torch.float32),
                 out_game_margin.to(torch.float32),
+                out_misc.to(torch.float32),
                 out_trajectory.to(torch.float32),
                 out_wall_graph.to(torch.float32),
             )
@@ -4356,6 +4397,7 @@ class Model(torch.nn.Module):
                 out_td_value,
                 out_variance_time,
                 out_game_margin,
+                out_misc,
                 out_trajectory,
                 out_wall_graph,
             ) = outputs
@@ -4363,8 +4405,13 @@ class Model(torch.nn.Module):
                 out_policy,
                 out_value,
                 out_td_value,
-                SoftPlusWithGradientFloorFunction.apply(out_variance_time.squeeze(-1), 0.05, True),
-                out_game_margin.squeeze(-1),
+                SoftPlusWithGradientFloorFunction.apply(out_variance_time.squeeze(-1), 0.05, False) * self.variance_time_multiplier,
+                out_game_margin.squeeze(-1) * self.scoremean_multiplier,
+                # Same functional forms as upstream v14+ scorestdev / shortterm errors, so that the C++
+                # postprocessing in nneval.cpp (with the multipliers written by the exporter) matches.
+                SoftPlusWithGradientFloorFunction.apply(out_misc[:, 0], 0.05, False) * self.scorestdev_multiplier,
+                SoftPlusWithGradientFloorFunction.apply(out_misc[:, 1], 0.05, True) * self.shortterm_value_error_multiplier,
+                SoftPlusWithGradientFloorFunction.apply(out_misc[:, 2], 0.05, True) * self.shortterm_score_error_multiplier,
                 out_trajectory,
                 out_wall_graph,
             )

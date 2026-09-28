@@ -29,11 +29,13 @@ def test_quoridor_config_properties():
 def test_quoridor_forward_shapes():
     B = 2
     spatial = torch.randn(B, 17, 9, 9)
+    spatial[:, 0, :, :] = 1.0  # channel 0 is the all-ones on-board mask in real rows
     glob = torch.randn(B, 15)
 
     # 1. Test b2c64_quoridor
     cfg_b2 = modelconfigs.base_config_of_name["b2c64_quoridor"]
     model_b2 = Model(cfg_b2, pos_len=9)
+    model_b2.initialize()
     model_b2.eval()
     with torch.no_grad():
         out_byheads = model_b2(spatial, glob)
@@ -46,6 +48,9 @@ def test_quoridor_forward_shapes():
         td_value,
         variance_time,
         game_margin,
+        margin_stdev,
+        st_value_error,
+        st_margin_error,
         trajectory,
         wall_graph,
     ) = post[0]
@@ -55,6 +60,9 @@ def test_quoridor_forward_shapes():
     assert td_value.shape == (B, 4, 2)
     assert variance_time.shape == (B,)
     assert game_margin.shape == (B,)
+    for t in (margin_stdev, st_value_error, st_margin_error):
+        assert t.shape == (B,)
+        assert (t > 0).all()
     assert trajectory.shape == (B, 2, 9, 9)
     assert wall_graph.shape == (B, 2, 9, 9)
 
@@ -73,6 +81,9 @@ def test_quoridor_forward_shapes():
         td_tf3,
         vt_tf3,
         gm_tf3,
+        _sd_tf3,
+        _ev_tf3,
+        _es_tf3,
         tr_tf3,
         wg_tf3,
     ) = post_tf3[0]
@@ -155,6 +166,8 @@ def test_quoridor_backward_and_gradients():
     assert model.value_head.conv_trajectory.weight.grad is not None
     assert torch.isfinite(model.value_head.conv_trajectory.weight.grad).all()
 
+    assert model.value_head.linear_misc.weight.grad is not None
+    assert torch.isfinite(model.value_head.linear_misc.weight.grad).all()
     assert model.value_head.conv_wall_graph.weight.grad is not None
     assert torch.isfinite(model.value_head.conv_wall_graph.weight.grad).all()
 

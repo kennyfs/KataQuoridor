@@ -1015,6 +1015,9 @@ class Metrics:
             td_value_logits,
             pred_variance_time,
             pred_game_margin,
+            pred_margin_stdev,
+            pred_shortterm_value_error,
+            pred_shortterm_margin_error,
             trajectory_pretanh,
             wall_graph_pretanh,
         ) = model_output_postprocessed
@@ -1149,6 +1152,29 @@ class Metrics:
         margin_huber = huber_loss(pred_game_margin, target_game_margin, delta=1.0)
         loss_game_margin = (0.04 * global_weight * target_weight_margin * margin_huber).sum()
 
+        # Margin stdev: modeled on upstream's scorestdev, but with no score belief head to take a stdev of,
+        # it is trained so that stdev^2 regresses the squared error of the (detached) margin prediction.
+        margin_sqerror = torch.square(pred_game_margin.detach() - target_game_margin) + 1.0e-4
+        margin_stdev_huber = huber_loss(torch.square(pred_margin_stdev), margin_sqerror, delta=10.0)
+        loss_margin_stdev = (0.004 * global_weight * target_weight_margin * margin_stdev_huber).sum()
+
+        # Shortterm winloss / margin error: as upstream's loss_shortterm_{value,score}_error_samplewise,
+        # against the short-term TD targets (horizon index 2: value = globalTargetsNC[12:14], margin = [15]).
+        # There is no TD-margin head, so the margin error is that of the game-margin prediction.
+        shortterm_value_probs = torch.softmax(td_value_logits[:, 2, :], dim=1)
+        shortterm_value_pred = (shortterm_value_probs[:, 0] - shortterm_value_probs[:, 1]).detach()
+        shortterm_value_real = target_td_value[:, 2, 0] - target_td_value[:, 2, 1]
+        shortterm_value_sqerror = torch.square(shortterm_value_pred - shortterm_value_real) + 1.0e-8
+        loss_shortterm_value_error = (
+            2.0 * global_weight * target_weight_td_value
+            * huber_loss(pred_shortterm_value_error, shortterm_value_sqerror, delta=0.4)
+        ).sum()
+        shortterm_margin_sqerror = torch.square(pred_game_margin.detach() - target_global_nc[:, 15]) + 1.0e-4
+        loss_shortterm_margin_error = (
+            0.002 * global_weight * target_weight_td_value
+            * huber_loss(pred_shortterm_margin_error, shortterm_margin_sqerror, delta=25.0)
+        ).sum()
+
         # Trajectory loss (BCEWithLogits, 2 channels)
         target_trajectory = target_value_nchw[:, 0:2, :, :]
         target_weight_aux = target_global_nc[:, 27]
@@ -1179,6 +1205,9 @@ class Metrics:
             + loss_value * value_loss_scale
             + loss_td_value
             + loss_game_margin
+            + loss_margin_stdev
+            + loss_shortterm_value_error
+            + loss_shortterm_margin_error
             + loss_trajectory
             + loss_wall_graph
             + loss_variance_time * variance_time_loss_scale
@@ -1220,9 +1249,9 @@ class Metrics:
             "smloss_sum": torch.zeros_like(loss_value),
             "sbcdfloss_sum": torch.zeros_like(loss_value),
             "sbpdfloss_sum": torch.zeros_like(loss_value),
-            "sdregloss_sum": torch.zeros_like(loss_value),
-            "evstloss_sum": torch.zeros_like(loss_value),
-            "esstloss_sum": torch.zeros_like(loss_value),
+            "sdregloss_sum": loss_margin_stdev,
+            "evstloss_sum": loss_shortterm_value_error,
+            "esstloss_sum": loss_shortterm_margin_error,
             "qwlloss_sum": torch.zeros_like(loss_value),
             "qscloss_sum": torch.zeros_like(loss_value),
             "loss_sum": loss_sum,

@@ -9,10 +9,12 @@ Pipeline, all driven from here:
      model is exported to .bin.gz with export_model_pytorch.py.
   4. `katago evalnnparity` evaluates the same positions through NNEvaluator (the path the search uses) on
      whatever backend the binary was built with, and the result is compared with the reference:
-     final policy over legal moves and White's win/loss/no-result probabilities, within 1e-4 (FP32).
+     final policy over legal moves and White's win/loss/no-result probabilities, within 1e-4 (FP32), and the
+     score-like outputs (margin mean/lead/stdev, variance time, shortterm errors) within 1e-4 * (1 + |ref|).
 
 The binary is taken from $KATAGO_BIN, else the most recently built cpp/build*/katago or cpp/katago; the tests
-are skipped if none exists. Set $NN_PARITY_OUTDIR to keep the intermediate files.
+are skipped if none exists. Set $NN_PARITY_OUTDIR to keep the intermediate files, $NN_PARITY_CONFIG to pass a
+-config to evalnnparity (e.g. to select a GPU backend or FP16), and $NN_PARITY_TOL to override the 1e-4 tolerance.
 
 Run the report by hand with:  cd python && python -m pytest tests/test_nn_parity.py -rA
 """
@@ -48,7 +50,7 @@ NUM_ROWS = 200
 SEED = "parity"
 SEARCH_LEN = 17
 POLICY_SIZE = SEARCH_LEN * SEARCH_LEN + 1
-FP32_TOL = 1e-4
+FP32_TOL = float(os.environ.get("NN_PARITY_TOL", "1e-4"))
 MODEL_CONFIGS = ["b2c64_quoridor", "tf3_b4c192_quoridor"]
 
 
@@ -276,10 +278,14 @@ def reference_outputs(model, rows, symmetry):
         out = model(apply_symmetry_quoridor(spatial, symmetry), glob_)
     planes = apply_symmetry_policy_quoridor(out[0][0][:, 0:3].contiguous(), symmetry).double().numpy()
     value_logits = out[0][1].double().numpy()  # [win, loss] for the side to move
+    post = model.postprocess_output(out)[0]
+    # Side-to-move margin, margin stdev, variance time, shortterm squared errors (see Model.postprocess_output)
+    margin, vtime, stdev, st_v2, st_s2 = (post[i].double().numpy() for i in (4, 3, 5, 6, 7))
 
     n = planes.shape[0]
     policy = np.full((n, POLICY_SIZE), -1.0)
     value = np.zeros((n, 3))
+    misc = np.zeros((n, 6))
     for i in range(n):
         white = int(rows["nextPlayer"][i][0]) == 2
         logits = canonical_policy_to_search(planes[i], white)
@@ -291,7 +297,9 @@ def reference_outputs(model, rows, symmetry):
         w = np.exp(value_logits[i] - value_logits[i].max())
         win, loss = w / w.sum()
         value[i] = [win, loss, 0.0] if white else [loss, win, 0.0]
-    return policy, value
+        white_margin = margin[i] if white else -margin[i]
+        misc[i] = [white_margin, white_margin, stdev[i], vtime[i], np.sqrt(st_v2[i]), np.sqrt(st_s2[i])]
+    return policy, value, misc
 
 
 @pytest.fixture(scope="module", params=MODEL_CONFIGS)
@@ -305,7 +313,10 @@ def exported(request, workdir):
     return name, model, os.path.join(workdir, name, "model.bin.gz")
 
 
-def compare(rows, ref_policy, ref_value, cpp_policy, cpp_value):
+MISC_NAMES = ["scoreMean", "lead", "scoreStdev", "varTimeLeft", "shorttermWinlossError", "shorttermScoreError"]
+
+
+def compare(rows, ref_policy, ref_value, cpp_policy, cpp_value, ref_misc, cpp_misc):
     legal = rows["legalMask"].astype(bool)
     report = {}
     report["illegal_slots_not_minus_one"] = int(np.sum(~legal & (cpp_policy[:, :POLICY_SIZE] != -1.0)))
@@ -317,6 +328,9 @@ def compare(rows, ref_policy, ref_value, cpp_policy, cpp_value):
     report["max_value_diff"] = float(dv.max())
     report["rows_policy_over_tol"] = int(np.sum(dp.max(axis=1) > FP32_TOL))
     report["rows_value_over_tol"] = int(np.sum(dv.max(axis=1) > FP32_TOL))
+    dm = np.abs(cpp_misc - ref_misc) / (1.0 + np.abs(ref_misc))
+    report["max_misc_reldiff"] = float(dm.max())
+    report["worst_misc_output"] = MISC_NAMES[int(np.argmax(dm.max(axis=0)))]
     top_ref = np.argmax(np.where(legal, ref_policy, -2), axis=1)
     top_cpp = np.argmax(np.where(legal, cpp_policy[:, :POLICY_SIZE], -2), axis=1)
     report["rows_top_move_differs"] = int(np.sum(top_ref != top_cpp))
@@ -329,16 +343,19 @@ def compare(rows, ref_policy, ref_value, cpp_policy, cpp_value):
 @pytest.mark.parametrize("symmetry", [0, 1])
 def test_nn_parity(katago_bin, workdir, rows, exported, symmetry):
     name, model, bin_gz = exported
-    ref_policy, ref_value = reference_outputs(model, rows, symmetry)
+    ref_policy, ref_value, ref_misc = reference_outputs(model, rows, symmetry)
     out_path = os.path.join(workdir, f"{name}.sym{symmetry}.cpp.npz")
     np.savez(os.path.join(workdir, f"{name}.sym{symmetry}.ref.npz"), policy=ref_policy, value=ref_value)
+    config_args = ["-config", os.environ["NN_PARITY_CONFIG"]] if os.environ.get("NN_PARITY_CONFIG") else []
     _run([katago_bin, "evalnnparity", "-model", bin_gz, "-n", str(NUM_ROWS), "-seed", SEED,
-          "-symmetry", str(symmetry), "-output", out_path])
+          "-symmetry", str(symmetry), "-output", out_path] + config_args)
     with np.load(out_path) as d:
         cpp_policy, cpp_value = d["policy"].astype(np.float64), d["value"].astype(np.float64)
-    report = compare(rows, ref_policy, ref_value, cpp_policy, cpp_value)
+        cpp_misc = d["misc"].astype(np.float64)
+    report = compare(rows, ref_policy, ref_value, cpp_policy, cpp_value, ref_misc, cpp_misc)
     text = "\n".join(f"  {k}: {v}" for k, v in report.items())
     print(f"\n{name} symmetry {symmetry}:\n{text}")
     ok = (report["max_policy_diff"] <= FP32_TOL and report["max_value_diff"] <= FP32_TOL
+          and report["max_misc_reldiff"] <= FP32_TOL
           and report["illegal_slots_not_minus_one"] == 0 and report["legal_slots_negative"] == 0)
     assert ok, f"{name} symmetry {symmetry} parity failure:\n{text}"

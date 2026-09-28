@@ -836,27 +836,13 @@ def main(args):
             write_matbias(name+".bias_valuehead", value_b)
 
             # v17 scoreValue channels: [scoreMean, scoreStdev(pre-softplus), lead, varTimeLeft,
-            # shorttermWinlossError, shorttermScoreError]. scoreMean and lead both take the
-            # terminal distance-margin head (game margin); scoreStdev and the two shortterm-error
-            # channels have no trained head yet, so they get zero weights - "train it (cheap)"
-            # per the roadmap is future work, not required for the Phase 1 parity/value contract.
-            zero_bias = torch.zeros((1,), dtype=torch.float32)
-            misc_w = torch.cat((
-                valuehead.linear_game_margin.weight,
-                zero_row_w,
-                valuehead.linear_game_margin.weight,
-                valuehead.linear_variance_time.weight,
-                zero_row_w,
-                zero_row_w,
-            ), dim=0)
-            misc_b = torch.cat((
-                valuehead.linear_game_margin.bias,
-                zero_bias,
-                valuehead.linear_game_margin.bias,
-                valuehead.linear_variance_time.bias,
-                zero_bias,
-                zero_bias,
-            ), dim=0)
+            # shorttermWinlossError, shorttermScoreError] <- [game margin, margin stdev, game margin,
+            # variance time, shortterm winloss error, shortterm margin error]. The post-processing
+            # multipliers written in the header (Model.__init__, Quoridor branch) make whiteScoreMean and
+            # whiteLead come out in moves of margin, matching Model.postprocess_output.
+            gm, vt, misc = valuehead.linear_game_margin, valuehead.linear_variance_time, valuehead.linear_misc
+            misc_w = torch.cat((gm.weight, misc.weight[0:1], gm.weight, vt.weight, misc.weight[1:3]), dim=0)
+            misc_b = torch.cat((gm.bias, misc.bias[0:1], gm.bias, vt.bias, misc.bias[1:3]), dim=0)
             write_matmul(name+".linear_miscvaluehead", misc_w)
             write_matbias(name+".bias_miscvaluehead", misc_b)
 

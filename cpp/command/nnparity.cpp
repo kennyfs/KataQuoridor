@@ -253,6 +253,8 @@ int MainCmds::evalnnparity(const vector<string>& args) {
   vector<ParityPosition> positions = generatePositions(numRows, seed);
   NumpyBuffer<float> policy({numRows, POLICY_SIZE});
   NumpyBuffer<float> value({numRows, 3}); // whiteWin, whiteLoss, whiteNoResult
+  // whiteScoreMean, whiteLead, scoreStdev, varTimeLeft, shorttermWinlossError, shorttermScoreError
+  NumpyBuffer<float> misc({numRows, 6});
 
   MiscNNInputParams nnInputParams;
   nnInputParams.symmetry = symmetry;
@@ -267,11 +269,18 @@ int MainCmds::evalnnparity(const vector<string>& args) {
     value.data[i * 3 + 0] = out.whiteWinProb;
     value.data[i * 3 + 1] = out.whiteLossProb;
     value.data[i * 3 + 2] = out.whiteNoResultProb;
+    misc.data[i * 6 + 0] = out.whiteScoreMean;
+    misc.data[i * 6 + 1] = out.whiteLead;
+    misc.data[i * 6 + 2] = (float)sqrt(std::max(0.0, (double)out.whiteScoreMeanSq - (double)out.whiteScoreMean * out.whiteScoreMean));
+    misc.data[i * 6 + 3] = out.varTimeLeft;
+    misc.data[i * 6 + 4] = out.shorttermWinlossError;
+    misc.data[i * 6 + 5] = out.shorttermScoreError;
   }
 
   ZipFile zip(outputFile);
   writeArray(zip, "policy", policy, numRows);
   writeArray(zip, "value", value, numRows);
+  writeArray(zip, "misc", misc, numRows);
   zip.close();
   cout << "Wrote " << numRows << " evaluations at symmetry " << symmetry << " to " << outputFile << endl;
 
