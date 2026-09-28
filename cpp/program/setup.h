@@ -103,6 +103,14 @@ namespace Setup {
 
   int computeDefaultEigenBackendThreads(int expectedConcurrentEvals, Logger& logger);
 
+  // Forces off the Go-only search heuristics that don't make sense (or outright crash, in the
+  // case of antiMirror) on a Quoridor Board: antiMirror, avoidMYTDaggerHackPla, conservativePass,
+  // fillDameBeforePass, enablePassingHacks, and rootSymmetryPruning. loadParams() already applies
+  // this to every SearchParams it returns; callers that build/override a SearchParams afterwards
+  // (e.g. GTP's genmove-specific antiMirror/conservativePass/fillDameBeforePass defaults) should
+  // call it again on the result.
+  void sanitizeParamsForQuoridor(SearchParams& params);
+
   //Loads search parameters for bot from config, by bot idx.
   //Fails if no parameters are found.
   std::vector<SearchParams> loadParams(

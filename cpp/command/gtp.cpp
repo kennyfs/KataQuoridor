@@ -2074,6 +2074,14 @@ int MainCmds::gtp(const vector<string>& args) {
     genmoveOut.antiMirror = genmoveAntiMirror;
     analysisOut.wideRootNoise = analysisWideRootNoise;
     analysisOut.ignorePreRootHistory = analysisIgnorePreRootHistory;
+
+    // KataQuoridor: the GTP-specific overrides above (conservativePass/fillDameBeforePass
+    // defaulting on, and genmoveAntiMirror defaulting on) undo Setup::loadParams's
+    // sanitizeParamsForQuoridor(). antiMirror in particular crashes in searchmirror.cpp on a
+    // Quoridor board (it calls getOpp() on a Color that Quoridor never populates the Go way), so
+    // re-apply the same sanitization here rather than letting genmove silently re-enable it.
+    Setup::sanitizeParamsForQuoridor(genmoveOut);
+    Setup::sanitizeParamsForQuoridor(analysisOut);
   };
 
   SearchParams initialGenmoveParams;

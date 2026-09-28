@@ -421,6 +421,25 @@ SearchParams Setup::loadSingleParams(
   return paramss[0];
 }
 
+// KataQuoridor: SearchParams's fields default to Go-tuned values, and a handful of them are
+// Go-only heuristics that read board state cpp/game/board.h only stubs out for Quoridor (a
+// concrete example: antiMirror crashes in searchmirror.cpp on a non-Go Color, since it calls
+// getOpp() on a Quoridor Board that never has an actual "opponent stone color" concept the same
+// way Go does). Rather than editing cpp/search/ (untouched on this fork, so it stays mergeable
+// against upstream) or every call site that constructs SearchParams, force the Go-only knobs off
+// in this one place. Every field touched here is a plain public bool/int on SearchParams.
+void Setup::sanitizeParamsForQuoridor(SearchParams& params) {
+  params.antiMirror = false;
+  params.avoidMYTDaggerHackPla = C_EMPTY;
+  params.conservativePass = false;
+  params.fillDameBeforePass = false;
+  params.enablePassingHacks = false;
+  // rootSymmetryPruning uses generic 8-way Go board symmetry; Quoridor only has 2 (identity and
+  // x-mirror), and QuoridorNN/nneval already restrict symmetry sampling to those on their own, so
+  // simply disable this Go-oriented pruning rather than trying to special-case it.
+  params.rootSymmetryPruning = false;
+}
+
 static Player parsePlayer(const char* field, const string& s) {
   Player pla = C_EMPTY;
   bool suc = PlayerIO::tryParsePlayer(s,pla);
@@ -880,6 +899,7 @@ vector<SearchParams> Setup::loadParams(
     if(setupFor == SETUP_FOR_DISTRIBUTED)
       cfg.markAllKeysUsedWithPrefix("mutexPoolSize");
 
+    Setup::sanitizeParamsForQuoridor(params);
     paramss.push_back(params);
   }
 
