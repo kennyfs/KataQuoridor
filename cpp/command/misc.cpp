@@ -10,6 +10,9 @@
 #include "../dataio/poswriter.h"
 #include "../dataio/files.h"
 #include "../dataio/trainingwrite.h"
+#include "../dataio/numpywrite.h"
+#include "../neuralnet/nninputs.h"
+#include "../neuralnet/nneval.h"
 #include "../search/asyncbot.h"
 #include "../program/setup.h"
 #include "../program/playutils.h"
@@ -22,6 +25,8 @@
 #include <chrono>
 #include <csignal>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <mutex>
 #include <thread>
 
@@ -776,4 +781,378 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
 
   ScoreValue::freeTables();
   return 0;
+}
+
+int MainCmds::dumpnninputs(const vector<string>& args) {
+  string outputFile = "dumpnninputs.npz";
+  int numRows = 200;
+  string seed = "dumpnninputs-seed-quoridor";
+
+  for(size_t i = 1; i < args.size(); i++) {
+    if(args[i] == "-output" && i + 1 < args.size()) {
+      outputFile = args[++i];
+    }
+    else if(args[i] == "-n" && i + 1 < args.size()) {
+      numRows = Global::stringToInt(args[++i]);
+    }
+    else if(args[i] == "-seed" && i + 1 < args.size()) {
+      seed = args[++i];
+    }
+    else if(args[i] == "-h" || args[i] == "--help") {
+      cout << "Usage: katago dumpnninputs [-output PATH.npz] [-n NUM_ROWS] [-seed SEED_STR]" << endl;
+      return 0;
+    }
+    else if(i == 1 && args[i][0] != '-') {
+      outputFile = args[i];
+    }
+    else if(i == 2 && args[i][0] != '-') {
+      numRows = Global::stringToInt(args[i]);
+    }
+    else if(i == 3 && args[i][0] != '-') {
+      seed = args[i];
+    }
+  }
+
+  if(numRows <= 0) {
+    cerr << "Error: numRows must be > 0" << endl;
+    return 1;
+  }
+
+  Board::initHash();
+  ScoreValue::initTables();
+
+  cout << "Dumping " << numRows << " Quoridor NN input rows to " << outputFile << " (seed: " << seed << ")..." << endl;
+
+  Rand rand(seed);
+
+  NumpyBuffer<float> binaryInputNCHW(std::vector<int64_t>({numRows, 17, 9, 9}));
+  NumpyBuffer<float> globalInputNC(std::vector<int64_t>({numRows, 15}));
+  NumpyBuffer<uint8_t> legalMovesMask(std::vector<int64_t>({numRows, 290}));
+  NumpyBuffer<int32_t> nextPlayer(std::vector<int64_t>({numRows, 1}));
+
+  int curRows = 0;
+  Rules rules = Rules::getTrompTaylorish();
+  MiscNNInputParams params;
+
+  while(curRows < numRows) {
+    Board board(17, 17);
+    Player pla = P_BLACK;
+    BoardHistory hist(board, pla, rules, 0, BoardHistoryModes());
+
+    for(int step = 0; step < 300 && curRows < numRows; step++) {
+      int blackY = Location::getY(board.blackPawnLoc, board.x_size);
+      int whiteY = Location::getY(board.whitePawnLoc, board.x_size);
+      if(blackY == 0 || whiteY == board.y_size - 1)
+        break;
+
+      vector<Loc> legalMoves;
+      uint8_t* maskPtr = legalMovesMask.data + curRows * 290;
+      std::fill(maskPtr, maskPtr + 290, (uint8_t)0);
+
+      for(int y = 0; y < board.y_size; y++) {
+        for(int x = 0; x < board.x_size; x++) {
+          Loc loc = Location::getLoc(x, y, board.x_size);
+          if(board.isLegal(loc, pla)) {
+            legalMoves.push_back(loc);
+            int pos = NNPos::locToPos(loc, 17, 17, 17);
+            if(pos >= 0 && pos < 290)
+              maskPtr[pos] = 1;
+          }
+        }
+      }
+
+      if(legalMoves.empty())
+        break;
+
+      float* rowSpatial = binaryInputNCHW.data + curRows * (17 * 81);
+      float* rowGlobal = globalInputNC.data + curRows * 15;
+      NNInputs::fillRowV1(board, hist, pla, params, 9, 9, false, rowSpatial, rowGlobal);
+
+      nextPlayer.data[curRows] = (int32_t)pla;
+      curRows++;
+
+      Loc chosen = legalMoves[(size_t)rand.nextUInt((uint32_t)legalMoves.size())];
+      hist.makeBoardMoveAssumeLegal(board, chosen, pla, NULL);
+      pla = getOpp(pla);
+    }
+  }
+
+  size_t lastSlash = outputFile.find_last_of("/\\");
+  if(lastSlash != string::npos) {
+    MakeDir::make(outputFile.substr(0, lastSlash));
+  }
+
+  ZipFile zipFile(outputFile);
+  uint64_t numBytes;
+
+  numBytes = binaryInputNCHW.prepareHeaderWithNumRows(numRows);
+  zipFile.writeBuffer("binaryInputNCHW", binaryInputNCHW.dataIncludingHeader, numBytes);
+
+  numBytes = globalInputNC.prepareHeaderWithNumRows(numRows);
+  zipFile.writeBuffer("globalInputNC", globalInputNC.dataIncludingHeader, numBytes);
+
+  numBytes = legalMovesMask.prepareHeaderWithNumRows(numRows);
+  zipFile.writeBuffer("legalMovesMask", legalMovesMask.dataIncludingHeader, numBytes);
+
+  numBytes = nextPlayer.prepareHeaderWithNumRows(numRows);
+  zipFile.writeBuffer("nextPlayer", nextPlayer.dataIncludingHeader, numBytes);
+
+  zipFile.close();
+  cout << "Successfully dumped " << numRows << " rows to " << outputFile << endl;
+
+  string binFile = outputFile;
+  if(Global::isSuffix(binFile, ".npz"))
+    binFile = binFile.substr(0, binFile.size() - 4) + ".bin";
+  else
+    binFile += ".bin";
+
+  ofstream outBin(binFile, ios::binary);
+  if(outBin.is_open()) {
+    int32_t header[4] = { numRows, 17 * 81, 15, 290 };
+    outBin.write(reinterpret_cast<const char*>(header), sizeof(header));
+    outBin.write(reinterpret_cast<const char*>(binaryInputNCHW.data), numRows * 17 * 81 * sizeof(float));
+    outBin.write(reinterpret_cast<const char*>(globalInputNC.data), numRows * 15 * sizeof(float));
+    outBin.write(reinterpret_cast<const char*>(legalMovesMask.data), numRows * 290 * sizeof(uint8_t));
+    outBin.write(reinterpret_cast<const char*>(nextPlayer.data), numRows * sizeof(int32_t));
+    outBin.close();
+    cout << "Also wrote raw binary dump to " << binFile << endl;
+  }
+
+  ScoreValue::freeTables();
+  return 0;
+}
+
+int MainCmds::evalnninputs(const vector<string>& args) {
+  string modelFile = "";
+  string configFile = "";
+  string refBinFile = "";
+  string outputBinFile = "";
+  int numRows = 200;
+  string seed = "dumpnninputs-seed-quoridor";
+
+  for(size_t i = 1; i < args.size(); i++) {
+    if(args[i] == "-model" && i + 1 < args.size()) {
+      modelFile = args[++i];
+    }
+    else if(args[i] == "-config" && i + 1 < args.size()) {
+      configFile = args[++i];
+    }
+    else if(args[i] == "-n" && i + 1 < args.size()) {
+      numRows = Global::stringToInt(args[++i]);
+    }
+    else if(args[i] == "-seed" && i + 1 < args.size()) {
+      seed = args[++i];
+    }
+    else if(args[i] == "-ref-bin" && i + 1 < args.size()) {
+      refBinFile = args[++i];
+    }
+    else if(args[i] == "-output-bin" && i + 1 < args.size()) {
+      outputBinFile = args[++i];
+    }
+    else if(args[i] == "-h" || args[i] == "--help") {
+      cout << "Usage: katago evalnninputs -model MODEL.bin.gz [-config CONFIG.cfg] [-n NUM_ROWS] [-seed SEED] [-ref-bin REF.bin] [-output-bin OUT.bin]" << endl;
+      return 0;
+    }
+  }
+
+  if(modelFile == "") {
+    cerr << "Error: -model MODEL_FILE must be specified" << endl;
+    return 1;
+  }
+
+  Board::initHash();
+  ScoreValue::initTables();
+
+  ConfigParser cfg;
+  if(configFile != "" && FileUtils::exists(configFile)) {
+    cfg.initialize(configFile);
+  }
+  if(!cfg.contains("nnMaxBatchSize")) cfg.overrideKey("nnMaxBatchSize", "16");
+  if(!cfg.contains("numNNServerThreadsPerModel")) cfg.overrideKey("numNNServerThreadsPerModel", "1");
+
+  Logger logger(NULL, true, true, false);
+  Rand seedRand(seed);
+  int maxBatchSize = cfg.getInt("nnMaxBatchSize", 1, 64);
+  int nnLen = 17;
+
+  cout << "Loading model for Quoridor eval parity: " << modelFile << endl;
+
+  NNEvaluator* nnEval = NULL;
+  try {
+    nnEval = Setup::initializeNNEvaluator(
+      modelFile, modelFile, "", cfg, logger, seedRand,
+      maxBatchSize, nnLen, nnLen, Setup::MaxBatchSizeRequest::explicitSize(maxBatchSize),
+      false, false, Setup::SETUP_FOR_BENCHMARKNN
+    );
+  }
+  catch(const std::exception& e) {
+    cout << "DIFF: NNEvaluator initialization failed on current contract: " << e.what() << endl;
+    ScoreValue::freeTables();
+    return 2;
+  }
+
+  if(nnEval == NULL) {
+    cout << "DIFF: NNEvaluator was NULL" << endl;
+    ScoreValue::freeTables();
+    return 2;
+  }
+
+  cout << "Evaluating " << numRows << " positions at symmetries 0 and 1..." << endl;
+
+  Rand rand(seed);
+  Rules rules = Rules::getTrompTaylorish();
+  int curRows = 0;
+
+  vector<float> predPolicySym0(numRows * 290, -1e30f);
+  vector<float> predPolicySym1(numRows * 290, -1e30f);
+  vector<float> predValue(numRows * 3, 0.0f);
+
+  bool evalSuccess = true;
+  string evalFailReason = "";
+
+  while(curRows < numRows && evalSuccess) {
+    Board board(17, 17);
+    Player pla = P_BLACK;
+    BoardHistory hist(board, pla, rules, 0, BoardHistoryModes());
+
+    for(int step = 0; step < 300 && curRows < numRows && evalSuccess; step++) {
+      int blackY = Location::getY(board.blackPawnLoc, board.x_size);
+      int whiteY = Location::getY(board.whitePawnLoc, board.x_size);
+      if(blackY == 0 || whiteY == board.y_size - 1)
+        break;
+
+      vector<Loc> legalMoves;
+      vector<bool> isLegalMask(290, false);
+      for(int y = 0; y < board.y_size; y++) {
+        for(int x = 0; x < board.x_size; x++) {
+          Loc loc = Location::getLoc(x, y, board.x_size);
+          if(board.isLegal(loc, pla)) {
+            legalMoves.push_back(loc);
+            int pos = NNPos::locToPos(loc, 17, 17, 17);
+            if(pos >= 0 && pos < 290)
+              isLegalMask[pos] = true;
+          }
+        }
+      }
+      if(legalMoves.empty()) break;
+
+      try {
+        NNResultBuf buf0;
+        MiscNNInputParams params0;
+        params0.symmetry = 0;
+        nnEval->evaluate(board, hist, pla, params0, buf0, true, false);
+
+        for(int pos = 0; pos < 290; pos++) {
+          float logit = buf0.result->policyProbs[pos];
+          predPolicySym0[curRows * 290 + pos] = isLegalMask[pos] ? logit : -1e30f;
+        }
+        predValue[curRows * 3 + 0] = buf0.result->whiteWinProb;
+        predValue[curRows * 3 + 1] = buf0.result->whiteLossProb;
+        predValue[curRows * 3 + 2] = buf0.result->whiteNoResultProb;
+
+        NNResultBuf buf1;
+        MiscNNInputParams params1;
+        params1.symmetry = 1;
+        nnEval->evaluate(board, hist, pla, params1, buf1, true, false);
+
+        for(int pos = 0; pos < 290; pos++) {
+          float logit = buf1.result->policyProbs[pos];
+          predPolicySym1[curRows * 290 + pos] = isLegalMask[pos] ? logit : -1e30f;
+        }
+      }
+      catch(const std::exception& e) {
+        evalSuccess = false;
+        evalFailReason = e.what();
+        break;
+      }
+
+      curRows++;
+      Loc chosen = legalMoves[(size_t)rand.nextUInt((uint32_t)legalMoves.size())];
+      hist.makeBoardMoveAssumeLegal(board, chosen, pla, NULL);
+      pla = getOpp(pla);
+    }
+  }
+
+  if(!evalSuccess) {
+    cout << "DIFF: Evaluation encountered error on current contract: " << evalFailReason << endl;
+  }
+  else {
+    cout << "Successfully evaluated " << curRows << " rows in C++." << endl;
+  }
+
+  if(outputBinFile != "") {
+    size_t lastSlash = outputBinFile.find_last_of("/\\");
+    if(lastSlash != string::npos) MakeDir::make(outputBinFile.substr(0, lastSlash));
+    ofstream outBin(outputBinFile, ios::binary);
+    if(outBin.is_open()) {
+      int32_t header[3] = { curRows, 290, 3 };
+      outBin.write(reinterpret_cast<const char*>(header), sizeof(header));
+      outBin.write(reinterpret_cast<const char*>(predPolicySym0.data()), curRows * 290 * sizeof(float));
+      outBin.write(reinterpret_cast<const char*>(predPolicySym1.data()), curRows * 290 * sizeof(float));
+      outBin.write(reinterpret_cast<const char*>(predValue.data()), curRows * 3 * sizeof(float));
+      outBin.close();
+      cout << "Wrote evaluation predictions to " << outputBinFile << endl;
+    }
+  }
+
+  int exitCode = 0;
+  if(refBinFile != "" && FileUtils::exists(refBinFile) && evalSuccess) {
+    ifstream refIn(refBinFile, ios::binary);
+    if(refIn.is_open()) {
+      int32_t refHeader[3];
+      refIn.read(reinterpret_cast<char*>(refHeader), sizeof(refHeader));
+      int refRows = refHeader[0];
+      int refValChannels = refHeader[2];
+
+      vector<float> refPolicySym0(refRows * 290);
+      vector<float> refPolicySym1(refRows * 290);
+      vector<float> refVal(refRows * refValChannels);
+
+      refIn.read(reinterpret_cast<char*>(refPolicySym0.data()), refRows * 290 * sizeof(float));
+      refIn.read(reinterpret_cast<char*>(refPolicySym1.data()), refRows * 290 * sizeof(float));
+      refIn.read(reinterpret_cast<char*>(refVal.data()), refRows * refValChannels * sizeof(float));
+      refIn.close();
+
+      int compareRows = std::min(curRows, refRows);
+      float maxDiffPol0 = 0.0f;
+      float maxDiffPol1 = 0.0f;
+      float maxDiffVal = 0.0f;
+
+      for(int r = 0; r < compareRows; r++) {
+        for(int p = 0; p < 290; p++) {
+          float cp0 = predPolicySym0[r * 290 + p];
+          float rp0 = refPolicySym0[r * 290 + p];
+          if(rp0 > -1e20f && cp0 > -1e20f) {
+            maxDiffPol0 = std::max(maxDiffPol0, std::abs(cp0 - rp0));
+          }
+          float cp1 = predPolicySym1[r * 290 + p];
+          float rp1 = refPolicySym1[r * 290 + p];
+          if(rp1 > -1e20f && cp1 > -1e20f) {
+            maxDiffPol1 = std::max(maxDiffPol1, std::abs(cp1 - rp1));
+          }
+        }
+        for(int v = 0; v < std::min(2, refValChannels); v++) {
+          maxDiffVal = std::max(maxDiffVal, std::abs(predValue[r * 3 + v] - refVal[r * refValChannels + v]));
+        }
+      }
+
+      cout << "=== NN Parity Comparison Results (" << compareRows << " rows) ===" << endl;
+      cout << "  Max Policy Diff (sym 0): " << maxDiffPol0 << endl;
+      cout << "  Max Policy Diff (sym 1): " << maxDiffPol1 << endl;
+      cout << "  Max Value Diff:          " << maxDiffVal << endl;
+
+      float tol = 1e-4f;
+      if(maxDiffPol0 <= tol && maxDiffPol1 <= tol && maxDiffVal <= tol) {
+        cout << "PASS: Parity verified within tolerance " << tol << "!" << endl;
+      }
+      else {
+        cout << "DIFF: Outputs exceed tolerance " << tol << "!" << endl;
+        exitCode = 1;
+      }
+    }
+  }
+
+  delete nnEval;
+  ScoreValue::freeTables();
+  return evalSuccess ? exitCode : 2;
 }

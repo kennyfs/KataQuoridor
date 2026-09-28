@@ -61,6 +61,8 @@ namespace MainCmds {
   int searchentropyanalysis(const std::vector<std::string>& args);
   int selfplaysurprisedump(const std::vector<std::string>& args);
   int writesampletrainquoridor(const std::vector<std::string>& args);
+  int dumpnninputs(const std::vector<std::string>& args);
+  int evalnninputs(const std::vector<std::string>& args);
 
   int sandbox();
 }
