@@ -370,6 +370,12 @@ void Board::init(int xS, int yS) {
     chain_head[i] = i;
     next_in_chain[i] = i;
   }
+  for(int c = 0; c < 8; c++) {
+    for(int r = 0; r < 8; r++) {
+      vWalls[c][r] = false;
+      hWalls[c][r] = false;
+    }
+  }
 
   movenum = 0;
 
@@ -894,6 +900,7 @@ void Board::playMoveAssumeLegal(Loc loc, Player pla) {
   else if(x % 2 == 1 && y % 2 == 1) {
     // Horizontal fence
     placeFence(loc, false);
+    hWalls[x / 2][y / 2] = true;
     if(pla == P_BLACK) {
       pos_hash ^= ZOBRIST_FENCENUM_HASH[blackFences][0];
       blackFences--;
@@ -920,6 +927,7 @@ void Board::playMoveAssumeLegal(Loc loc, Player pla) {
     // Vertical fence: upper arm is loc, center is loc + adj_offsets[3] (down 1)
     Loc center = loc + adj_offsets[3];
     placeFence(center, true);
+    vWalls[x / 2][y / 2] = true;
     if(pla == P_BLACK) {
       pos_hash ^= ZOBRIST_FENCENUM_HASH[blackFences][0];
       blackFences--;
@@ -1021,6 +1029,10 @@ void Board::undo(MoveRecord record) {
     // Revert fence placement
     for(int i = 0; i < record.numModifiedCells; i++)
       colors[record.modifiedCells[i]] = C_EMPTY;
+    if(y % 2 == 1)
+      hWalls[x / 2][y / 2] = false;
+    else
+      vWalls[x / 2][y / 2] = false;
     blackFences = record.oldBlackFences;
     whiteFences = record.oldWhiteFences;
     cachedPathP1.clear();
@@ -1129,6 +1141,14 @@ Board Board::getMirroredX() const {
   b.whiteFences = whiteFences;
   b.movenum = movenum;
   b.nextPla = nextPla;
+  // Mirroring x maps wall anchor column c -> 7-c for both orientations; the row and
+  // orientation (vertical/horizontal) are unaffected.
+  for(int c = 0; c < 8; c++) {
+    for(int r = 0; r < 8; r++) {
+      b.vWalls[7 - c][r] = vWalls[c][r];
+      b.hWalls[7 - c][r] = hWalls[c][r];
+    }
+  }
   b.cachedPathP1.clear();
   b.bfsReachable(b.blackPawnLoc, 0, &b.cachedPathP1);
   b.cachedPathP2.clear();
@@ -1166,6 +1186,29 @@ void Board::checkConsistency() const {
   assert(whiteFences >= 0 && whiteFences <= MAX_FENCE_NUM);
   assert(colors[blackPawnLoc] == C_BLACK);
   assert(colors[whitePawnLoc] == C_WHITE);
+
+  // The explicit wall arrays must agree with `colors`: every placed wall's three cells must
+  // be C_FENCE, and the number of placed walls must match the number of fences spent.
+  int numWalls = 0;
+  for(int c = 0; c < 8; c++) {
+    for(int r = 0; r < 8; r++) {
+      if(hWalls[c][r]) {
+        numWalls++;
+        Loc center = Location::getLoc(2 * c + 1, 2 * r + 1, x_size);
+        assert(colors[center] == C_FENCE);
+        assert(colors[center + adj_offsets[1]] == C_FENCE);
+        assert(colors[center + adj_offsets[2]] == C_FENCE);
+      }
+      if(vWalls[c][r]) {
+        numWalls++;
+        Loc center = Location::getLoc(2 * c + 1, 2 * r + 1, x_size);
+        assert(colors[center] == C_FENCE);
+        assert(colors[center + adj_offsets[0]] == C_FENCE);
+        assert(colors[center + adj_offsets[3]] == C_FENCE);
+      }
+    }
+  }
+  assert(numWalls == (2 * MAX_FENCE_NUM - blackFences - whiteFences));
 }
 
 bool Board::isEqualForTesting(const Board& other, bool checkNumCaptures, bool checkSimpleKo) const {
@@ -1183,6 +1226,12 @@ bool Board::isEqualForTesting(const Board& other, bool checkNumCaptures, bool ch
     for(int x = 0; x < x_size; x++) {
       Loc loc = Location::getLoc(x, y, x_size);
       if(colors[loc] != other.colors[loc])
+        return false;
+    }
+  }
+  for(int c = 0; c < 8; c++) {
+    for(int r = 0; r < 8; r++) {
+      if(vWalls[c][r] != other.vWalls[c][r] || hWalls[c][r] != other.hWalls[c][r])
         return false;
     }
   }
@@ -1265,6 +1314,17 @@ nlohmann::json Board::toJson(const Board& board) {
     colArr.push_back((int)board.colors[i]);
   j["colors"] = colArr;
 
+  vector<bool> vWallArr;
+  vector<bool> hWallArr;
+  for(int c = 0; c < 8; c++) {
+    for(int r = 0; r < 8; r++) {
+      vWallArr.push_back(board.vWalls[c][r]);
+      hWallArr.push_back(board.hWalls[c][r]);
+    }
+  }
+  j["vWalls"] = vWallArr;
+  j["hWalls"] = hWallArr;
+
   return j;
 }
 
@@ -1282,6 +1342,19 @@ Board Board::ofJson(const nlohmann::json& j) {
   vector<int> colArr = j["colors"].get<vector<int>>();
   for(int i = 0; i < Board::MAX_ARR_SIZE && i < (int)colArr.size(); i++)
     b.colors[i] = (Color)colArr[i];
+
+  if(j.contains("vWalls") && j.contains("hWalls")) {
+    vector<bool> vWallArr = j["vWalls"].get<vector<bool>>();
+    vector<bool> hWallArr = j["hWalls"].get<vector<bool>>();
+    int idx = 0;
+    for(int c = 0; c < 8; c++) {
+      for(int r = 0; r < 8; r++) {
+        b.vWalls[c][r] = (idx < (int)vWallArr.size()) ? (bool)vWallArr[idx] : false;
+        b.hWalls[c][r] = (idx < (int)hWallArr.size()) ? (bool)hWallArr[idx] : false;
+        idx++;
+      }
+    }
+  }
 
   b.pos_hash = ZOBRIST_SIZE_X_HASH[b.x_size] ^ ZOBRIST_SIZE_Y_HASH[b.y_size];
   b.pos_hash ^= ZOBRIST_BOARD_HASH[b.whitePawnLoc][C_WHITE];

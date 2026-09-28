@@ -208,6 +208,7 @@ static void checkCachedPath(const Board& b, const CompactPath& path, Loc pawn, i
 }
 
 static void checkBoardInvariants(const Board& b) {
+  b.checkConsistency();
   testAssert(b.colors[b.blackPawnLoc] == C_BLACK);
   testAssert(b.colors[b.whitePawnLoc] == C_WHITE);
   testAssert(b.pos_hash == hashFromScratch(b));
@@ -222,6 +223,12 @@ static void checkSameBoard(const Board& a, const Board& b) {
   testAssert(a.movenum == b.movenum);
   for(int i = 0; i < Board::MAX_ARR_SIZE; i++)
     testAssert(a.colors[i] == b.colors[i]);
+  for(int c = 0; c < NUM_ANCHORS; c++) {
+    for(int r = 0; r < NUM_ANCHORS; r++) {
+      testAssert(a.hWalls[c][r] == b.hWalls[c][r]);
+      testAssert(a.vWalls[c][r] == b.vWalls[c][r]);
+    }
+  }
 }
 
 static Board boardFromMoves(const string& moves, Player& pla) {
@@ -356,6 +363,30 @@ static void checkPosition(const Board& board, const RefWalls& w, Player pla, Ran
   checkBoardInvariants(board);
   testAssert(board.blackFences == w.left[P_BLACK]);
   testAssert(board.whiteFences == w.left[P_WHITE]);
+
+  // Board's explicit wall arrays (the single source of truth for wall placement, used by
+  // QuoridorNN::fillRow) must exactly equal the walls replayed independently from move history
+  // (RefWalls), and `colors` must equal what those walls imply: this is the regression test for
+  // the wall-anchor ambiguity bug where a horizontal wall at (c, r) and a vertical wall at
+  // (c, r-1) share an arm cell, so "center + one arm occupied" alone cannot tell them apart.
+  for(int c = 0; c < NUM_ANCHORS; c++) {
+    for(int r = 0; r < NUM_ANCHORS; r++) {
+      testAssert(board.hWalls[c][r] == w.h[c][r]);
+      testAssert(board.vWalls[c][r] == w.v[c][r]);
+
+      Loc center = Location::hWallLoc(c, r);
+      bool colorsImplyCenter = board.colors[center] == C_FENCE;
+      testAssert(colorsImplyCenter == (board.hWalls[c][r] || board.vWalls[c][r]));
+      if(board.hWalls[c][r]) {
+        testAssert(board.colors[center + board.adj_offsets[1]] == C_FENCE);
+        testAssert(board.colors[center + board.adj_offsets[2]] == C_FENCE);
+      }
+      if(board.vWalls[c][r]) {
+        testAssert(board.colors[center + board.adj_offsets[0]] == C_FENCE);
+        testAssert(board.colors[center + board.adj_offsets[3]] == C_FENCE);
+      }
+    }
+  }
 
   // Walls: lazy (isLegalWallPlacement, isLegal) vs naive full BFS, for both players' fence counts.
   for(int c = 0; c < NUM_ANCHORS; c++) {

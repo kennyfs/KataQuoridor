@@ -317,6 +317,14 @@ struct Board {
   CompactPath cachedPathP1;
   CompactPath cachedPathP2;
 
+  // Explicit wall placement bitmaps, keyed by anchor (c, r), 0 <= c, r < 8.
+  // This is the single source of truth for "which walls are placed" - it disambiguates
+  // cases where reconstructing from `colors` alone is ambiguous (e.g. a horizontal wall at
+  // (c, r) and a vertical wall at (c, r-1) share an arm cell, so neither can be told apart
+  // from the other by looking at `colors` alone).
+  bool vWalls[8][8];
+  bool hWalls[8][8];
+
 private:
   void init(int xS, int yS);
   void placeFence(Loc center, bool isVertical);
