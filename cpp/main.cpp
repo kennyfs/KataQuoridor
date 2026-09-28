@@ -60,6 +60,8 @@ benchmarknn : Benchmark raw neural net forward throughput, without search.
 testgpuerror : Print the average error of the neural net between current config and fp32 config.
 testbackendreference : Test backend absolute outputs against compiled-in blended reference data.
 dumponnx : (TensorRT/ONNX only) Write out the ONNX graph KataGo builds for a model.
+dumpnninputs : Dump Quoridor NN input rows for random positions (NN parity test).
+evalnnparity : Evaluate the NN parity positions with a model (NN parity test).
 
 runtests : Test important board algorithms and datastructures
 runnnlayertests : Test a few subcomponents of the current neural net backend
@@ -110,6 +112,10 @@ static int handleSubcommand(const string& subcommand, const vector<string>& args
     return MainCmds::testbackendreference(subArgs);
   else if(subcommand == "dumponnx")
     return MainCmds::dumponnx(subArgs);
+  else if(subcommand == "dumpnninputs")
+    return MainCmds::dumpnninputs(subArgs);
+  else if(subcommand == "evalnnparity")
+    return MainCmds::evalnnparity(subArgs);
   else if(subcommand == "runtests")
     return MainCmds::runtests(subArgs);
   else if(subcommand == "runnnlayertests")

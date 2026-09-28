@@ -16,6 +16,8 @@ namespace MainCmds {
   int testgpuerror(const std::vector<std::string>& args);
   int testbackendreference(const std::vector<std::string>& args);
   int dumponnx(const std::vector<std::string>& args);
+  int dumpnninputs(const std::vector<std::string>& args);
+  int evalnnparity(const std::vector<std::string>& args);
 
   int runtests(const std::vector<std::string>& args);
   int runnnlayertests(const std::vector<std::string>& args);
