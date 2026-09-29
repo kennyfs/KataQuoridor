@@ -25,6 +25,30 @@ def pad_global_targets_nc(globalTargetsNC: np.ndarray) -> np.ndarray:
     padded[:, :num_channels] = globalTargetsNC
     return padded
 
+# Quoridor spatial input channels 8..11 are continuous BFS distances, d < 0 ? 1 : min(1, d/32)
+# (QuoridorNN::fillRow). They cannot be stored in the packed bit planes (which hold 0 there);
+# the npz carries them raw in spatialDistNCHW (uint8 [N,4,H,W], canonical orientation, 255 =
+# unreachable), and the loader rebuilds the channels from it.
+QUORIDOR_DIST_FIRST_CHANNEL = 8
+QUORIDOR_DIST_NUM_CHANNELS = 4
+QUORIDOR_DIST_UNREACHABLE = 255
+QUORIDOR_DIST_SCALE = 32.0
+
+def decode_quoridor_dist_planes(spatialDistNCHW: np.ndarray) -> np.ndarray:
+    d = spatialDistNCHW.astype(np.float32)
+    return np.where(spatialDistNCHW == QUORIDOR_DIST_UNREACHABLE, np.float32(1.0), np.minimum(np.float32(1.0), d / np.float32(QUORIDOR_DIST_SCALE))).astype(np.float32)
+
+def apply_quoridor_dist_planes(binaryInputNCHW: np.ndarray, spatialDistNCHW: np.ndarray, npz_file="") -> None:
+    """Overwrites channels 8..11 of unpacked float inputs [N,C,H,W] in place with decoded distances.
+    Must run before any symmetry is applied (spatialDistNCHW is stored unmirrored)."""
+    lo = QUORIDOR_DIST_FIRST_CHANNEL
+    hi = lo + QUORIDOR_DIST_NUM_CHANNELS
+    assert spatialDistNCHW.dtype == np.uint8, f"{npz_file}: spatialDistNCHW dtype {spatialDistNCHW.dtype}"
+    assert spatialDistNCHW.shape == (binaryInputNCHW.shape[0], QUORIDOR_DIST_NUM_CHANNELS) + binaryInputNCHW.shape[2:], (
+        f"{npz_file}: spatialDistNCHW shape {spatialDistNCHW.shape} vs inputs {binaryInputNCHW.shape}")
+    assert not binaryInputNCHW[:, lo:hi].any(), f"{npz_file}: packed bit planes 8..11 are nonzero; data not upgraded correctly"
+    binaryInputNCHW[:, lo:hi] = decode_quoridor_dist_planes(spatialDistNCHW)
+
 def read_npz_training_data(
     npz_files,
     batch_size: int,
@@ -71,6 +95,12 @@ def read_npz_training_data(
                 return arr.reshape(num_whole_steps * batch_size, *rest)
 
             binaryInputNCHWPacked = select_rank_rows(npz["binaryInputNCHWPacked"])
+            if "spatialDistNCHW" not in npz:
+                raise KeyError(
+                    f"{npz_file} lacks spatialDistNCHW (S8-S11 raw distances). Data written before the S8-S11 fix "
+                    "must be upgraded with python/quoridor_add_dist_planes.py; see docs/DistPlanesUpgrade.md."
+                )
+            spatialDistNCHW = select_rank_rows(npz["spatialDistNCHW"])
             globalInputNC = select_rank_rows(npz["globalInputNC"])
             policyTargetsNCMove = select_rank_rows(npz["policyTargetsNCMove"]).astype(np.float32)
             globalTargetsNC = pad_global_targets_nc(select_rank_rows(npz["globalTargetsNC"]))
@@ -93,6 +123,7 @@ def read_npz_training_data(
         binaryInputNCHW = np.reshape(binaryInputNCHW, (
             binaryInputNCHW.shape[0], binaryInputNCHW.shape[1], pos_len, pos_len
         )).astype(np.float32)
+        apply_quoridor_dist_planes(binaryInputNCHW, spatialDistNCHW, npz_file)
 
         assert binaryInputNCHW.shape[1] == num_bin_features
         assert globalInputNC.shape[1] == num_global_features
