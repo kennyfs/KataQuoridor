@@ -37,6 +37,13 @@ namespace QuoridorNN {
   // The Go score-belief machinery (scoreDistrN etc.) is inert for Quoridor.
   // ---------------------------------------------------------------------------------------------
 
+  // The "sqrt board area" that search feeds to the score-utility functions is atan(margin /
+  // (scale * SCORE_UTILITY_SCALE_BASE)). Board::sqrtBoardArea() returns this. Margins are roughly
+  // -20..+20 moves, so with 9 (before multiplying by the *ScoreUtilityFactor): one move of margin is worth
+  // ~0.094 at the dynamic scale (0.75*9 = 6.75) and ~0.035 at the static scale (2*9 = 18), and the
+  // curve only saturates for margins beyond ~15 moves. With Go's 17 the same moves would be worth half as much.
+  constexpr double SCORE_UTILITY_SCALE_BASE = Board::SCORE_UTILITY_SCALE_BASE;
+
   // The model's spatial grid size (9x9), as opposed to Board's 17x17 search grid.
   constexpr int MODEL_LEN = 9;
   // policy / optimistic-policy variants, each with {pawn, vertical wall, horizontal wall} planes.
