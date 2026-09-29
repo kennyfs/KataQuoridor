@@ -32,6 +32,9 @@ namespace Tests {
   //testquoridorperft.cpp
   void runQuoridorRuleTests();
 
+  //testquoridorscore.cpp
+  void runQuoridorScoreTests();
+
   //testpassalivesuicide.cpp
   void runPassAliveSuicideModeTests();
   void runExcludeTerritoryAtariModeTests();

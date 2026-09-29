@@ -1078,6 +1078,7 @@ add_executable(katago
   tests/testexcludeterritoryatari.cpp
   tests/testrules.cpp
   tests/testquoridorperft.cpp
+  tests/testquoridorscore.cpp
   tests/testscore.cpp
   tests/testsgf.cpp
   tests/testsymmetries.cpp
