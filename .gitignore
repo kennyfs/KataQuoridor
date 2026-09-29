@@ -31,6 +31,7 @@ cpp/tests/results/matchsgfs/games.sgfs
 cpp/tests/results/matchsgfs2/games.sgfs
 
 cpp/data/
+python/model_viewer/data/
 versions/
 cpp/build
 build/

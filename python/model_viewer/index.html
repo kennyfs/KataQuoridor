@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KataQuoridor Model Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1><span class="logo"></span> KataQuoridor Model Viewer</h1>
+  <div class="tabs">
+    <button id="tabArch" class="on" title="Model architecture and weights (1)">Architecture</button>
+    <button id="tabFeat" title="Feature importance, search and calibration (2)">Feature analysis</button>
+  </div>
+  <select id="modelSel" title="Analysis files found in data/"></select>
+  <span id="metaLine"></span>
+  <label class="btn" for="fileInput">Open .json…</label>
+  <input type="file" id="fileInput" accept=".json">
+</header>
+
+<div id="empty">
+  <div>
+    <b>No analysis loaded.</b><br><br>
+    Generate one with<br>
+    <code>python3 python/model_viewer/analyze_model.py -model-dir ~/q0_run/models/&lt;model&gt;</code><br>
+    then serve this page with <code>python3 python/model_viewer/serve.py</code>,<br>
+    or drop a generated <b>.json</b> file here.
+  </div>
+</div>
+
+<main id="archView" hidden>
+  <nav id="archNav" class="outline"></nav>
+  <section id="diagramWrap">
+    <div class="tiles" id="archTiles"></div>
+    <div class="budget" id="archBudget"></div>
+    <div class="legendRow" id="kindLegend"></div>
+    <div id="diagram"></div>
+  </section>
+  <aside id="detail"><div class="hintBox">Click any layer to see its weights, statistics and (for attention layers) attention maps.</div></aside>
+</main>
+
+<main id="featView" hidden>
+  <nav id="featNav" class="outline"></nav>
+  <section id="featBody"></section>
+</main>
+
+<div id="tip"></div>
+
+<script src="js/util.js"></script>
+<script src="js/board.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/arch.js"></script>
+<script src="js/analysis.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
