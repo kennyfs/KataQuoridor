@@ -181,6 +181,11 @@ struct TrainingWriteBuffers {
   //Packed bitwise, with each (HW) zero-padded to a round byte.
   //Within each byte, bits are packed bigendianwise, since that's what numpy's unpackbits will expect.
   NumpyBuffer<uint8_t> binaryInputNCHWPacked;
+  //Quoridor: raw BFS distances (in pawn steps) for spatial input channels 8-11, shape [N,4,H,W],
+  //canonical (side-to-move) orientation, 255 = unreachable (see QuoridorNN::fillCanonicalDistancesU8).
+  //These channels are continuous (d/32), so they cannot live in the packed bit planes above, where
+  //they are written as 0. The training loader rebuilds channels 8-11 from this array.
+  NumpyBuffer<uint8_t> spatialDistNCHW;
   //Input features that are global.
   NumpyBuffer<float> globalInputNC;
 

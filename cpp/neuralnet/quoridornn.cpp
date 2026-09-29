@@ -25,6 +25,94 @@ static void setRowBin(float* rowBin, int pos, int feature, float value, int posS
   rowBin[pos * posStride + feature * featureStride] = value;
 }
 
+void QuoridorNN::fillDistances(const Board& board, Player nextPlayer, int dists[4][9][9]) {
+  assert(nextPlayer == P_BLACK || nextPlayer == P_WHITE);
+  Loc curPawnLoc = (nextPlayer == P_BLACK) ? board.blackPawnLoc : board.whitePawnLoc;
+  Loc oppPawnLoc = (nextPlayer == P_BLACK) ? board.whitePawnLoc : board.blackPawnLoc;
+  int curPawnC = Location::getX(curPawnLoc, board.x_size) / 2;
+  int curPawnR = Location::getY(curPawnLoc, board.x_size) / 2;
+  int oppPawnC = Location::getX(oppPawnLoc, board.x_size) / 2;
+  int oppPawnR = Location::getY(oppPawnLoc, board.x_size) / 2;
+
+  // Multi-source BFS over pawn steps (walls only, pawns ignored).
+  auto runBFS = [&](const std::vector<std::pair<int,int>>& sources, int distMap[9][9]) {
+    for(int r = 0; r < 9; r++) {
+      for(int c = 0; c < 9; c++) {
+        distMap[c][r] = -1;
+      }
+    }
+    int qC[81];
+    int qR[81];
+    int qHead = 0;
+    int qTail = 0;
+
+    for(const auto& s : sources) {
+      qC[qTail] = s.first;
+      qR[qTail] = s.second;
+      qTail++;
+      distMap[s.first][s.second] = 0;
+    }
+
+    const int dc[4] = {0, 0, 1, -1};
+    const int dr[4] = {-1, 1, 0, 0};
+
+    while(qHead < qTail) {
+      int c = qC[qHead];
+      int r = qR[qHead];
+      qHead++;
+      int d = distMap[c][r];
+      Loc currLoc = Location::pawnLoc(c, r, board.x_size);
+
+      for(int i = 0; i < 4; i++) {
+        int nc = c + dc[i];
+        int nr = r + dr[i];
+        if(nc >= 0 && nc < 9 && nr >= 0 && nr < 9 && distMap[nc][nr] == -1) {
+          Loc nextLoc = Location::pawnLoc(nc, nr, board.x_size);
+          if(board.canPawnStep(currLoc, nextLoc)) {
+            distMap[nc][nr] = d + 1;
+            qC[qTail] = nc;
+            qR[qTail] = nr;
+            qTail++;
+          }
+        }
+      }
+    }
+  };
+
+  // Black goal row on board is r=0; White goal row on board is r=8
+  int curGoalR = (nextPlayer == P_BLACK) ? 0 : 8;
+  int oppGoalR = (nextPlayer == P_BLACK) ? 8 : 0;
+
+  std::vector<std::pair<int,int>> curGoalSources;
+  std::vector<std::pair<int,int>> oppGoalSources;
+  curGoalSources.reserve(9);
+  oppGoalSources.reserve(9);
+  for(int c = 0; c < 9; c++) {
+    curGoalSources.push_back({c, curGoalR});
+    oppGoalSources.push_back({c, oppGoalR});
+  }
+
+  runBFS(curGoalSources, dists[0]);
+  runBFS(oppGoalSources, dists[1]);
+  runBFS({{curPawnC, curPawnR}}, dists[2]);
+  runBFS({{oppPawnC, oppPawnR}}, dists[3]);
+}
+
+void QuoridorNN::fillCanonicalDistancesU8(const Board& board, Player nextPlayer, uint8_t* out) {
+  int dists[4][9][9];
+  fillDistances(board, nextPlayer, dists);
+  for(int k = 0; k < 4; k++) {
+    for(int rCanon = 0; rCanon < 9; rCanon++) {
+      int rBoard = (nextPlayer == P_WHITE) ? (8 - rCanon) : rCanon;
+      for(int c = 0; c < 9; c++) {
+        int d = dists[k][c][rBoard];
+        testAssert(d < 255);
+        out[k * 81 + rCanon * 9 + c] = (d < 0) ? DIST_UNREACHABLE_U8 : (uint8_t)d;
+      }
+    }
+  }
+}
+
 void QuoridorNN::fillRow(
   const Board& board,
   const BoardHistory& boardHistory,
@@ -87,73 +175,13 @@ void QuoridorNN::fillRow(
   const bool (&hasVWall)[8][8] = board.vWalls;
   const bool (&hasHWall)[8][8] = board.hWalls;
 
-  // BFS Distances
-  auto runBFS = [&](const std::vector<std::pair<int,int>>& sources, int distMap[9][9]) {
-    for(int r = 0; r < 9; r++) {
-      for(int c = 0; c < 9; c++) {
-        distMap[c][r] = -1;
-      }
-    }
-    int qC[81];
-    int qR[81];
-    int qHead = 0;
-    int qTail = 0;
-
-    for(const auto& s : sources) {
-      qC[qTail] = s.first;
-      qR[qTail] = s.second;
-      qTail++;
-      distMap[s.first][s.second] = 0;
-    }
-
-    const int dc[4] = {0, 0, 1, -1};
-    const int dr[4] = {-1, 1, 0, 0};
-
-    while(qHead < qTail) {
-      int c = qC[qHead];
-      int r = qR[qHead];
-      qHead++;
-      int d = distMap[c][r];
-      Loc currLoc = Location::pawnLoc(c, r, board.x_size);
-
-      for(int i = 0; i < 4; i++) {
-        int nc = c + dc[i];
-        int nr = r + dr[i];
-        if(nc >= 0 && nc < 9 && nr >= 0 && nr < 9 && distMap[nc][nr] == -1) {
-          Loc nextLoc = Location::pawnLoc(nc, nr, board.x_size);
-          if(board.canPawnStep(currLoc, nextLoc)) {
-            distMap[nc][nr] = d + 1;
-            qC[qTail] = nc;
-            qR[qTail] = nr;
-            qTail++;
-          }
-        }
-      }
-    }
-  };
-
-  // Black goal row on board is r=0; White goal row on board is r=8
-  int curGoalR = (nextPlayer == P_BLACK) ? 0 : 8;
-  int oppGoalR = (nextPlayer == P_BLACK) ? 8 : 0;
-
-  int distToGoalCur[9][9];
-  int distToGoalOpp[9][9];
-  int distFromPawnCur[9][9];
-  int distFromPawnOpp[9][9];
-
-  std::vector<std::pair<int,int>> curGoalSources;
-  std::vector<std::pair<int,int>> oppGoalSources;
-  curGoalSources.reserve(9);
-  oppGoalSources.reserve(9);
-  for(int c = 0; c < 9; c++) {
-    curGoalSources.push_back({c, curGoalR});
-    oppGoalSources.push_back({c, oppGoalR});
-  }
-
-  runBFS(curGoalSources, distToGoalCur);
-  runBFS(oppGoalSources, distToGoalOpp);
-  runBFS({{curPawnC, curPawnR}}, distFromPawnCur);
-  runBFS({{oppPawnC, oppPawnR}}, distFromPawnOpp);
+  // BFS Distances (shared with the training data writer, see fillDistances)
+  int dists[4][9][9];
+  fillDistances(board, nextPlayer, dists);
+  int (&distToGoalCur)[9][9] = dists[0];
+  int (&distToGoalOpp)[9][9] = dists[1];
+  int (&distFromPawnCur)[9][9] = dists[2];
+  int (&distFromPawnOpp)[9][9] = dists[3];
 
   int shortestDistCur = distToGoalCur[curPawnC][curPawnR];
   int shortestDistOpp = distToGoalOpp[oppPawnC][oppPawnR];

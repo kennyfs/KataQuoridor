@@ -59,6 +59,20 @@ namespace QuoridorNN {
   int numSpatialFeatures(int ioVersion);
   int numGlobalFeatures(int ioVersion);
 
+  // BFS distance fields (in pawn steps, walls only, pawns ignored; -1 = unreachable), indexed
+  // [k][c][r] in true board (not canonical) space. k: 0 = to nextPlayer's goal row, 1 = to the
+  // opponent's goal row, 2 = from nextPlayer's pawn, 3 = from the opponent's pawn. These feed
+  // spatial channels 8..11 of fillRow as (d < 0 ? 1 : min(1, d/32)).
+  void fillDistances(const Board& board, Player nextPlayer, int dists[4][9][9]);
+
+  // Raw distances for channels 8..11 as written to training data (npz key spatialDistNCHW):
+  // out[k*81 + rCanon*9 + c], canonical (nextPlayer-relative) orientation exactly like fillRow,
+  // DIST_UNREACHABLE_U8 for unreachable cells.
+  constexpr int FIRST_DIST_CHANNEL = 8;
+  constexpr int NUM_DIST_CHANNELS = 4;
+  constexpr uint8_t DIST_UNREACHABLE_U8 = 255;
+  void fillCanonicalDistancesU8(const Board& board, Player nextPlayer, uint8_t* out);
+
   // Fills a single row of spatial and global model inputs for the given ioVersion, in the
   // model's native 9x9 space, from the canonical (nextPlayer-relative, unmirrored) perspective.
   // Does not apply any input symmetry; call applyInputSymmetry afterwards for that.

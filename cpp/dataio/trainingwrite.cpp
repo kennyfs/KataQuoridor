@@ -291,6 +291,7 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    curRows(0),
    binaryInputNCHWUnpacked(NULL),
    binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
+   spatialDistNCHW({maxRws, QuoridorNN::NUM_DIST_CHANNELS, yLen, xLen}),
    globalInputNC({maxRws, numFChannels}),
    policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, (iVersion == 1 ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(xLen,yLen))}),
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
@@ -547,10 +548,22 @@ void TrainingWriteBuffers::addRow(
     if(inputsVersion == 1) {
       testAssert(QuoridorNN::NUM_FEATURES_SPATIAL_V1 == numBinaryChannels);
       testAssert(QuoridorNN::NUM_FEATURES_GLOBAL_V1 == numGlobalChannels);
+      testAssert(posArea == QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
       QuoridorNN::fillRow(board, hist, nextPlayer, nnInputParams, inputsVersion, inputsUseNHWC, rowBin, rowGlobal);
+      //Continuous distance channels are stored raw in spatialDistNCHW, and as 0 in the bit planes.
+      QuoridorNN::fillCanonicalDistancesU8(board, nextPlayer, spatialDistNCHW.data + curRows * QuoridorNN::NUM_DIST_CHANNELS * posArea);
+      std::fill(
+        rowBin + QuoridorNN::FIRST_DIST_CHANNEL * posArea,
+        rowBin + (QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS) * posArea,
+        0.0f
+      );
     }
     else
       ASSERT_UNREACHABLE;
+
+    //Packing bits would silently truncate any non-binary value
+    for(int i = 0; i<numBinaryChannels * posArea; i++)
+      testAssert(rowBin[i] == 0.0f || rowBin[i] == 1.0f);
 
     //Pack bools bitwise into uint8_t
     uint8_t* rowBinPacked = binaryInputNCHWPacked.data + curRows * numBinaryChannels * packedBoardArea;
@@ -994,6 +1007,9 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
   numBytes = binaryInputNCHWPacked.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("binaryInputNCHWPacked", binaryInputNCHWPacked.dataIncludingHeader, numBytes);
 
+  numBytes = spatialDistNCHW.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("spatialDistNCHW", spatialDistNCHW.dataIncludingHeader, numBytes);
+
   numBytes = globalInputNC.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("globalInputNC", globalInputNC.dataIncludingHeader, numBytes);
 
@@ -1040,6 +1056,16 @@ void TrainingWriteBuffers::writeToTextOstream(ostream& out) {
   for(int i = 0; i<len; i++) {
     sprintf(buf,"%02X",binaryInputNCHWPacked.data[i]);
     out << buf;
+    if((i+1) % (len/curRows) == 0) out << endl;
+  }
+  out << endl;
+
+  out << "spatialDistNCHW" << endl;
+  spatialDistNCHW.prepareHeaderWithNumRows(curRows);
+  printHeader((const char*)spatialDistNCHW.dataIncludingHeader);
+  len = spatialDistNCHW.getActualDataLen(curRows);
+  for(int i = 0; i<len; i++) {
+    out << (int)spatialDistNCHW.data[i] << " ";
     if((i+1) % (len/curRows) == 0) out << endl;
   }
   out << endl;

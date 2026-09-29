@@ -697,7 +697,19 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
       for(int t = 0; t < maxTurns; t++) {
         std::vector<Loc> pawnDests = currBoard.getLegalPawnDestinations(currPla);
         Loc chosenMove = Board::NULL_LOC;
-        if(!pawnDests.empty()) {
+        // Sometimes place a random legal wall, so rows exercise blocked edges and the BFS distance channels.
+        if(rand.nextBool(0.4)) {
+          for(int tries = 0; tries < 20; tries++) {
+            int c = rand.nextUInt(8);
+            int r = rand.nextUInt(8);
+            Loc wallLoc = rand.nextBool(0.5) ? Location::hWallLoc(c, r, 17) : Location::vWallLoc(c, r, 17);
+            if(currBoard.isLegal(wallLoc, currPla)) {
+              chosenMove = wallLoc;
+              break;
+            }
+          }
+        }
+        if(chosenMove == Board::NULL_LOC && !pawnDests.empty()) {
           int bestDist = 999;
           for(Loc dest : pawnDests) {
             int d = (currPla == P_BLACK) ? Location::getY(dest, 17) : (16 - Location::getY(dest, 17));
