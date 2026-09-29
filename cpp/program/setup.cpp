@@ -974,9 +974,10 @@ Rules Setup::loadSingleRules(
     rules = Rules::parseRules(cfg.getString("rules"));
   }
   else {
-    string koRule = cfg.getString("koRule", Rules::koRuleStrings());
-    string scoringRule = cfg.getString("scoringRule", Rules::scoringRuleStrings());
-    bool multiStoneSuicideLegal = cfg.getBool("multiStoneSuicideLegal");
+    //KataQuoridor: Quoridor has a single rule set, so these Go rule keys are optional.
+    string koRule = cfg.contains("koRule") ? cfg.getString("koRule", Rules::koRuleStrings()) : "POSITIONAL";
+    string scoringRule = cfg.contains("scoringRule") ? cfg.getString("scoringRule", Rules::scoringRuleStrings()) : "AREA";
+    bool multiStoneSuicideLegal = cfg.contains("multiStoneSuicideLegal") ? cfg.getBool("multiStoneSuicideLegal") : false;
     bool hasButton = cfg.contains("hasButton") ? cfg.getBool("hasButton") : false;
     float komi = 7.5f;
 
