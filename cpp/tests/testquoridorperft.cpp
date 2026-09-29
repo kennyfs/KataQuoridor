@@ -542,11 +542,125 @@ static void testFuzz() {
   testAssert(stats.positionsWithDiagonalJump > 0);
 }
 
+//------------------------------------------------------------------------------------------------
+// Board printing (showboard)
+
+static void testPrintBoard() {
+  cout << "  Board printing" << endl;
+  Player pla;
+  Board board = boardFromMoves("d3h e5v a8h e2", pla);
+  BoardHistory hist(board, pla, Rules::getQuoridorRules(), 0, BoardHistoryModes(false, false));
+  vector<Move> moves = {Move(Location::ofString("d3h", board), P_BLACK), Move(Location::ofString("e5v", board), P_WHITE)};
+
+  {
+    // Marking a wall that is not placed yet (as a search hint would).
+    ostringstream out;
+    Board::printBoard(out, board, Location::ofString("g6v", board), &moves);
+    string expected = R"%%(
+MoveNum: 2 HASH: 1A1440A04BD749E4AC8283D4AB8EF701
+     a   b   c   d   e   f   g   h   i
+   +---+---+---+---+---+---+---+---+---+
+ 9 | .   .   .   .   B   .   .   .   . |
+   +---+---+   +   +   +   +   +   +   +
+ 8 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 7 | .   .   .   .   .   .   . # .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 6 | .   .   .   .   . | .   . # .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 5 | .   .   .   .   . | .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 4 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +---+---+   +   +   +   +
+ 3 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 2 | .   .   .   .   W   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 1 | .   .   .   .   .   .   .   .   . |
+   +---+---+---+---+---+---+---+---+---+
+Black (B): e9 walls: 8 dist: 9 (goal row 1)
+White (W): e2 walls: 9 dist: 8 (goal row 9)
+Next player: Black
+)%%";
+    expect("printBoard with marked vertical wall", out, expected);
+  }
+
+  {
+    // Marking a pawn cell and a horizontal wall.
+    ostringstream out;
+    Board::printBoard(out, board, Location::ofString("e8", board), nullptr);
+    Board::printBoard(out, board, Location::ofString("h1h", board), nullptr);
+    string expected = R"%%(
+HASH: 1A1440A04BD749E4AC8283D4AB8EF701
+     a   b   c   d   e   f   g   h   i
+   +---+---+---+---+---+---+---+---+---+
+ 9 | .   .   .   .   B   .   .   .   . |
+   +---+---+   +   +   +   +   +   +   +
+ 8 | .   .   .   .  [.]  .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 7 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 6 | .   .   .   .   . | .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 5 | .   .   .   .   . | .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 4 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +---+---+   +   +   +   +
+ 3 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 2 | .   .   .   .   W   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 1 | .   .   .   .   .   .   .   .   . |
+   +---+---+---+---+---+---+---+---+---+
+Black (B): e9 walls: 8 dist: 9 (goal row 1)
+White (W): e2 walls: 9 dist: 8 (goal row 9)
+Next player: Black
+HASH: 1A1440A04BD749E4AC8283D4AB8EF701
+     a   b   c   d   e   f   g   h   i
+   +---+---+---+---+---+---+---+---+---+
+ 9 | .   .   .   .   B   .   .   .   . |
+   +---+---+   +   +   +   +   +   +   +
+ 8 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 7 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 6 | .   .   .   .   . | .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 5 | .   .   .   .   . | .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 4 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +---+---+   +   +   +   +
+ 3 | .   .   .   .   .   .   .   .   . |
+   +   +   +   +   +   +   +   +   +   +
+ 2 | .   .   .   .   W   .   .   .   . |
+   +   +   +   +   +   +   +   +===+===+
+ 1 | .   .   .   .   .   .   .   .   . |
+   +---+---+---+---+---+---+---+---+---+
+Black (B): e9 walls: 8 dist: 9 (goal row 1)
+White (W): e2 walls: 9 dist: 8 (goal row 9)
+Next player: Black
+)%%";
+    expect("printBoard with marked pawn cell and horizontal wall", out, expected);
+  }
+
+  {
+    // Hitting the move cap ends the game via endAndScoreGameNow, which is the only way to draw.
+    hist.endAndScoreGameNow(board);
+    ostringstream out;
+    hist.printBasicInfo(out, board);
+    vector<string> lines = Global::split(Global::trim(out.str()), '\n');
+    testAssert(lines.back() == "Game finished: Draw (move cutoff)");
+    testAssert(out.str().find("Rules") == string::npos);
+    testAssert(out.str().find("komi") == string::npos);
+  }
+}
+
 } // namespace
 
 void Tests::runQuoridorRuleTests() {
   cout << "=== Running Quoridor perft / fuzz / undo tests ===" << endl;
   testPerft();
   testFuzz();
+  testPrintBoard();
   cout << "=== Quoridor perft / fuzz / undo tests passed ===" << endl;
 }

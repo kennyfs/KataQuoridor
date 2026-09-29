@@ -1260,44 +1260,96 @@ string Board::toStringSimple(const Board& board, char lineDelimiter) {
   return out.str();
 }
 
+// Draws the 9x9 pawn grid with walls between cells, labelled in QTP notation (columns a-i, rows 1-9).
+// Walls are read from the hWalls/vWalls bitmaps, not from `colors`, since shared arm cells make `colors` ambiguous.
+// markLoc highlights a pawn cell as [.] and a wall (placed or not) as === / #.
 void Board::printBoard(ostream& out, const Board& board, Loc markLoc, const vector<Move>* hist) {
+  const int n = (board.x_size + 1) / 2;
+  const int numAnchors = n - 1;
+
+  int markC = -1, markR = -1;
+  bool markPawn = false, markH = false, markV = false;
+  if(markLoc != NULL_LOC && markLoc != PASS_LOC) {
+    int mx = Location::getX(markLoc, board.x_size);
+    int my = Location::getY(markLoc, board.x_size);
+    markC = mx / 2;
+    markR = my / 2;
+    markPawn = Location::isPawnLoc(markLoc, board.x_size);
+    markH = Location::isHWallLoc(markLoc, board.x_size);
+    markV = Location::isVWallLoc(markLoc, board.x_size);
+  }
+
+  // Wall segment below pawn cell (c, r+1) / above (c, r): covered by a horizontal wall anchored at (c, r) or (c-1, r).
+  auto hSeg = [&](int c, int r, bool& marked) {
+    marked = markH && markR == r && (markC == c || markC == c - 1);
+    bool placed = (c < numAnchors && board.hWalls[c][r]) || (c > 0 && board.hWalls[c - 1][r]);
+    return placed || marked;
+  };
+  // Wall segment right of pawn cell (c, r): covered by a vertical wall anchored at (c, r) or (c, r-1).
+  auto vSeg = [&](int c, int r, bool& marked) {
+    marked = markV && markC == c && (markR == r || markR == r - 1);
+    bool placed = (r < numAnchors && board.vWalls[c][r]) || (r > 0 && board.vWalls[c][r - 1]);
+    return placed || marked;
+  };
+  auto printEdge = [&]() {
+    out << "   +";
+    for(int c = 0; c < n; c++)
+      out << "---+";
+    out << "\n";
+  };
+
   if(hist != nullptr)
     out << "MoveNum: " << hist->size() << " ";
   out << "HASH: " << board.pos_hash << "\n";
-  out << "Black (P1) Fences Left: " << board.blackFences << "\n";
-  out << "White (P2) Fences Left: " << board.whiteFences << "\n";
-  out << "Next Player: " << PlayerIO::playerToString(board.nextPla) << "\n";
 
-  for(int y = board.y_size - 1; y >= 0; y--) {
-    out << setw(2) << y << " ";
-    for(int x = 0; x < board.x_size; x++) {
-      Loc loc = Location::getLoc(x, y, board.x_size);
-      Color c = board.colors[loc];
-      char ch = '.';
-      if(c == C_BLACK) ch = 'B';
-      else if(c == C_WHITE) ch = 'W';
-      else if(c == C_FENCE) {
-        if(x % 2 == 1 && y % 2 == 1) ch = '+';
-        else if(y % 2 == 1) ch = '-';
-        else ch = '|';
+  out << "   ";
+  for(int c = 0; c < n; c++)
+    out << "  " << (char)('a' + c) << " ";
+  out << "\n";
+  printEdge();
+
+  for(int r = n - 1; r >= 0; r--) {
+    out << setw(2) << (r + 1) << " |";
+    for(int c = 0; c < n; c++) {
+      Loc loc = Location::pawnLoc(c, r, board.x_size);
+      Color color = board.colors[loc];
+      char ch = color == C_BLACK ? 'B' : color == C_WHITE ? 'W' : '.';
+      bool marked = markPawn && markC == c && markR == r;
+      out << (marked ? '[' : ' ') << ch << (marked ? ']' : ' ');
+      if(c < n - 1) {
+        bool segMarked;
+        bool blocked = vSeg(c, r, segMarked);
+        out << (segMarked ? '#' : blocked ? '|' : ' ');
       }
-      else {
-        if(x % 2 == 0 && y % 2 == 0) ch = '.';
-        else ch = ' ';
-      }
-      if(loc == markLoc)
-        out << '@';
       else
-        out << ch;
-      out << ' ';
+        out << '|';
     }
     out << "\n";
+
+    if(r > 0) {
+      out << "   +";
+      for(int c = 0; c < n; c++) {
+        bool segMarked;
+        bool blocked = hSeg(c, r - 1, segMarked);
+        out << (segMarked ? "===" : blocked ? "---" : "   ") << '+';
+      }
+      out << "\n";
+    }
   }
-  out << "   ";
-  for(int x = 0; x < board.x_size; x++) {
-    out << (x % 10) << ' ';
-  }
-  out << "\n";
+  printEdge();
+
+  auto printPlayer = [&](Player pla) {
+    Loc pawn = pla == P_BLACK ? board.blackPawnLoc : board.whitePawnLoc;
+    int fences = pla == P_BLACK ? board.blackFences : board.whiteFences;
+    int goalRow = pla == P_BLACK ? 1 : n;
+    out << (pla == P_BLACK ? "Black (B): " : "White (W): ") << Location::toString(pawn, board)
+        << " walls: " << fences
+        << " dist: " << board.getShortestPathDistance(pla)
+        << " (goal row " << goalRow << ")\n";
+  };
+  printPlayer(P_BLACK);
+  printPlayer(P_WHITE);
+  out << "Next player: " << PlayerIO::playerToString(board.nextPla) << "\n";
 }
 
 ostream& operator<<(ostream& out, const Board& board) {

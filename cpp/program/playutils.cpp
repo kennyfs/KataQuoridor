@@ -1027,7 +1027,6 @@ void PlayUtils::printGenmoveLog(
 ) {
   const Board& board = search->getRootBoard();
   Board::printBoard(out, board, moveLoc, &(search->getRootHist().moveHistory));
-  out << search->getRootHist().rules << "\n";
   if(!std::isnan(timeTaken))
     out << "Time taken: " << timeTaken << "\n";
   out << "Root visits: " << search->getRootVisits() << "\n";
