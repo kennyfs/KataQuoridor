@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quoridor SGFS Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1><span class="dot" style="background:var(--b-acc)"></span><span class="dot" style="background:var(--w-acc)"></span> Quoridor SGFS Viewer</h1>
+  <div class="tabs"><button id="tabView" class="on">Viewer</button><button id="tabStats">Statistics</button></div>
+  <span id="fileName">No file loaded</span>
+  <label class="btn" for="fileInput">Open .sgfs…</label>
+  <input type="file" id="fileInput" accept=".sgfs,.sgf,.txt">
+  <button id="pathBtn" class="toggle on" title="Show all shortest paths (P)">Paths</button>
+  <button id="flipBtn" title="Flip board (F)">Flip</button>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Games</h2>
+    <div class="filters">
+      <select id="fRes"><option value="">All results</option><option value="B">Black wins</option><option value="W">White wins</option></select>
+      <select id="fType"><option value="">All types</option></select>
+      <input id="fMin" type="number" min="0" placeholder="min moves">
+    </div>
+    <div class="filters sortrow">
+      <select id="sortKey" title="Sort games by"></select>
+      <button id="sortDir" title="Flip sort direction">↓</button>
+      <button id="randBtn" title="Jump to a random game in the list (R)">🎲</button>
+    </div>
+    <div class="sortdesc" id="sortDesc"></div>
+    <div id="gameList"></div>
+    <div id="listCount"></div>
+  </section>
+
+  <section class="panel center">
+    <div class="empty" id="empty">
+      Drop a <b>.sgfs</b> file here or use <b>Open .sgfs…</b><br><br>
+      Or run <code>python3 python/sgfs_viewer/serve.py &lt;file.sgfs&gt;</code>
+    </div>
+    <div class="players vis" hidden>
+      <div class="pcard" id="cardB" style="--acc:var(--b-acc)">
+        <svg width="26" height="26"><circle cx="13" cy="13" r="10" fill="var(--b-pawn)" stroke="var(--b-acc)" stroke-width="3"/></svg>
+        <div><div class="name">Black <span class="sub">(1st)</span></div><div class="sub" id="subB">→ row 1</div><div class="sub model" id="modelB"></div></div>
+        <div class="walls" id="wallsB"></div>
+      </div>
+      <div class="pcard" id="cardW" style="--acc:var(--w-acc)">
+        <svg width="26" height="26"><circle cx="13" cy="13" r="10" fill="var(--w-pawn)" stroke="var(--w-acc)" stroke-width="3"/></svg>
+        <div><div class="name">White <span class="sub">(2nd)</span></div><div class="sub" id="subW">→ row 9</div><div class="sub model" id="modelW"></div></div>
+        <div class="walls" id="wallsW"></div>
+      </div>
+    </div>
+    <div id="boardWrap" class="vis" hidden title="Scroll to step through moves"><svg id="board" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    <div id="evalStrip" class="vis" hidden>
+      <div class="ev-tile" id="evWin">
+        <div class="k">White win% · search here</div>
+        <div class="v" id="evWinV">—</div>
+        <div class="wbar"><div class="w" id="evWinBar"></div><div class="b"></div></div>
+        <div class="s" id="evWinS"></div>
+      </div>
+      <div class="ev-tile" id="evVis">
+        <div class="k">Visits</div>
+        <div class="v" id="evVisV">—</div>
+        <div class="s" id="evVisS"></div>
+      </div>
+      <div class="ev-tile" id="evMar">
+        <div class="k">Game margin (W)</div>
+        <div class="v" id="evMarV">—</div>
+        <div class="s" id="evMarS"></div>
+      </div>
+      <div class="ev-tile" id="evPath">
+        <div class="k">Path race (W) · B − W steps</div>
+        <div class="v" id="evPathV">—</div>
+        <div class="s" id="evPathS"></div>
+      </div>
+    </div>
+    <input type="range" id="moveSlider" class="vis" min="0" max="0" value="0" hidden>
+    <div class="controls vis" hidden>
+      <button id="bFirst" title="Home">⏮</button>
+      <button id="bPrev10" title="PgUp">−10</button>
+      <button id="bPrev" title="←">◀</button>
+      <span id="moveInfo"></span>
+      <button id="bNext" title="→">▶</button>
+      <button id="bNext10" title="PgDn">+10</button>
+      <button id="bLast" title="End">⏭</button>
+      <button id="bPlay" class="primary" title="Space">Play</button>
+    </div>
+    <div class="hint vis" hidden>Scroll on board / ← → step · PgUp/PgDn ±10 · Home/End · ↑ ↓ prev/next game · Space autoplay · F flip · P paths · R random game</div>
+  </section>
+
+  <section class="panel">
+    <h2>Game</h2>
+    <dl id="info"></dl>
+    <h2 style="padding-top:4px">Search trace (White's view)</h2>
+    <div class="legend"><span style="--c:var(--w-acc)">White win%</span><span style="--c:var(--margin)">Game margin</span></div>
+    <svg id="chart"></svg>
+    <div id="moveList"></div>
+  </section>
+</main>
+
+<section id="statsView">
+  <div class="stats-top">
+    <span>Game type</span>
+    <select id="sType"><option value="">All</option></select>
+    <span id="statsNote"></span>
+  </div>
+  <div id="matchSection" hidden>
+    <div class="sec" id="matchTitle"></div>
+    <div class="tiles" id="matchTiles"></div>
+    <div class="cards" id="matchCards"></div>
+  </div>
+  <div class="sec" id="genTitle" hidden>All games <small>colors, lengths, walls, search</small></div>
+  <div class="tiles" id="statTiles"></div>
+  <div class="cards" id="statCards"></div>
+</section>
+
+<div id="tip"></div>
+
+<script src="js/core.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/viewer.js"></script>
+<script src="js/stats.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
