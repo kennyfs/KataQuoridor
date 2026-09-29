@@ -54,16 +54,17 @@ mkdir -p "$BASEDIR"/gatekeepersgf
 # you have strong hardware or are later into a run you may want to reduce the overhead by scaling
 # these numbers up and doing more games and training per cycle, exporting models less frequently, etc.
 
-NUM_GAMES_PER_CYCLE=5000 # Every cycle, play this many games
-NUM_THREADS_FOR_SHUFFLING=8
+NUM_GAMES_PER_CYCLE=10000 # Every cycle, play this many games
+NUM_THREADS_FOR_SHUFFLING=12
 NUM_TRAIN_SAMPLES_PER_EPOCH=100000  # Training will proceed in chunks of this many rows, subject to MAX_TRAIN_PER_DATA.
 MAX_TRAIN_PER_DATA=8 # On average, train only this many times on each data row. Larger numbers may cause overfitting.
 NUM_TRAIN_SAMPLES_PER_SWA=80000  # Stochastic weight averaging frequency.
 BATCHSIZE=256 # For lower-end GPUs 64 or smaller may be needed to avoid running out of GPU memory.
 SHUFFLE_MINROWS=100000 # Require this many rows at the very start before beginning training.
-MAX_TRAIN_SAMPLES_PER_CYCLE=500000  # Each cycle will do at most this many training steps.
-TAPER_WINDOW_SCALE=50000 # Parameter setting the scale at which the shuffler will make the training window grow sublinearly.
-SHUFFLE_KEEPROWS=600000 # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, so the shuffler samples enough rows each cycle for the training to use.
+MAX_TRAIN_SAMPLES_PER_CYCLE=1000000  # Each cycle will do at most this many training steps.
+TAPER_WINDOW_SCALE=500000 # Parameter setting the scale at which the shuffler will make the training window grow sublinearly.
+SHUFFLE_KEEPROWS=1200000 # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, so the shuffler samples enough rows each cycle for the training to use.
+EXPAND_WINDOW_PER_ROW=0.6 # Initial slope of the shuffle window growth (shuffle.sh default 0.4). Larger keeps more older data in the window.
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
@@ -102,11 +103,11 @@ do
     (
         # Skip validate since peeling off 5% of data is actually a bit too chunky and discrete when running at a small scale, and validation data
         # doesn't actually add much to debugging a fast-changing RL training.
-        time SKIP_VALIDATE=1 ./shuffle.sh "$BASEDIR" "$SCRATCHDIR" "$NUM_THREADS_FOR_SHUFFLING" -min-rows "$SHUFFLE_MINROWS" -keep-target-rows "$SHUFFLE_KEEPROWS" -taper-window-scale "$TAPER_WINDOW_SCALE" | tee -a "$BASEDIR"/logs/outshuffle.txt
+        time SKIP_VALIDATE=1 ./shuffle.sh "$BASEDIR" "$SCRATCHDIR" "$NUM_THREADS_FOR_SHUFFLING" -min-rows "$SHUFFLE_MINROWS" -keep-target-rows "$SHUFFLE_KEEPROWS" -taper-window-scale "$TAPER_WINDOW_SCALE" -expand-window-per-row "$EXPAND_WINDOW_PER_ROW" | tee -a "$BASEDIR"/logs/outshuffle.txt
     )
 
     echo "Train"
-    time ./train.sh "$BASEDIR" "$TRAININGNAME" "$MODELKIND" "$BATCHSIZE" main -samples-per-epoch "$NUM_TRAIN_SAMPLES_PER_EPOCH" -swa-period-samples "$NUM_TRAIN_SAMPLES_PER_SWA" -quit-if-no-data -stop-when-train-bucket-limited -no-repeat-files -max-train-bucket-per-new-data "$MAX_TRAIN_PER_DATA" -max-train-bucket-size "$MAX_TRAIN_SAMPLES_PER_CYCLE"
+    time ./train.sh "$BASEDIR" "$TRAININGNAME" "$MODELKIND" "$BATCHSIZE" main -samples-per-epoch "$NUM_TRAIN_SAMPLES_PER_EPOCH" -swa-period-samples "$NUM_TRAIN_SAMPLES_PER_SWA" -quit-if-no-data -stop-when-train-bucket-limited -export-only-at-end -max-train-bucket-per-new-data "$MAX_TRAIN_PER_DATA" -max-train-bucket-size "$MAX_TRAIN_SAMPLES_PER_CYCLE"
 
     echo "Export"
     (

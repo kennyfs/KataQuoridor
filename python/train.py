@@ -115,6 +115,7 @@ if __name__ == "__main__":
 
     optional_args.add_argument('-epochs-per-export', help='Export model once every this many epochs', type=int, required=False)
     optional_args.add_argument('-export-prob', help='Export model with this probablity', type=float, required=False)
+    optional_args.add_argument('-export-only-at-end', help='Do not export per epoch, only export once when this training instance finishes', required=False, action='store_true')
     optional_args.add_argument('-max-epochs-this-instance', help='Terminate training after this many more epochs', type=int, required=False)
     optional_args.add_argument('-max-training-samples', help='Terminate training after about this many training steps in samples', type=int, required=False)
     optional_args.add_argument('-sleep-seconds-per-epoch', help='Sleep this long between epochs', type=int, required=False)
@@ -383,6 +384,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
 
     epochs_per_export = args["epochs_per_export"]
     export_prob = args["export_prob"]
+    export_only_at_end = args["export_only_at_end"]
     max_epochs_this_instance = args["max_epochs_this_instance"]
     max_training_samples = args["max_training_samples"]
     sleep_seconds_per_epoch = args["sleep_seconds_per_epoch"]
@@ -1353,6 +1355,30 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
         train_metrics_out = open(os.path.join(traindir,f"metrics_train_rank{rank}.json"),"a")
         val_metrics_out = open(os.path.join(traindir,f"metrics_val_rank{rank}.json"),"a")
 
+    def export_model_now():
+        assert rank == 0, "Helper ddp training processes should not call export_model_now"
+        if no_export or exportdir is None or gnorm_stats_debug:
+            return
+        # Export a model for testing, unless somehow it already exists
+        modelname = "%s-s%d-d%d" % (
+            exportprefix,
+            train_state["global_step_samples"],
+            train_state["total_num_data_rows"],
+        )
+        savepath = os.path.join(exportdir,modelname)
+        savepathtmp = os.path.join(exportdir,modelname+".tmp")
+        if os.path.exists(savepath):
+            logging.info("NOT saving model, already exists at: " + savepath)
+        else:
+            os.mkdir(savepathtmp)
+            logging.info("SAVING MODEL FOR EXPORT TO: " + savepath)
+            # skip_optimizer: export only needs weights, and this save runs on
+            # rank 0 only so it must not trigger the optimizer-state collective.
+            save(ddp_model, swa_model, optimizer, metrics_obj, running_metrics, train_state, last_val_metrics, path=os.path.join(savepathtmp,"model.ckpt"), skip_optimizer=True)
+            time.sleep(2)
+            os.rename(savepathtmp,savepath)
+        train_state["last_export_global_step_samples"] = train_state["global_step_samples"]
+
     # TRAIN! -----------------------------------------------------------------------------------
 
     last_longterm_checkpoint_save_time = datetime.datetime.now()
@@ -1841,25 +1867,11 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                     skip_export_this_time = True
                     logging.info("Skipping export model this time")
 
-            if not no_export and is_time_to_export and not skip_export_this_time and exportdir is not None and not gnorm_stats_debug:
-                # Export a model for testing, unless somehow it already exists
-                modelname = "%s-s%d-d%d" % (
-                    exportprefix,
-                    train_state["global_step_samples"],
-                    train_state["total_num_data_rows"],
-                )
-                savepath = os.path.join(exportdir,modelname)
-                savepathtmp = os.path.join(exportdir,modelname+".tmp")
-                if os.path.exists(savepath):
-                    logging.info("NOT saving model, already exists at: " + savepath)
-                else:
-                    os.mkdir(savepathtmp)
-                    logging.info("SAVING MODEL FOR EXPORT TO: " + savepath)
-                    # skip_optimizer: export only needs weights, and this save runs on
-                    # rank 0 only so it must not trigger the optimizer-state collective.
-                    save(ddp_model, swa_model, optimizer, metrics_obj, running_metrics, train_state, last_val_metrics, path=os.path.join(savepathtmp,"model.ckpt"), skip_optimizer=True)
-                    time.sleep(2)
-                    os.rename(savepathtmp,savepath)
+            if export_only_at_end:
+                is_time_to_export = False
+
+            if is_time_to_export and not skip_export_this_time:
+                export_model_now()
 
         # Rejoin all ranks before the final save. The save below is called by every rank and,
         # with a sharded optimizer like Muon, performs a collective (state_dict_for_checkpoint's
@@ -1887,6 +1899,15 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                 # skip_optimizer: archival checkpoint, and this save runs on rank 0
                 # only so it must not trigger the optimizer-state collective.
                 save(ddp_model, swa_model, optimizer, metrics_obj, running_metrics, train_state, last_val_metrics, path=os.path.join(longterm_checkpoints_dir,f"{dated_name}.ckpt"), skip_optimizer=True)
+
+    # With -export-only-at-end, export once now if anything was trained since the last export.
+    # Keyed on train_state so that a run interrupted mid-cycle still exports on the next (resumed) instance.
+    if export_only_at_end and train_state["global_step_samples"] != train_state.get("last_export_global_step_samples"):
+        if rank == 0:
+            export_model_now()
+        # Persist last_export_global_step_samples. Every rank must call save() together (see the barrier note above).
+        safe_barrier(barrier,rank)
+        save(ddp_model, swa_model, optimizer, metrics_obj, running_metrics, train_state, last_val_metrics)
 
     train_metrics_out.close()
     val_metrics_out.close()
