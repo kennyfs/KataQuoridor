@@ -15,6 +15,8 @@ SelfplayManager::ModelData::ModelData(
   gameStartedCount(0),
   gamesFinishedCount(0),
   movesPlayedCount(0),
+  gamesCutoffCount(0),
+  movesPlayedCutoffCount(0),
   lastReleaseTime(initialTime),
   hasDataWriteLoop(hasDataLoop),
   finishedGameQueue(maxDQueueSize),
@@ -289,10 +291,12 @@ void SelfplayManager::countOneGameStarted(NNEvaluator* nnEval) {
 
   if(logger != NULL && gameStartedCount % logGamesEvery == 0) {
     logger->write("Started " + Global::int64ToString(gameStartedCount) + " games with " + nnEval->getModelName());
+    logger->write(gameStatsSummary(foundData, gameStartedCount));
   }
   int64_t logNNEvery = logGamesEvery*100 > 1000 ? logGamesEvery*100 : 1000;
   if(logger != NULL && gameStartedCount % logNNEvery == 0) {
     logger->write(nnEval->getModelFileName());
+    logger->write(gameStatsSummary(foundData, gameStartedCount));
     logger->write("Games finished: " + Global::int64ToString(foundData->gamesFinishedCount.load(std::memory_order_relaxed)));
     logger->write("Moves played: " + Global::int64ToString(foundData->movesPlayedCount.load(std::memory_order_relaxed)));
     if(foundData->tdataWriter != NULL)
@@ -302,6 +306,37 @@ void SelfplayManager::countOneGameStarted(NNEvaluator* nnEval) {
     logger->write("NN avg batch size: " + Global::doubleToString(nnEval->averageProcessedBatchSize()));
     logger->write("NN cache hits: " + Global::int64ToString((int64_t)nnEval->numCacheHits()));
   }
+}
+
+void SelfplayManager::countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMoves) {
+  std::unique_lock<std::mutex> lock(managerMutex);
+  ModelData* foundData = NULL;
+  for(size_t i = 0; i<modelDatas.size(); i++) {
+    if(modelDatas[i]->nnEval == nnEval) {
+      foundData = modelDatas[i];
+      break;
+    }
+  }
+  if(foundData == NULL)
+    throw StringError("SelfplayManager::countOneGameHitCutoff: could not find model. Possible bug - client did not acquire model?");
+  foundData->gamesCutoffCount.fetch_add(1, std::memory_order_relaxed);
+  foundData->movesPlayedCutoffCount.fetch_add(numMoves, std::memory_order_relaxed);
+}
+
+string SelfplayManager::gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount) {
+  int64_t finished = modelData->gamesFinishedCount.load(std::memory_order_relaxed);
+  int64_t cutoff = modelData->gamesCutoffCount.load(std::memory_order_relaxed);
+  int64_t moves = modelData->movesPlayedCount.load(std::memory_order_relaxed) + modelData->movesPlayedCutoffCount.load(std::memory_order_relaxed);
+  int64_t completed = finished + cutoff;
+  double cutoffRate = completed > 0 ? (double)cutoff / (double)completed : 0.0;
+  double avgLength = completed > 0 ? (double)moves / (double)completed : 0.0;
+  return
+    "Game stats for " + modelData->modelName +
+    ": started " + Global::int64ToString(gameStartedCount) +
+    ", finished normally " + Global::int64ToString(finished) +
+    ", hit cutoff " + Global::int64ToString(cutoff) +
+    ", cutoff rate " + Global::doubleToString(cutoffRate) +
+    ", avg game length " + Global::doubleToString(avgLength);
 }
 
 void SelfplayManager::enqueueDataToWrite(const string& modelName, FinishedGameData* gameData) {
@@ -407,6 +442,7 @@ void SelfplayManager::runDataWriteLoopImpl(ModelData* modelData) {
   //block anyone else
   if(logger != NULL) {
     logger->write("Final cleanup of net: " + modelData->nnEval->getModelFileName());
+    logger->write(gameStatsSummary(modelData, modelData->gameStartedCount));
     logger->write("Final games finished: " + Global::int64ToString(modelData->gamesFinishedCount.load(std::memory_order_relaxed)));
     logger->write("Final moves played: " + Global::int64ToString(modelData->movesPlayedCount.load(std::memory_order_relaxed)));
     logger->write("Final data rows: " + Global::int64ToString(modelData->tdataWriter->numRowsWritten()));

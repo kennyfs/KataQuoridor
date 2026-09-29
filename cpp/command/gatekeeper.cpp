@@ -59,6 +59,10 @@ namespace {
     double noResultUtilityForWhite;
 
     int numGamesTallied;
+    // Quoridor has no draws by rule, so a game without a winner is one that hit maxMovesPerGame.
+    int numDecisiveGames;
+    int numDrawsByCutoff;
+    int64_t totalMovesInGames;
     double numBaselineWinPoints;
     double numCandidateWinPoints;
     double requiredCandidateWinProp;
@@ -92,6 +96,9 @@ namespace {
        drawEquivalentWinsForWhite(0.5),
        noResultUtilityForWhite(0.0),
        numGamesTallied(0),
+       numDecisiveGames(0),
+       numDrawsByCutoff(0),
+       totalMovesInGames(0),
        numBaselineWinPoints(0.0),
        numCandidateWinPoints(0.0),
        requiredCandidateWinProp(reqWinProp),
@@ -151,21 +158,25 @@ namespace {
           if(hist.winner == P_BLACK) {
             whitePoints = 0.0;
             blackPoints = 1.0;
+            numDecisiveGames++;
             logger.write("Game " + Global::intToString(numGamesTallied) + ": winner black " + data->bName + " " + oresult.str());
           }
           else if(hist.winner == P_WHITE) {
             whitePoints = 1.0;
             blackPoints = 0.0;
+            numDecisiveGames++;
             logger.write("Game " + Global::intToString(numGamesTallied) + ": winner white " + data->wName + " " + oresult.str());
           }
           else {
             whitePoints = 0.5 * noResultUtilityForWhite + 0.5;
             blackPoints = 1.0 - whitePoints;
-            logger.write("Game " + Global::intToString(numGamesTallied) + ": draw " + oresult.str());
+            numDrawsByCutoff++;
+            logger.write("Game " + Global::intToString(numGamesTallied) + ": draw (hit move cutoff) " + oresult.str());
           }
         }
 
         numGamesTallied++;
+        totalMovesInGames += (int64_t)(data->endHist.moveHistory.size() - data->startHist.moveHistory.size());
         numBaselineWinPoints += (data->bIdx == 0) ? blackPoints : whitePoints;
         numCandidateWinPoints += (data->bIdx == 1) ? blackPoints : whitePoints;
 
@@ -575,6 +586,18 @@ int MainCmds::gatekeeper(const vector<string>& args) {
       netAndStuff = NULL;
       break;
     }
+
+    logger.write(
+      Global::strprintf(
+        "Game stats for %s vs %s: %d games, %d decisive, %d draws by cutoff, avg game length %.1f",
+        netAndStuff->modelNameBaseline.c_str(),
+        netAndStuff->modelNameCandidate.c_str(),
+        netAndStuff->numGamesTallied,
+        netAndStuff->numDecisiveGames,
+        netAndStuff->numDrawsByCutoff,
+        netAndStuff->numGamesTallied > 0 ? (double)netAndStuff->totalMovesInGames / netAndStuff->numGamesTallied : 0.0
+      )
+    );
 
     //Candidate wins ties
     if(netAndStuff->numCandidateWinPoints + 1e-10 < requiredCandidateWinProp * netAndStuff->numGamesTallied) {

@@ -389,7 +389,7 @@ int MainCmds::selfplay(const vector<string>& args) {
       //Note that if we've gotten a newNNEval, we're actually pushing the game as data for the new one, rather than the old one!
       if(gameData != NULL) {
         if(gameData->hitTurnLimit) {
-          // logger.write("Game exceeded turn limit (" + Global::intToString(gameData->endHist.moveHistory.size()) + " moves), discarding from training data.");
+          manager->countOneGameHitCutoff(nnEval, (int64_t)(gameData->endHist.moveHistory.size() - gameData->startHist.moveHistory.size()));
           delete gameData;
           // This is normal for random play.
         }

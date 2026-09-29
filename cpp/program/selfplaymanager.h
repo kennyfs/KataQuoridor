@@ -68,6 +68,9 @@ class SelfplayManager {
 
   //Increment a counter and maybe log some stats
   void countOneGameStarted(NNEvaluator* nnEval);
+  //Count a game that hit maxMovesPerGame and was discarded rather than written (numMoves = its length).
+  //Games finished normally are counted by the data write loop (gamesFinishedCount).
+  void countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMoves);
 
   //SelfplayManager takes responsibility for deleting the gameData once written.
   //Use these only if loadModelAndStartDataWriting was used to start the model.
@@ -90,6 +93,9 @@ class SelfplayManager {
     // Counted at game-finish in the data write loop (lock-free), read cross-thread for logging.
     std::atomic<int64_t> gamesFinishedCount;
     std::atomic<int64_t> movesPlayedCount;
+    // Games that hit the move cutoff, and the moves in them. These games are not written or counted above.
+    std::atomic<int64_t> gamesCutoffCount;
+    std::atomic<int64_t> movesPlayedCutoffCount;
     double lastReleaseTime;
     bool hasDataWriteLoop;
 
@@ -127,6 +133,8 @@ class SelfplayManager {
   void releaseAlreadyLocked(SelfplayManager::ModelData* foundData);
   void maybeAutoCleanupAlreadyLocked();
   void runDataWriteLoopImpl(ModelData* modelData);
+  //One summary line: games started / finished normally / hit cutoff, cutoff rate, average game length.
+  static std::string gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount);
 
  public:
   //For internal use
