@@ -16,6 +16,27 @@
 #include "../neuralnet/nninputs.h"
 
 namespace QuoridorNN {
+  // ---------------------------------------------------------------------------------------------
+  // THE QUORIDOR MARGIN (KataGo's "score"). This is the single definition; everything below uses it.
+  //
+  //   At game end, the winner's margin = the loser's shortest-path distance to the loser's goal row
+  //   (walls only, pawns ignored; always >= 1 since the loser has not reached the goal).
+  //   The margin is reported from White's perspective: positive if White won, negative if Black won,
+  //   and 0 for a draw (e.g. a game cut off at maxMovesPerGame).
+  //
+  // Implemented by Board::whiteMarginWhenWonBy. It is consumed in three places, all of which must agree:
+  //  (a) Terminal nodes: BoardHistory sets isScored and finalWhiteMinusBlackScore when a pawn reaches
+  //      its goal; Search reads that at terminal nodes as scoreMean/lead (white perspective).
+  //  (b) Training target: TrainingWriteBuffers::addRow writes the margin of the *actual game's final
+  //      board* for every row, flipped to the row's nextPlayer perspective (global target column 21,
+  //      weight in column 29). The Python game-margin head regresses this, so its raw output is the
+  //      side-to-move's expected final margin in moves.
+  //  (c) NN output: nneval multiplies the raw head output by the model's scoreMean/lead multipliers
+  //      (both 1.0 for Quoridor, in moves) and flips the sign when Black is to move, yielding
+  //      whiteScoreMean / whiteLead in the same white-perspective moves as (a).
+  // The Go score-belief machinery (scoreDistrN etc.) is inert for Quoridor.
+  // ---------------------------------------------------------------------------------------------
+
   // The model's spatial grid size (9x9), as opposed to Board's 17x17 search grid.
   constexpr int MODEL_LEN = 9;
   // policy / optimistic-policy variants, each with {pawn, vertical wall, horizontal wall} planes.

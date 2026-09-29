@@ -627,21 +627,25 @@ void TrainingWriteBuffers::addRow(
   //If the actual game ended in a no-result, we don't use lead for any position during the game
   //including side positions, just in case.
   if(inputsVersion == 1) {
+    // Quoridor: the game-margin target is the final margin of the game (QuoridorNN in quoridornn.h),
+    // from White's perspective, flipped to nextPlayer's perspective below. The weight stays 0 when the
+    // final margin is unknown: drawn/cutoff games, and side positions (whose continuation is not the
+    // actual game and which have no future boards).
     if(actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult) {
+      bool known = false;
       float whiteMargin = 0.0f;
       if(thisTargets.hasLead) {
         whiteMargin = thisTargets.lead;
-      } else if(posHistForFutureBoards != NULL && !posHistForFutureBoards->empty()) {
-        const Board& finalB = posHistForFutureBoards->back();
-        if(actualGameEndHist.winner == P_WHITE) {
-          whiteMargin = (float)finalB.getShortestPathDistance(P_BLACK);
-        } else if(actualGameEndHist.winner == P_BLACK) {
-          whiteMargin = -(float)finalB.getShortestPathDistance(P_WHITE);
-        }
+        known = true;
+      } else if(posHistForFutureBoards != NULL && !posHistForFutureBoards->empty() &&
+                (actualGameEndHist.winner == P_WHITE || actualGameEndHist.winner == P_BLACK)) {
+        whiteMargin = posHistForFutureBoards->back().whiteMarginWhenWonBy(actualGameEndHist.winner);
+        known = true;
       }
-      float margin = (nextPlayer == P_WHITE) ? whiteMargin : -whiteMargin;
-      rowGlobal[21] = margin;
-      rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
+      if(known) {
+        rowGlobal[21] = (nextPlayer == P_WHITE) ? whiteMargin : -whiteMargin;
+        rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
+      }
     }
   }
   else if(thisTargets.hasLead && !(actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {

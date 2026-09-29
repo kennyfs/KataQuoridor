@@ -248,6 +248,11 @@ struct Board {
   bool bfsReachable(Loc start, int targetY, CompactPath* outPath = nullptr, Loc blockedArm1 = NULL_LOC, Loc blockedArm2 = NULL_LOC) const;
   bool bfsReachable(Loc start, int targetY, std::vector<Loc>* outPath) const;
   int getShortestPathDistance(Player pla) const;
+  // The Quoridor margin (see QuoridorNN in neuralnet/quoridornn.h for the definition) of a game that
+  // this board is the final position of, won by `winner`, from White's perspective:
+  // +d if White won, -d if Black won, where d = max(1, the loser's shortest-path distance to goal).
+  // Returns 0 if winner is not a player.
+  float whiteMarginWhenWonBy(Player winner) const;
   std::vector<Loc> findShortestPath(Player pla) const;
   // Computes shortest distance from every pawn cell (c, r) (0 <= c, r < 9) to pla's goal row.
   // Unreachable cells are assigned -1.

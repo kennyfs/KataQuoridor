@@ -291,12 +291,16 @@ void BoardHistory::makeBoardMoveAssumeLegal(
     isGameFinished = true;
     winner = P_BLACK;
     isNoResult = false;
+    isScored = true;
+    finalWhiteMinusBlackScore = board.whiteMarginWhenWonBy(P_BLACK);
     return;
   }
   if(whiteY == board.y_size - 1) {
     isGameFinished = true;
     winner = P_WHITE;
     isNoResult = false;
+    isScored = true;
+    finalWhiteMinusBlackScore = board.whiteMarginWhenWonBy(P_WHITE);
     return;
   }
 }

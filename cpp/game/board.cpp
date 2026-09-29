@@ -1051,6 +1051,14 @@ int Board::getShortestPathDistance(Player pla) const {
   return -1;
 }
 
+float Board::whiteMarginWhenWonBy(Player winner) const {
+  if(winner != P_WHITE && winner != P_BLACK)
+    return 0.0f;
+  int loserDist = getShortestPathDistance(getOpp(winner));
+  float margin = (float)std::max(1, loserDist);
+  return winner == P_WHITE ? margin : -margin;
+}
+
 vector<Loc> Board::findShortestPath(Player pla) const {
   Loc start = (pla == P_BLACK) ? blackPawnLoc : whitePawnLoc;
   int targetY = (pla == P_BLACK) ? 0 : (y_size - 1);
