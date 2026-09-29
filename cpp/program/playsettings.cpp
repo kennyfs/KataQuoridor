@@ -69,7 +69,7 @@ PlaySettings PlaySettings::loadForSelfplay(ConfigParser& cfg, bool isDistributed
   playSettings.initGamesWithPolicy = cfg.getBool("initGamesWithPolicy");
   playSettings.policyInitAreaProp = cfg.contains("policyInitAreaProp") ? cfg.getDouble("policyInitAreaProp",0.0,1.0) : 0.04;
   playSettings.startPosesPolicyInitAreaProp = cfg.contains("startPosesPolicyInitAreaProp") ? cfg.getDouble("startPosesPolicyInitAreaProp",0.0,1.0) : 0.0;
-  playSettings.compensateAfterPolicyInitProb = cfg.getDouble("compensateAfterPolicyInitProb",0.0,1.0);
+  playSettings.compensateAfterPolicyInitProb = cfg.contains("compensateAfterPolicyInitProb") ? cfg.getDouble("compensateAfterPolicyInitProb",0.0,1.0) : 0.0;
   playSettings.policyInitGammaShape = cfg.contains("policyInitGammaShape") ? cfg.getDouble("policyInitGammaShape",0.5,10.0) : 1.0;
   playSettings.sidePositionProb =
     //forkSidePositionProb is the legacy name, included for backward compatibility
@@ -115,10 +115,10 @@ PlaySettings PlaySettings::loadForSelfplay(ConfigParser& cfg, bool isDistributed
     playSettings.reanalyzeSurpriseExponent = cfg.getDouble("reanalyzeSurpriseExponent",0.0,10.0);
     playSettings.reanalyzeUseOutcomeTargets = cfg.getBool("reanalyzeUseOutcomeTargets");
   }
-  playSettings.handicapAsymmetricPlayoutProb = cfg.getDouble("handicapAsymmetricPlayoutProb",0.0,1.0);
+  playSettings.handicapAsymmetricPlayoutProb = cfg.contains("handicapAsymmetricPlayoutProb") ? cfg.getDouble("handicapAsymmetricPlayoutProb",0.0,1.0) : 0.0;
   playSettings.normalAsymmetricPlayoutProb = cfg.getDouble("normalAsymmetricPlayoutProb",0.0,1.0);
   playSettings.maxAsymmetricRatio = cfg.getDouble("maxAsymmetricRatio",1.0,100.0);
-  playSettings.minAsymmetricCompensateKomiProb = cfg.getDouble("minAsymmetricCompensateKomiProb",0.0,1.0);
+  playSettings.minAsymmetricCompensateKomiProb = cfg.contains("minAsymmetricCompensateKomiProb") ? cfg.getDouble("minAsymmetricCompensateKomiProb",0.0,1.0) : 0.0;
   playSettings.sekiForkHackProb = cfg.contains("sekiForkHackProb") ? cfg.getDouble("sekiForkHackProb",0.0,1.0) : 0.0;
   playSettings.forSelfPlay = true;
 

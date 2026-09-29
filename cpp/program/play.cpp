@@ -94,11 +94,12 @@ GameInitializer::GameInitializer(ConfigParser& cfg, Logger& logger, const string
 
 void GameInitializer::initShared(ConfigParser& cfg, Logger& logger) {
 
-  allowedKoRuleStrs = cfg.getStrings("koRules", Rules::koRuleStrings());
-  allowedScoringRuleStrs = cfg.getStrings("scoringRules", Rules::scoringRuleStrings());
-  allowedTaxRuleStrs = cfg.getStrings("taxRules", Rules::taxRuleStrings());
-  allowedMultiStoneSuicideLegals = cfg.getBools("multiStoneSuicideLegals");
-  allowedButtons = cfg.getBools("hasButtons");
+  // KataQuoridor: Quoridor has a single rule set, so these Go rule-variation keys are optional.
+  allowedKoRuleStrs = cfg.contains("koRules") ? cfg.getStrings("koRules", Rules::koRuleStrings()) : vector<string>({"POSITIONAL"});
+  allowedScoringRuleStrs = cfg.contains("scoringRules") ? cfg.getStrings("scoringRules", Rules::scoringRuleStrings()) : vector<string>({"AREA"});
+  allowedTaxRuleStrs = cfg.contains("taxRules") ? cfg.getStrings("taxRules", Rules::taxRuleStrings()) : vector<string>({"NONE"});
+  allowedMultiStoneSuicideLegals = cfg.contains("multiStoneSuicideLegals") ? cfg.getBools("multiStoneSuicideLegals") : vector<bool>({false});
+  allowedButtons = cfg.contains("hasButtons") ? cfg.getBools("hasButtons") : vector<bool>({false});
 
   for(size_t i = 0; i < allowedKoRuleStrs.size(); i++)
     allowedKoRules.push_back(Rules::parseKoRule(allowedKoRuleStrs[i]));
@@ -186,12 +187,11 @@ void GameInitializer::initShared(ConfigParser& cfg, Logger& logger) {
       throw IOError("bSizeRelProbs must sum to a positive value");
   }
 
-  if(!cfg.contains("komiMean") && !(cfg.contains("komiAuto") && cfg.getBool("komiAuto")))
-    throw IOError("Must specify either komiMean=<komi value> or komiAuto=True in config");
+  // KataQuoridor: komi does not exist, so neither komiMean nor komiAuto is required (komiMean then defaults to 0).
   if(cfg.contains("komiMean") && (cfg.contains("komiAuto") && cfg.getBool("komiAuto")))
     throw IOError("Must specify only one of komiMean=<komi value> or komiAuto=True in config");
 
-  komiMean = cfg.contains("komiMean") ? cfg.getFloat("komiMean",Rules::MIN_USER_KOMI,Rules::MAX_USER_KOMI) : 7.5f;
+  komiMean = cfg.contains("komiMean") ? cfg.getFloat("komiMean",Rules::MIN_USER_KOMI,Rules::MAX_USER_KOMI) : 0.0f;
   komiStdev = cfg.contains("komiStdev") ? cfg.getFloat("komiStdev",0.0f,60.0f) : 0.0f;
   handicapProb = cfg.contains("handicapProb") ? cfg.getDouble("handicapProb",0.0,1.0) : 0.0;
   handicapCompensateKomiProb = cfg.contains("handicapCompensateKomiProb") ? cfg.getDouble("handicapCompensateKomiProb",0.0,1.0) : 0.0;
