@@ -514,7 +514,7 @@ void NNEvaluator::fillRowBufs(
       sgfMeta,
       buf.rowMetaBuf.data(),
       nextPlayer,
-      board.x_size*board.y_size
+      board.pawnArea()
     );
     buf.hasRowMeta = true;
   }
@@ -1219,7 +1219,7 @@ void NNEvaluator::evaluate(
       isLegal[i] = history.isLegal(board,loc,nextPlayer);
     }
 
-    // avoidMYTDaggerHack is a Go-only anti-mirror heuristic; SearchParams::sanitizeForQuoridor()
+    // avoidMYTDaggerHack is a Go-only anti-mirror heuristic; Setup::sanitizeParamsForQuoridor()
     // forces it off, so this branch is unreachable for Quoridor but kept generic for the backend.
     if(nnInputParams.avoidMYTDaggerHack && xSize >= 13 && ySize >= 13) {
       for(int symmetry = 0; symmetry < 8; symmetry++) {

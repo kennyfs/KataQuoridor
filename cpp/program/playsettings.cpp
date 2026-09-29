@@ -117,6 +117,13 @@ PlaySettings PlaySettings::loadForSelfplay(ConfigParser& cfg, bool isDistributed
   }
   playSettings.handicapAsymmetricPlayoutProb = cfg.contains("handicapAsymmetricPlayoutProb") ? cfg.getDouble("handicapAsymmetricPlayoutProb",0.0,1.0) : 0.0;
   playSettings.normalAsymmetricPlayoutProb = cfg.getDouble("normalAsymmetricPlayoutProb",0.0,1.0);
+  // KataQuoridor: the Quoridor NN inputs have no playout doubling advantage feature, so the net could not
+  // tell asymmetric games apart from normal ones in the training data.
+  if(playSettings.normalAsymmetricPlayoutProb != 0.0) {
+    std::cerr << "WARNING: normalAsymmetricPlayoutProb = " << playSettings.normalAsymmetricPlayoutProb
+              << " is not supported for Quoridor (no playout doubling advantage input), using 0" << std::endl;
+    playSettings.normalAsymmetricPlayoutProb = 0.0;
+  }
   playSettings.maxAsymmetricRatio = cfg.getDouble("maxAsymmetricRatio",1.0,100.0);
   playSettings.minAsymmetricCompensateKomiProb = cfg.contains("minAsymmetricCompensateKomiProb") ? cfg.getDouble("minAsymmetricCompensateKomiProb",0.0,1.0) : 0.0;
   playSettings.sekiForkHackProb = cfg.contains("sekiForkHackProb") ? cfg.getDouble("sekiForkHackProb",0.0,1.0) : 0.0;

@@ -349,8 +349,8 @@ int MainCmds::samplesgfs(const vector<string>& args) {
       const Sgf::PositionSample& posSample, const BoardHistory& hist, const string& comments
     ) {
       testAssert(posSample.getCurrentTurnNumber() == hist.getCurrentTurnNumber());
-      double minTurnNumber = minTurnNumberBoardAreaProp * (hist.initialBoard.x_size * hist.initialBoard.y_size);
-      double maxTurnNumber = maxTurnNumberBoardAreaProp * (hist.initialBoard.x_size * hist.initialBoard.y_size);
+      double minTurnNumber = minTurnNumberBoardAreaProp * hist.initialBoard.pawnArea();
+      double maxTurnNumber = maxTurnNumberBoardAreaProp * hist.initialBoard.pawnArea();
       if(posSample.getCurrentTurnNumber() < minTurnNumber || posSample.getCurrentTurnNumber() > maxTurnNumber)
         return;
       if(comments.size() > 0 && comments.find("%NOSAMPLE%") != string::npos)
@@ -515,8 +515,8 @@ int MainCmds::samplesgfs(const vector<string>& args) {
       if(winLossValues.size() <= 1)
         return;
 
-      double minTurnNumber = minTurnNumberBoardAreaProp * (hist.initialBoard.x_size * hist.initialBoard.y_size);
-      double maxTurnNumber = maxTurnNumberBoardAreaProp * (hist.initialBoard.x_size * hist.initialBoard.y_size);
+      double minTurnNumber = minTurnNumberBoardAreaProp * hist.initialBoard.pawnArea();
+      double maxTurnNumber = maxTurnNumberBoardAreaProp * hist.initialBoard.pawnArea();
       //At this point we transition from indexing by move index alone to indexing by turn number in case the board
       //started in the middle of a nonempty position.
       double totalSurprise = 0.0;

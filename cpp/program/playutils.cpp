@@ -241,7 +241,7 @@ void PlayUtils::initializeGameUsingPolicy(
   if(hist.isGameFinished)
     return;
 
-  double mean = board.x_size * board.y_size * proportionOfBoardArea;
+  double mean = board.pawnArea() * proportionOfBoardArea;
   int numInitialMovesToPlay;
 
   if(policyInitGammaShape != 1.0) {
@@ -366,7 +366,7 @@ double PlayUtils::getHackedLCBForWinrate(const Search* search, const AnalysisDat
 
 float PlayUtils::roundAndClipKomi(double unrounded, const Board& board) {
   //Just in case, make sure komi is reasonable
-  float range = NNPos::KOMI_CLIP_RADIUS + board.x_size * board.y_size;
+  float range = NNPos::KOMI_CLIP_RADIUS + board.pawnArea();
   if(unrounded < -range)
     unrounded = -range;
   if(unrounded > range)

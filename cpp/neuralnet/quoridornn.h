@@ -37,17 +37,17 @@ namespace QuoridorNN {
   // The Go score-belief machinery (scoreDistrN etc.) is inert for Quoridor.
   // ---------------------------------------------------------------------------------------------
 
-  // The "sqrt board area" that search feeds to the score-utility functions, i.e. score utility is
-  // atan(margin / (scale * SCORE_UTILITY_SCALE_BASE)). Board::sqrtBoardArea() returns this. 9 is what upstream
-  // KataGo uses for a 9x9 board, so score utility behaves as in 9x9 Go. With the configs' static scale 2 and
-  // dynamicScoreCenterScale 0.5 (before the *ScoreUtilityFactor), one move of margin near the center is worth
-  // ~0.035 (static, 2*9 = 18) and ~0.14 (dynamic, 0.5*9 = 4.5). Margins are roughly -20..+20 between weak players
-  // but likely closer to -5..+5 between strong ones; if score utility turns out too weak then, strengthen it via
-  // the config factors / dynamicScoreCenterScale (or lower this base) rather than changing the margin definition.
-  constexpr double SCORE_UTILITY_SCALE_BASE = Board::SCORE_UTILITY_SCALE_BASE;
+  // Score utility is atan(margin / (scale * Board::sqrtBoardArea())), where sqrtBoardArea is the sqrt of the
+  // real (pawn-cell) board area: 9 on the 9x9 board, the same as upstream KataGo uses for 9x9 Go, so score
+  // utility behaves as in 9x9 Go. With the configs' static scale 2 and dynamicScoreCenterScale 0.5 (before the
+  // *ScoreUtilityFactor), one move of margin near the center is worth ~0.035 (static, 2*9 = 18) and ~0.14
+  // (dynamic, 0.5*9 = 4.5). Margins are roughly -20..+20 between weak players but likely closer to -5..+5
+  // between strong ones; if score utility turns out too weak then, strengthen it via the config factors /
+  // dynamicScoreCenterScale rather than changing the margin definition.
 
-  // The model's spatial grid size (9x9), as opposed to Board's 17x17 search grid.
-  constexpr int MODEL_LEN = 9;
+  // The model's spatial grid size in pawn cells (9x9), as opposed to Board's 17x17 search grid.
+  // It must fit the largest board the engine is compiled for.
+  constexpr int MODEL_LEN = Board::MAX_PAWN_LEN;
   // policy / optimistic-policy variants, each with {pawn, vertical wall, horizontal wall} planes.
   constexpr int NUM_POLICY_PLANES = 3;
   constexpr int MAX_SUPPORTED_IO_VERSION = 1;

@@ -1158,7 +1158,7 @@ void Search::computeRootValues() {
     }
 
     recentScoreCenter = expectedScore * (1.0 - searchParams.dynamicScoreCenterZeroWeight);
-    double cap =  sqrt(rootBoard.x_size * rootBoard.y_size) * searchParams.dynamicScoreCenterScale;
+    double cap =  rootBoard.sqrtBoardArea() * searchParams.dynamicScoreCenterScale;
     if(recentScoreCenter > expectedScore + cap)
       recentScoreCenter = expectedScore + cap;
     if(recentScoreCenter < expectedScore - cap)

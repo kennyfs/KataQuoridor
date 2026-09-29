@@ -507,7 +507,7 @@ void GameInitializer::createGameSharedUnsynchronized(
       thisHandicapProb, numExtraBlackFixed,
       komiBigStdevProb, komiBigStdev,
       komiBiggerStdevProb, komiBiggerStdev,
-      sqrt(board.x_size*board.y_size), rand
+      board.sqrtBoardArea(), rand
     );
     testAssert(extraBlackAndKomi.extraBlack == 0);
     PlayUtils::setKomiWithNoise(extraBlackAndKomi, hist, rand);
@@ -577,7 +577,7 @@ void GameInitializer::createGameSharedUnsynchronized(
       thisHandicapProb, numExtraBlackFixed,
       komiBigStdevProb, komiBigStdev,
       komiBiggerStdevProb, komiBiggerStdev,
-      sqrt(board.x_size*board.y_size), rand
+      board.sqrtBoardArea(), rand
     );
     PlayUtils::setKomiWithNoise(extraBlackAndKomi, hist, rand);
 
@@ -605,7 +605,7 @@ void GameInitializer::createGameSharedUnsynchronized(
       handicapProb, numExtraBlackFixed,
       komiBigStdevProb, komiBigStdev,
       komiBiggerStdevProb, komiBiggerStdev,
-      sqrt(board.x_size*board.y_size), rand
+      board.sqrtBoardArea(), rand
     );
     PlayUtils::setKomiWithNoise(extraBlackAndKomi, hist, rand);
 
@@ -1610,7 +1610,7 @@ FinishedGameData* Play::runGame(
 
     //Now, randomize between the old and new komi, with extra noise
     double randKomi = gameRand.nextDouble(min(origKomi,newKomi),max(origKomi,newKomi));
-    randKomi += 0.75 * sqrt(board.x_size * board.y_size) * gameRand.nextGaussianTruncated(2.5);
+    randKomi += 0.75 * board.sqrtBoardArea() * gameRand.nextGaussianTruncated(2.5);
     extraBlackAndKomi.komiMean = (float)randKomi;
     PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
   }
@@ -1618,7 +1618,7 @@ FinishedGameData* Play::runGame(
   if(playSettings.fancyKomiVarying &&
      botB->nnEvaluator->isNeuralNetLess() &&
      (botW == NULL || botW->nnEvaluator->isNeuralNetLess())) {
-    double randKomi = hist.rules.komi + 1.5 * sqrt(board.x_size * board.y_size) * gameRand.nextGaussianTruncated(2.5);
+    double randKomi = hist.rules.komi + 1.5 * board.sqrtBoardArea() * gameRand.nextGaussianTruncated(2.5);
     extraBlackAndKomi.komiMean = (float)randKomi;
     PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
   }
@@ -1916,7 +1916,7 @@ FinishedGameData* Play::runGame(
     //Check for resignation
     if(playSettings.allowResignation && historicalMctsWinLossValues.size() >= playSettings.resignConsecTurns) {
       //Play at least some moves no matter what
-      int minTurnForResignation = 1 + board.x_size * board.y_size / 5;
+      int minTurnForResignation = 1 + board.pawnArea() / 5;
       if(i >= minTurnForResignation) {
         if(playSettings.resignThreshold > 0 || std::isnan(playSettings.resignThreshold))
           throw StringError("playSettings.resignThreshold > 0 || std::isnan(playSettings.resignThreshold)");
@@ -2049,7 +2049,7 @@ FinishedGameData* Play::runGame(
 
     vector<double> valueSurpriseByTurn;
     computeValueSurpriseByTurn(
-      valueSurpriseByTurn, gameData->whiteValueTargetsByTurn, rawNNValues, board.x_size * board.y_size,
+      valueSurpriseByTurn, gameData->whiteValueTargetsByTurn, rawNNValues, board.pawnArea(),
       playSettings.useSearchValueSurprise
     );
 
@@ -2074,7 +2074,7 @@ FinishedGameData* Play::runGame(
       //the value surprise of every turn at or before them (of just those turns themselves, for search value
       //surprise), so recompute.
       computeValueSurpriseByTurn(
-        valueSurpriseByTurn, gameData->whiteValueTargetsByTurn, rawNNValues, board.x_size * board.y_size,
+        valueSurpriseByTurn, gameData->whiteValueTargetsByTurn, rawNNValues, board.pawnArea(),
         playSettings.useSearchValueSurprise
       );
 
@@ -2436,6 +2436,43 @@ static bool hasUnownedSpot(const FinishedGameData* finishedGameData) {
   return false;
 }
 
+//Fill buf with len random fork candidates (with replacement). Most legal Quoridor moves are walls, so
+//uniform sampling alone would almost only try random walls. Like the positions in command/nnparity.cpp,
+//each fork uses one of three styles: 0 = uniform over legal moves, 1 = a random pawn move half the time,
+//2 = mostly the shortest-path pawn step. Returns the number of candidates, 0 if there is no legal move.
+static int chooseRandomForkCandidates(const Board& board, const BoardHistory& hist, Player pla, Rand& gameRand, Loc* buf, int len) {
+  vector<Loc> moves;
+  vector<Loc> pawnMoves;
+  for(Loc loc = 0; loc < Board::MAX_ARR_SIZE; loc++) {
+    if(hist.isLegal(board,loc,pla)) {
+      moves.push_back(loc);
+      if(Location::isPawnLoc(loc,board.x_size))
+        pawnMoves.push_back(loc);
+    }
+  }
+  if(moves.empty())
+    return 0;
+
+  int style = gameRand.nextInt(0,2);
+  Loc shortestPathStep = Board::NULL_LOC;
+  if(style == 2) {
+    vector<Loc> path = board.findShortestPath(pla);
+    if(path.size() >= 2 && hist.isLegal(board,path[1],pla))
+      shortestPathStep = path[1];
+  }
+
+  for(int i = 0; i<len; i++) {
+    double u = gameRand.nextDouble();
+    if(style == 2 && u < 0.8 && (shortestPathStep != Board::NULL_LOC || !pawnMoves.empty()))
+      buf[i] = shortestPathStep != Board::NULL_LOC ? shortestPathStep : pawnMoves[gameRand.nextUInt((uint32_t)pawnMoves.size())];
+    else if(style >= 1 && u < 0.5 && !pawnMoves.empty())
+      buf[i] = pawnMoves[gameRand.nextUInt((uint32_t)pawnMoves.size())];
+    else
+      buf[i] = moves[gameRand.nextUInt((uint32_t)moves.size())];
+  }
+  return len;
+}
+
 void Play::maybeForkGame(
   const FinishedGameData* finishedGameData,
   ForkData* forkData,
@@ -2461,7 +2498,7 @@ void Play::maybeForkGame(
   if(earlyFork) {
     moveIdx = (int)floor(
       gameRand.nextExponential() * (
-        playSettings.earlyForkGameExpectedMoveProp * finishedGameData->startBoard.x_size * finishedGameData->startBoard.y_size
+        playSettings.earlyForkGameExpectedMoveProp * finishedGameData->startBoard.pawnArea()
       )
     );
   }
@@ -2493,7 +2530,7 @@ void Play::maybeForkGame(
   int numChoices = gameRand.nextInt(playSettings.forkGameMinChoices, maxChoices);
   testAssert(numChoices <= NNPos::MAX_NN_POLICY_SIZE);
   Loc possibleMoves[NNPos::MAX_NN_POLICY_SIZE];
-  int numPossible = PlayUtils::chooseRandomLegalMoves(board,hist,pla,gameRand,possibleMoves,numChoices);
+  int numPossible = chooseRandomForkCandidates(board,hist,pla,gameRand,possibleMoves,numChoices);
   if(numPossible <= 0)
     return;
 

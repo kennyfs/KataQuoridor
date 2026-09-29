@@ -182,12 +182,13 @@ static double applyLagBuffer(double time, double lagBuffer) {
 }
 
 void TimeControls::getTime(const Board& board, const BoardHistory& hist, double lagBuffer, double& minTime, double& recommendedTime, double& maxTime) const {
-  (void)hist;
-
-  int boardArea = board.x_size * board.y_size;
-  int numStonesOnBoard = board.numStonesOnBoard();
+  int boardArea = board.pawnArea();
+  // Upstream uses the number of stones on the board as the game's progress. A Quoridor board always has
+  // exactly 2 pawns, so use the number of moves played instead.
+  int numStonesOnBoard = (int)hist.getCurrentTurnNumber();
 
   //Very crude way to estimate game progress
+  //KataQuoridor: the game-length formulas below are Go-tuned; may need retuning for Quoridor.
   double approxTurnsLeftAbsolute;
   double approxTurnsLeftIncrement; //Turns left in which we plan to spend our main time
   double approxTurnsLeftByoYomi;   //Turns left in which we plan to spend our main time

@@ -45,7 +45,8 @@ double Search::recomputeSearchTimeLimit(
   tcRec *= searchParams.overallocateTimeFactor;
 
   if(searchParams.midgameTimeFactor != 1.0) {
-    double boardAreaScale = rootBoard.x_size * rootBoard.y_size / 361.0;
+    // KataQuoridor: Go-tuned (relative to 19x19); may need retuning for Quoridor game lengths.
+    double boardAreaScale = rootBoard.pawnArea() / 361.0;
     double presumedTurnNumber = (double)rootHistory.getCurrentTurnNumber();
     if(presumedTurnNumber < 0) presumedTurnNumber = 0;
 

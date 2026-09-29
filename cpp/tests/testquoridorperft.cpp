@@ -13,6 +13,8 @@
 
 #include "../tests/tests.h"
 
+#include "../game/graphhash.h"
+
 #include <algorithm>
 #include <set>
 
@@ -545,6 +547,42 @@ static void testFuzz() {
 //------------------------------------------------------------------------------------------------
 // Board printing (showboard)
 
+static void testBoardSizes() {
+  cout << "  Board sizes" << endl;
+  // Board size in pawn cells, which board-area based scales use, vs the search grid.
+  Board board;
+  testAssert(board.x_size == SIZE && board.y_size == SIZE);
+  testAssert(board.pawnXSize() == N && board.pawnYSize() == N);
+  testAssert(board.pawnArea() == N * N);
+  testAssert(board.sqrtBoardArea() == (double)N);
+  testAssert(Board::DEFAULT_PAWN_LEN == Board::pawnLenOfGridLen(Board::DEFAULT_LEN));
+}
+
+static Hash128 graphHashAfterMoves(const string& moves) {
+  Board board;
+  Player pla = P_BLACK;
+  BoardHistory hist(board, pla, Rules::getQuoridorRules(), 0, BoardHistoryModes(false, false));
+  for(const string& s : Global::split(Global::trim(moves), ' ')) {
+    Loc loc = Location::ofString(s, board);
+    testAssert(hist.isLegal(board, loc, pla));
+    hist.makeBoardMoveAssumeLegal(board, loc, pla, NULL);
+    pla = getOpp(pla);
+  }
+  return GraphHash::getGraphHashFromScratch(hist, pla, 11, 0.5);
+}
+
+static void testGraphHashTranspositions() {
+  cout << "  Graph hash transpositions" << endl;
+  // Same position reached in different orders, last move a wall: merged (the position cannot repeat).
+  testAssert(graphHashAfterMoves("d3h e7h f3h") == graphHashAfterMoves("f3h e7h d3h"));
+  // Same position, last move a pawn move: kept apart, since pawn moves can cycle.
+  testAssert(graphHashAfterMoves("e8 e2 d8") != graphHashAfterMoves("d9 e2 d8"));
+  // A wall after those makes the positions identical and irreversible again, so they merge.
+  testAssert(graphHashAfterMoves("e8 e2 d8 a2h") == graphHashAfterMoves("d9 e2 d8 a2h"));
+  // Different positions never merge.
+  testAssert(graphHashAfterMoves("d3h e7h f3h") != graphHashAfterMoves("d3h e7h g3h"));
+}
+
 static void testPrintBoard() {
   cout << "  Board printing" << endl;
   Player pla;
@@ -661,6 +699,8 @@ void Tests::runQuoridorRuleTests() {
   cout << "=== Running Quoridor perft / fuzz / undo tests ===" << endl;
   testPerft();
   testFuzz();
+  testBoardSizes();
+  testGraphHashTranspositions();
   testPrintBoard();
   cout << "=== Quoridor perft / fuzz / undo tests passed ===" << endl;
 }

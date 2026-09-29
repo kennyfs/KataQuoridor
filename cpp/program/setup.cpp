@@ -438,6 +438,9 @@ void Setup::sanitizeParamsForQuoridor(SearchParams& params) {
   // x-mirror), and QuoridorNN/nneval already restrict symmetry sampling to those on their own, so
   // simply disable this Go-oriented pruning rather than trying to special-case it.
   params.rootSymmetryPruning = false;
+  // Subtree value bias corrects NN values keyed on the local shape around the last two moves, a Go
+  // assumption; a Quoridor position's value depends on global paths. Disabled until shown to help.
+  params.subtreeValueBiasFactor = 0.0;
 }
 
 static Player parsePlayer(const char* field, const string& s) {

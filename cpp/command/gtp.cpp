@@ -182,7 +182,7 @@ static double initialBlackAdvantage(const BoardHistory& hist) {
 }
 
 static double getBoardSizeScaling(const Board& board) {
-  return pow(19.0 * 19.0 / (double)(board.x_size * board.y_size), 0.75);
+  return pow(19.0 * 19.0 / (double)board.pawnArea(), 0.75);
 }
 static double getPointsThresholdForHandicapGame(double boardSizeScaling) {
   return std::max(4.0 / boardSizeScaling, 2.0);
@@ -215,7 +215,7 @@ static void updateDynamicPDAHelper(
     double initialBlackAdvantageInPoints = initialBlackAdvantage(hist);
     Player disadvantagedPla = initialBlackAdvantageInPoints >= 0 ? P_WHITE : P_BLACK;
     double initialAdvantageInPoints = std::fabs(initialBlackAdvantageInPoints);
-    if(initialAdvantageInPoints < pdaScalingStartPoints || board.x_size <= 7 || board.y_size <= 7) {
+    if(initialAdvantageInPoints < pdaScalingStartPoints || board.pawnXSize() <= 7 || board.pawnYSize() <= 7) {
       desiredDynamicPDAForWhite = 0.0;
     }
     else {
@@ -275,14 +275,14 @@ static bool shouldResign(
   double initialBlackAdvantageInPoints = initialBlackAdvantage(hist);
 
   int minTurnForResignation = 0;
-  double noResignationWhenWhiteScoreAbove = board.x_size * board.y_size;
+  double noResignationWhenWhiteScoreAbove = board.pawnArea();
   if(initialBlackAdvantageInPoints > 0.9 && pla == P_WHITE) {
     //Play at least some moves no matter what
-    minTurnForResignation = 1 + board.x_size * board.y_size / 5;
+    minTurnForResignation = 1 + board.pawnArea() / 5;
 
     //In a handicap game, also only resign if the lead difference is well behind schedule assuming
     //that we're supposed to catch up over many moves.
-    double numTurnsToCatchUp = 0.60 * board.x_size * board.y_size - minTurnForResignation;
+    double numTurnsToCatchUp = 0.60 * board.pawnArea() - minTurnForResignation;
     double numTurnsSpent = (double)(hist.moveHistory.size()) - minTurnForResignation;
     if(numTurnsToCatchUp <= 1.0)
       numTurnsToCatchUp = 1.0;
@@ -297,8 +297,8 @@ static bool shouldResign(
 
     noResignationWhenWhiteScoreAbove = resignScore;
   }
-  if(minTurnForResignation < resignMinMovesPerBoardArea * board.x_size * board.y_size)
-    minTurnForResignation = (int)(resignMinMovesPerBoardArea * board.x_size * board.y_size);
+  if(minTurnForResignation < resignMinMovesPerBoardArea * board.pawnArea())
+    minTurnForResignation = (int)(resignMinMovesPerBoardArea * board.pawnArea());
 
   if(hist.moveHistory.size() < minTurnForResignation)
     return false;
@@ -1373,7 +1373,7 @@ struct GTPEngine {
     //If asked to place more, we just go ahead and only place up to 30, or a quarter of the board
     int xSize = bot->getRootBoard().x_size;
     int ySize = bot->getRootBoard().y_size;
-    int maxHandicap = xSize*ySize / 4;
+    int maxHandicap = bot->getRootBoard().pawnArea() / 4;
     if(maxHandicap > 30)
       maxHandicap = 30;
     if(n > maxHandicap)

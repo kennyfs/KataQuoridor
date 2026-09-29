@@ -540,7 +540,8 @@ bool Search::shouldSuppressPass(const SearchNode* n) const {
 
 double Search::interpolateEarly(double halflife, double earlyValue, double value) const {
   double rawHalflives = (double)rootHistory.getCurrentTurnNumber() / halflife;
-  double halflives = rawHalflives * 19.0 / sqrt(rootBoard.x_size*rootBoard.y_size);
+  // Halflives are in moves on the default board (upstream: 19x19 Go; here: the 9x9 Quoridor board).
+  double halflives = rawHalflives * Board::DEFAULT_PAWN_LEN / rootBoard.sqrtBoardArea();
   return value + (earlyValue - value) * pow(0.5, halflives);
 }
 

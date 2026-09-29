@@ -608,7 +608,7 @@ void TrainingWriteBuffers::addRow(
   }
 
   //Fill td-like value targets
-  int boardArea = board.x_size * board.y_size;
+  int boardArea = board.pawnArea();
   testAssert(whiteValueTargetsIdx >= 0 && whiteValueTargetsIdx < whiteValueTargets.size());
   fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 0.0, rowGlobal);
   //These three constants used to be 'nicer' numbers 0.18, 0.06, 0.02, but we screwed up the functional form
@@ -980,7 +980,7 @@ void TrainingWriteBuffers::addRow(
   if(hasMetadataInput) {
     testAssert(sgfMeta != NULL);
     float* rowMetadata = metadataInputNC.data + curRows * SGFMetadata::METADATA_INPUT_NUM_CHANNELS;
-    SGFMetadata::fillMetadataRow(sgfMeta, rowMetadata, nextPlayer, board.x_size * board.y_size);
+    SGFMetadata::fillMetadataRow(sgfMeta, rowMetadata, nextPlayer, board.pawnArea());
   }
 
   curRows++;

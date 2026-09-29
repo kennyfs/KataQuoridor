@@ -173,6 +173,13 @@ struct Board {
   static constexpr int MAX_ARR_SIZE = (MAX_LEN + 1) * (MAX_LEN + 2) + 1;
   static constexpr int MAX_FENCE_NUM = 10;
 
+  // x_size/y_size (and the lens above) are the search grid, (2n-1)x(2n-1) for an n x n Quoridor board.
+  // Anything that means "how big the board is" (board area, game-length and score scales) must use the
+  // real board size, i.e. the number of pawn cells per side, not the search grid size.
+  static constexpr int pawnLenOfGridLen(int gridLen) { return (gridLen + 1) / 2; }
+  static constexpr int DEFAULT_PAWN_LEN = (DEFAULT_LEN + 1) / 2; // = pawnLenOfGridLen(DEFAULT_LEN)
+  static constexpr int MAX_PAWN_LEN = (MAX_LEN + 1) / 2; // = pawnLenOfGridLen(MAX_LEN)
+
   static constexpr Loc NULL_LOC = 0;
   static constexpr Loc PASS_LOC = 1;
 
@@ -261,12 +268,16 @@ struct Board {
 
   Board getMirroredX() const;
 
+  // The real board size in pawn cells (9x9 for the 17x17 search grid), falling back to the default
+  // board if this one has no size.
+  int pawnXSize() const { return x_size > 0 ? pawnLenOfGridLen(x_size) : DEFAULT_PAWN_LEN; }
+  int pawnYSize() const { return y_size > 0 ? pawnLenOfGridLen(y_size) : DEFAULT_PAWN_LEN; }
+  int pawnArea() const { return pawnXSize() * pawnYSize(); }
+  // Upstream KataGo (fd0723fd) returns sqrt of the real board area (9 for 9x9 Go). Search feeds it into the
+  // score-utility scale (see ScoreValue and QuoridorNN), so this must be the pawn area, not the search grid's.
+  double sqrtBoardArea() const { return std::sqrt((double)pawnArea()); }
+
   // Compatibility stubs for KataGo search / helpers
-  // Search feeds this into the score-utility scale (see ScoreValue). Upstream KataGo (fd0723fd) returns the
-  // sqrt of the real board area, i.e. 9 for 9x9 Go; KataQuoridor only supports the 9x9 Quoridor board, so it
-  // returns the same 9 (not the 17 of the internal 17x17 search grid). See QuoridorNN::SCORE_UTILITY_SCALE_BASE.
-  static constexpr double SCORE_UTILITY_SCALE_BASE = 9.0;
-  double sqrtBoardArea() const { return SCORE_UTILITY_SCALE_BASE; }
   int getChainSize(Loc loc) const { (void)loc; return 1; }
   int getNumLiberties(Loc loc) const { (void)loc; return 4; }
   int getNumLibertiesAfterPlay(Loc loc, Player pla, int max) const { (void)loc; (void)pla; (void)max; return 4; }
@@ -284,7 +295,14 @@ struct Board {
   bool isAdjacentOrDiagonalToPla(Loc loc, Player pla) const { (void)loc; (void)pla; return false; }
   bool isAdjacentToChain(Loc loc, Loc chain) const { (void)loc; (void)chain; return false; }
   bool isNonPassAliveSelfConnection(Loc loc, Player pla, const Color* passAliveArea) const { (void)loc; (void)pla; (void)passAliveArea; return false; }
-  bool simpleRepetitionBoundGt(Loc loc, int bound) const { (void)loc; (void)bound; return false; }
+  // GraphHash merges transpositions (hashes the state alone) only after a move for which this is true, i.e.
+  // after which the position cannot repeat within `bound` moves; otherwise it chains the path hash, so that
+  // graph search never forms cycles. Walls are never removed, so the position right after a wall placement
+  // differs from every earlier one. Pawn moves are reversible, so positions after them may repeat.
+  bool simpleRepetitionBoundGt(Loc loc, int bound) const {
+    (void)bound;
+    return Location::isHWallLoc(loc, x_size) || Location::isVWallLoc(loc, x_size);
+  }
   bool searchIsLadderCaptured(Loc loc, bool defenderFirst, std::vector<Loc>& buf) { (void)loc; (void)defenderFirst; (void)buf; return false; }
   bool searchIsLadderCapturedAttackerFirst2Libs(Loc loc, std::vector<Loc>& buf, std::vector<Loc>& workingMoves) { (void)loc; (void)buf; (void)workingMoves; return false; }
 
