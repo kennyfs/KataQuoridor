@@ -487,6 +487,39 @@ static void fillValueTDTargets(const vector<ValueTargets>& whiteValueTargetsByTu
   buf[3] = (float)score;
 }
 
+void TrainingWriteBuffers::fillQuoridorInputRow(
+  const Board& board,
+  const BoardHistory& hist,
+  Player nextPlayer,
+  const MiscNNInputParams& nnInputParams,
+  float* rowBinScratch,
+  uint8_t* rowBinPacked,
+  uint8_t* rowDist,
+  float* rowGlobal
+) {
+  const int ioVersion = 1;
+  const int numChannels = QuoridorNN::NUM_FEATURES_SPATIAL_V1;
+  const int posArea = QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
+  const int packedArea = (posArea + 7) / 8;
+  const bool inputsUseNHWC = false;
+  QuoridorNN::fillRow(board, hist, nextPlayer, nnInputParams, ioVersion, inputsUseNHWC, rowBinScratch, rowGlobal);
+  //Continuous distance channels are stored raw in spatialDistNCHW, and as 0 in the bit planes.
+  QuoridorNN::fillCanonicalDistancesU8(board, nextPlayer, rowDist);
+  std::fill(
+    rowBinScratch + QuoridorNN::FIRST_DIST_CHANNEL * posArea,
+    rowBinScratch + (QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS) * posArea,
+    0.0f
+  );
+
+  //Packing bits would silently truncate any non-binary value
+  for(int i = 0; i<numChannels * posArea; i++)
+    testAssert(rowBinScratch[i] == 0.0f || rowBinScratch[i] == 1.0f);
+
+  //Pack bools bitwise into uint8_t
+  for(int c = 0; c<numChannels; c++)
+    packBits(rowBinScratch + c * posArea, posArea, rowBinPacked + c * packedArea);
+}
+
 void TrainingWriteBuffers::addRow(
   const Board& board, const BoardHistory& hist, Player nextPlayer,
   const BoardHistory& startHist,
@@ -542,33 +575,16 @@ void TrainingWriteBuffers::addRow(
       testAssert(playoutDoublingAdvantage == 0.0);
     }
 
-    bool inputsUseNHWC = false;
-    float* rowBin = binaryInputNCHWUnpacked;
-    float* rowGlobal = globalInputNC.data + curRows * numGlobalChannels;
-    if(inputsVersion == 1) {
-      testAssert(QuoridorNN::NUM_FEATURES_SPATIAL_V1 == numBinaryChannels);
-      testAssert(QuoridorNN::NUM_FEATURES_GLOBAL_V1 == numGlobalChannels);
-      testAssert(posArea == QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
-      QuoridorNN::fillRow(board, hist, nextPlayer, nnInputParams, inputsVersion, inputsUseNHWC, rowBin, rowGlobal);
-      //Continuous distance channels are stored raw in spatialDistNCHW, and as 0 in the bit planes.
-      QuoridorNN::fillCanonicalDistancesU8(board, nextPlayer, spatialDistNCHW.data + curRows * QuoridorNN::NUM_DIST_CHANNELS * posArea);
-      std::fill(
-        rowBin + QuoridorNN::FIRST_DIST_CHANNEL * posArea,
-        rowBin + (QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS) * posArea,
-        0.0f
-      );
-    }
-    else
-      ASSERT_UNREACHABLE;
-
-    //Packing bits would silently truncate any non-binary value
-    for(int i = 0; i<numBinaryChannels * posArea; i++)
-      testAssert(rowBin[i] == 0.0f || rowBin[i] == 1.0f);
-
-    //Pack bools bitwise into uint8_t
-    uint8_t* rowBinPacked = binaryInputNCHWPacked.data + curRows * numBinaryChannels * packedBoardArea;
-    for(int c = 0; c<numBinaryChannels; c++)
-      packBits(rowBin + c * posArea, posArea, rowBinPacked + c * packedBoardArea);
+    testAssert(inputsVersion == 1);
+    testAssert(QuoridorNN::NUM_FEATURES_SPATIAL_V1 == numBinaryChannels);
+    testAssert(QuoridorNN::NUM_FEATURES_GLOBAL_V1 == numGlobalChannels);
+    testAssert(posArea == QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
+    fillQuoridorInputRow(
+      board, hist, nextPlayer, nnInputParams, binaryInputNCHWUnpacked,
+      binaryInputNCHWPacked.data + curRows * numBinaryChannels * packedBoardArea,
+      spatialDistNCHW.data + curRows * QuoridorNN::NUM_DIST_CHANNELS * posArea,
+      globalInputNC.data + curRows * numGlobalChannels
+    );
   }
 
   //Vector for global targets and metadata

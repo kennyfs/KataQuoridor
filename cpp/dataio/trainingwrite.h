@@ -313,6 +313,20 @@ struct TrainingWriteBuffers {
   TrainingWriteBuffers(const TrainingWriteBuffers&) = delete;
   TrainingWriteBuffers& operator=(const TrainingWriteBuffers&) = delete;
 
+  //Encodes one Quoridor (I/O v1) input row exactly as addRow stores it: packed bit planes (channels
+  //8-11 written as 0), raw canonical distances for channels 8-11, and global features.
+  //rowBinScratch must hold NUM_FEATURES_SPATIAL_V1 * 81 floats.
+  static void fillQuoridorInputRow(
+    const Board& board,
+    const BoardHistory& hist,
+    Player nextPlayer,
+    const MiscNNInputParams& nnInputParams,
+    float* rowBinScratch,
+    uint8_t* rowBinPacked,
+    uint8_t* rowDist,
+    float* rowGlobal
+  );
+
   void clear();
 
   void addRow(

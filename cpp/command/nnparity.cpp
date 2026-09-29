@@ -5,7 +5,8 @@
  *   katago dumpnninputs -n 200 -seed parity -output rows.npz
  *     Plays random games and writes, for a sample of non-terminal positions, the V1 input rows exactly as
  *     QuoridorNN::fillRow produces them, the legal moves in search space, and the raw board state (so that
- *     Python can re-derive the features and the legal moves independently).
+ *     Python can re-derive the features and the legal moves independently). It also writes the same rows encoded
+ *     the way the training data writer stores them (train* arrays), for the train/inference input parity test.
  *
  *   katago evalnnparity -model x.bin.gz -n 200 -seed parity -symmetry 0 -output out.npz [-config ...]
  *     Regenerates the same positions (same -n and -seed) and evaluates each one through NNEvaluator, which is
@@ -20,6 +21,7 @@
 #include "../core/logger.h"
 #include "../core/rand.h"
 #include "../dataio/numpywrite.h"
+#include "../dataio/trainingwrite.h"
 #include "../game/board.h"
 #include "../game/boardhistory.h"
 #include "../neuralnet/nneval.h"
@@ -146,12 +148,24 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   NumpyBuffer<int8_t> fencesLeft({numRows, 2});   // black, white
   NumpyBuffer<uint8_t> hWalls({numRows, 8, 8});   // [r][c] anchors, board coords
   NumpyBuffer<uint8_t> vWalls({numRows, 8, 8});
+  // Same rows as TrainingWriteBuffers stores them (packed bits + raw S8-S11 distances + globals).
+  const int packedArea = (X * Y + 7) / 8;
+  NumpyBuffer<uint8_t> trainPacked({numRows, C, packedArea});
+  NumpyBuffer<uint8_t> trainDist({numRows, QuoridorNN::NUM_DIST_CHANNELS, Y, X});
+  NumpyBuffer<float> trainGlobal({numRows, G});
+  vector<float> trainScratch((size_t)C * X * Y);
 
   MiscNNInputParams nnInputParams;
   for(int i = 0; i < numRows; i++) {
     const ParityPosition& p = positions[i];
     const Board& b = p.board;
     QuoridorNN::fillRow(b, p.hist, p.pla, nnInputParams, ioVersion, false, spatial.data + (size_t)i * C * X * Y, global.data + (size_t)i * G);
+    TrainingWriteBuffers::fillQuoridorInputRow(
+      b, p.hist, p.pla, nnInputParams, trainScratch.data(),
+      trainPacked.data + (size_t)i * C * packedArea,
+      trainDist.data + (size_t)i * QuoridorNN::NUM_DIST_CHANNELS * X * Y,
+      trainGlobal.data + (size_t)i * G
+    );
 
     for(int pos = 0; pos < POLICY_SIZE; pos++) {
       Loc loc = NNPos::posToLoc(pos, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN);
@@ -184,6 +198,9 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   writeArray(zip, "fencesLeft", fencesLeft, numRows);
   writeArray(zip, "hWalls", hWalls, numRows);
   writeArray(zip, "vWalls", vWalls, numRows);
+  writeArray(zip, "trainBinaryInputNCHWPacked", trainPacked, numRows);
+  writeArray(zip, "trainSpatialDistNCHW", trainDist, numRows);
+  writeArray(zip, "trainGlobalInputNC", trainGlobal, numRows);
   zip.close();
   cout << "Wrote " << numRows << " rows to " << outputFile << endl;
   return 0;

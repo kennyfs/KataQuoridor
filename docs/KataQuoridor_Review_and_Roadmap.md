@@ -576,6 +576,18 @@ The V1 set is good. Candidates to A/B test later, each behind a new I/O version:
 
 ## 7. Other observations
 
+- **S8–S11 fix and data upgrade.** Spatial channels 8–11 are continuous BFS distances (`d/32`, 1 if unreachable).
+  Training data used to store them through `packBits`, which truncated them to binary, so nets trained on
+  near-zero planes while inference fed the real values. Measured: 5.6 pp average win-rate shift, top move changed
+  in 17% of positions. Fixed within Quoridor I/O v1, with no v2 and no parallel code path:
+  - the writer adds `spatialDistNCHW` (raw uint8 distances, 255 = unreachable), and the bit planes 8–11 are 0;
+  - the loader rebuilds ch8–11 before symmetry;
+  - one BFS (`QuoridorNN::fillDistances`) serves both `fillRow` and the writer.
+
+  Existing data is upgraded exactly with `python/quoridor_add_dist_planes.py`, and checkpoints are migrated with
+  `python/quoridor_migrate_dist_planes.py`, which zeroes the first-layer weights for ch8–11. The operator runbook
+  is in `docs/DistPlanesUpgrade.md`. `python/tests/test_dist_planes.py` guards train↔inference input parity.
+
 - **KataGo upstream merges:** add `upstream` as a remote and record the exact upstream base in a `UPSTREAM.md`.
   With the design above, the files you touch in `cpp/neuralnet/` shrink to `desc.cpp` (two spare slots), the policy
   extraction in two backends, and `nneval.cpp`. A future `git merge upstream/stable` should then conflict in only a

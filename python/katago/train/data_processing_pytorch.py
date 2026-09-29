@@ -49,6 +49,18 @@ def apply_quoridor_dist_planes(binaryInputNCHW: np.ndarray, spatialDistNCHW: np.
     assert not binaryInputNCHW[:, lo:hi].any(), f"{npz_file}: packed bit planes 8..11 are nonzero; data not upgraded correctly"
     binaryInputNCHW[:, lo:hi] = decode_quoridor_dist_planes(spatialDistNCHW)
 
+def decode_binary_input(binaryInputNCHWPacked: np.ndarray, spatialDistNCHW: np.ndarray, pos_len: int, npz_file="") -> np.ndarray:
+    """Packed bit planes + raw distances from an npz -> float32 spatial inputs [N,C,H,W], unmirrored."""
+    binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked,axis=2)
+    assert len(binaryInputNCHW.shape) == 3
+    assert binaryInputNCHW.shape[2] == ((pos_len * pos_len + 7) // 8) * 8
+    binaryInputNCHW = binaryInputNCHW[:,:,:pos_len*pos_len]
+    binaryInputNCHW = np.reshape(binaryInputNCHW, (
+        binaryInputNCHW.shape[0], binaryInputNCHW.shape[1], pos_len, pos_len
+    )).astype(np.float32)
+    apply_quoridor_dist_planes(binaryInputNCHW, spatialDistNCHW, npz_file)
+    return binaryInputNCHW
+
 def read_npz_training_data(
     npz_files,
     batch_size: int,
@@ -116,14 +128,7 @@ def read_npz_training_data(
                 qValueTargetsNCMove = None
         del npz
 
-        binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked,axis=2)
-        assert len(binaryInputNCHW.shape) == 3
-        assert binaryInputNCHW.shape[2] == ((pos_len * pos_len + 7) // 8) * 8
-        binaryInputNCHW = binaryInputNCHW[:,:,:pos_len*pos_len]
-        binaryInputNCHW = np.reshape(binaryInputNCHW, (
-            binaryInputNCHW.shape[0], binaryInputNCHW.shape[1], pos_len, pos_len
-        )).astype(np.float32)
-        apply_quoridor_dist_planes(binaryInputNCHW, spatialDistNCHW, npz_file)
+        binaryInputNCHW = decode_binary_input(binaryInputNCHWPacked, spatialDistNCHW, pos_len, npz_file)
 
         assert binaryInputNCHW.shape[1] == num_bin_features
         assert globalInputNC.shape[1] == num_global_features
