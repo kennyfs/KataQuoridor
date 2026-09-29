@@ -262,9 +262,9 @@ struct Board {
   Board getMirroredX() const;
 
   // Compatibility stubs for KataGo search / helpers
-  // Go-legacy "sqrt of board area", which search feeds into the score-utility scale (see
-  // ScoreValue). For Quoridor the margin is measured in moves (roughly -20..+20), so this returns
-  // SCORE_UTILITY_SCALE_BASE rather than the 17 of the search grid. See QuoridorNN::SCORE_UTILITY_SCALE_BASE.
+  // Search feeds this into the score-utility scale (see ScoreValue). Upstream KataGo (fd0723fd) returns the
+  // sqrt of the real board area, i.e. 9 for 9x9 Go; KataQuoridor only supports the 9x9 Quoridor board, so it
+  // returns the same 9 (not the 17 of the internal 17x17 search grid). See QuoridorNN::SCORE_UTILITY_SCALE_BASE.
   static constexpr double SCORE_UTILITY_SCALE_BASE = 9.0;
   double sqrtBoardArea() const { return SCORE_UTILITY_SCALE_BASE; }
   int getChainSize(Loc loc) const { (void)loc; return 1; }
