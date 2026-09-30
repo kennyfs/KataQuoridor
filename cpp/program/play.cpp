@@ -1629,6 +1629,23 @@ FinishedGameData* Play::runGame(
   testAssert(!(extraBlackAndKomi.makeGameFair && extraBlackAndKomi.makeGameFairForEmptyBoard));
   testAssert(!(playSettings.forSelfPlay && !clearBotBeforeSearch));
 
+  //Quoridor I/O v2 step 3: finding a fair komi needs nets that see komi (I/O v2). With an I/O v1 net, every komi
+  //compensation below (forkCompensateKomiProb, handicapCompensateKomiProb, ...) is a no-op: the game keeps the komi
+  //GameInitializer gave it.
+  const bool canCompensateKomi =
+    PlayUtils::nnEvalSeesKomi(botB->nnEvaluator) && (botW == NULL || PlayUtils::nnEvalSeesKomi(botW->nnEvaluator));
+  if(!canCompensateKomi && (extraBlackAndKomi.makeGameFair || extraBlackAndKomi.makeGameFairForEmptyBoard)) {
+    extraBlackAndKomi.makeGameFair = false;
+    extraBlackAndKomi.makeGameFairForEmptyBoard = false;
+    static std::atomic<bool> warnedNoKomiCompensation(false);
+    if(!warnedNoKomiCompensation.exchange(true))
+      logger.write(
+        "WARNING: skipping komi compensation (e.g. forkCompensateKomiProb, handicapCompensateKomiProb): it needs nets "
+        "of Quoridor I/O version >= " + Global::intToString(PlayUtils::MIN_QUORIDOR_IO_VERSION_SEEING_KOMI) +
+        ", which see komi (logged once)"
+      );
+  }
+
   if(extraBlackAndKomi.makeGameFairForEmptyBoard) {
     Board b(startBoard.x_size,startBoard.y_size);
     b.setFencesLeft(startHist.rules.blackInitialFences, startHist.rules.whiteInitialFences);
@@ -1657,6 +1674,7 @@ FinishedGameData* Play::runGame(
     PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
   }
   else if((extraBlackAndKomi.extraBlack > 0 || otherGameProps.isFork) &&
+          canCompensateKomi &&
           playSettings.fancyKomiVarying &&
           gameRand.nextBool(extraBlackAndKomi.extraBlack > 0 ? 0.5 : 0.25)) {
     double origKomi = hist.rules.komi;
@@ -1759,7 +1777,7 @@ FinishedGameData* Play::runGame(
         playSettings.compensateAfterPolicyInitProb > 0.0 && gameRand.nextBool(playSettings.compensateAfterPolicyInitProb);
       if(gameData->mode != FinishedGameData::MODE_NORMAL)
         shouldCompensate = extraBlackAndKomi.makeGameFair;
-      if(shouldCompensate) {
+      if(shouldCompensate && canCompensateKomi) {
         PlayUtils::adjustKomiToEven(botB,botW,board,hist,pla,playSettings.compensateKomiVisits,otherGameProps,gameRand);
         extraBlackAndKomi.komiMean = hist.rules.komi;
         PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);

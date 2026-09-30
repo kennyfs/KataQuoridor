@@ -67,6 +67,24 @@ namespace PlayUtils {
 
   float roundAndClipKomi(double unrounded, const Board& board);
 
+  //Quoridor I/O v2 step 3 (docs/QuoridorIOv2.md section 5). Nets of Quoridor I/O version >= 2 have a komi input.
+  //I/O v1 nets don't: komi only reaches their search at terminal nodes, so finding a fair komi with them
+  //(adjustKomiToEven) is meaningless, and Play::runGame skips komi compensation unless both nets see komi.
+  constexpr int MIN_QUORIDOR_IO_VERSION_SEEING_KOMI = 2;
+  bool nnEvalSeesKomi(const NNEvaluator* nnEval);
+
+  //Match points of a game for White: 1 for a White win, 0 for a Black win, and exactly 0.5 for a game without a
+  //winner (a draw by Rules::maxPlies, or a game cut off before its end). Used by the gatekeeper.
+  double whitePointsOfGame(const BoardHistory& endHist);
+
+  //The komi where White's expected result is even, given leadAndWinLossOfKomi(komi) = (white lead, white winLoss)
+  //for valid Quoridor komis: a few steps along the lead from startKomi, then a binary search on winLoss over the
+  //komi grid, interpolated between the two neighbouring komis. Not rounded. This is the search behind
+  //adjustKomiToEven and computeLead.
+  double findEvenKomi(const std::function<std::pair<double,double>(float)>& leadAndWinLossOfKomi, float startKomi);
+  //Rounds to one of the two neighbouring valid komis, the nearer one more likely (linearly), clipped to the valid range.
+  float roundKomiRandomly(double komi, Rand& rand);
+
   void adjustKomiToEven(
     Search* botB,
     Search* botW, //can be NULL if only one bot
