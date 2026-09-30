@@ -54,22 +54,26 @@ mkdir -p "$BASEDIR"/gatekeepersgf
 # you have strong hardware or are later into a run you may want to reduce the overhead by scaling
 # these numbers up and doing more games and training per cycle, exporting models less frequently, etc.
 
-NUM_GAMES_PER_CYCLE=10000 # Every cycle, play this many games
-NUM_THREADS_FOR_SHUFFLING=12
-NUM_TRAIN_SAMPLES_PER_EPOCH=100000  # Training will proceed in chunks of this many rows, subject to MAX_TRAIN_PER_DATA.
-MAX_TRAIN_PER_DATA=8 # On average, train only this many times on each data row. Larger numbers may cause overfitting.
-NUM_TRAIN_SAMPLES_PER_SWA=80000  # Stochastic weight averaging frequency.
-BATCHSIZE=256 # For lower-end GPUs 64 or smaller may be needed to avoid running out of GPU memory.
-SHUFFLE_MINROWS=100000 # Require this many rows at the very start before beginning training.
-MAX_TRAIN_SAMPLES_PER_CYCLE=1000000  # Each cycle will do at most this many training steps.
-TAPER_WINDOW_SCALE=500000 # Parameter setting the scale at which the shuffler will make the training window grow sublinearly.
-SHUFFLE_KEEPROWS=1200000 # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, so the shuffler samples enough rows each cycle for the training to use.
-EXPAND_WINDOW_PER_ROW=0.6 # Initial slope of the shuffle window growth (shuffle.sh default 0.4). Larger keeps more older data in the window.
+# Each of these can be overridden from the environment (e.g. NUM_GAMES_PER_CYCLE=2000 ./synchronous_loop.sh ...).
+NUM_GAMES_PER_CYCLE="${NUM_GAMES_PER_CYCLE:-10000}" # Every cycle, play this many games
+NUM_THREADS_FOR_SHUFFLING="${NUM_THREADS_FOR_SHUFFLING:-12}"
+NUM_TRAIN_SAMPLES_PER_EPOCH="${NUM_TRAIN_SAMPLES_PER_EPOCH:-100000}"  # Training will proceed in chunks of this many rows, subject to MAX_TRAIN_PER_DATA.
+MAX_TRAIN_PER_DATA="${MAX_TRAIN_PER_DATA:-8}" # On average, train only this many times on each data row. Larger numbers may cause overfitting.
+NUM_TRAIN_SAMPLES_PER_SWA="${NUM_TRAIN_SAMPLES_PER_SWA:-80000}"  # Stochastic weight averaging frequency.
+BATCHSIZE="${BATCHSIZE:-256}" # For lower-end GPUs 64 or smaller may be needed to avoid running out of GPU memory.
+SHUFFLE_MINROWS="${SHUFFLE_MINROWS:-100000}" # Require this many rows at the very start before beginning training.
+MAX_TRAIN_SAMPLES_PER_CYCLE="${MAX_TRAIN_SAMPLES_PER_CYCLE:-1000000}"  # Each cycle will do at most this many training steps.
+TAPER_WINDOW_SCALE="${TAPER_WINDOW_SCALE:-500000}" # Parameter setting the scale at which the shuffler will make the training window grow sublinearly.
+SHUFFLE_KEEPROWS="${SHUFFLE_KEEPROWS:-1200000}" # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, so the shuffler samples enough rows each cycle for the training to use.
+EXPAND_WINDOW_PER_ROW="${EXPAND_WINDOW_PER_ROW:-0.6}" # Initial slope of the shuffle window growth (shuffle.sh default 0.4). Larger keeps more older data in the window.
+MAX_CYCLES="${MAX_CYCLES:-0}" # Stop after this many cycles (0 = run forever). Rerunning continues the run.
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
-SELFPLAY_CONFIG="$GITROOTDIR"/cpp/configs/training/selfplay_quoridor.cfg
-GATING_CONFIG="$GITROOTDIR"/cpp/configs/training/gatekeeper_quoridor.cfg
+# I/O v2 nets (the *_quoridor_v2 model kinds) need the *_quoridor_v2 configs. KATAGO_BIN overrides the executable.
+SELFPLAY_CONFIG="${SELFPLAY_CONFIG:-$GITROOTDIR/cpp/configs/training/selfplay_quoridor.cfg}"
+GATING_CONFIG="${GATING_CONFIG:-$GITROOTDIR/cpp/configs/training/gatekeeper_quoridor.cfg}"
+KATAGO_BIN="${KATAGO_BIN:-$GITROOTDIR/cpp/katago}"
 
 # Copy all the relevant scripts and configs and the katago executable to a dated directory.
 # For archival and logging purposes - you can look back and see exactly the python code on a particular date
@@ -79,7 +83,7 @@ mkdir -p "$DATED_ARCHIVE"/bin
 cp "$GITROOTDIR"/python/*.py "$GITROOTDIR"/python/selfplay/*.py "$GITROOTDIR"/python/selfplay/*.sh "$DATED_ARCHIVE"
 cp -r "$GITROOTDIR"/python/katago "$DATED_ARCHIVE"
 cp -r "$GITROOTDIR"/python/muon "$DATED_ARCHIVE"
-cp "$GITROOTDIR"/cpp/katago "$DATED_ARCHIVE"/bin
+cp "$KATAGO_BIN" "$DATED_ARCHIVE"/bin/katago
 cp "$SELFPLAY_CONFIG" "$DATED_ARCHIVE"/selfplay.cfg
 cp "$GATING_CONFIG" "$DATED_ARCHIVE"/gatekeeper.cfg
 git show --no-patch --no-color > "$DATED_ARCHIVE"/version.txt
@@ -91,8 +95,10 @@ cd "$DATED_ARCHIVE"
 
 # Begin cycling forever, running each step in order.
 set -x
-while true
+CYCLE=0
+while [[ "$MAX_CYCLES" -le 0 || "$CYCLE" -lt "$MAX_CYCLES" ]]
 do
+    CYCLE=$((CYCLE + 1))
     echo "Gatekeeper"
     time ./bin/katago gatekeeper -rejected-models-dir "$BASEDIR"/rejectedmodels -accepted-models-dir "$BASEDIR"/models/ -sgf-output-dir "$BASEDIR"/gatekeepersgf/ -test-models-dir "$BASEDIR"/modelstobetested/ -config "$DATED_ARCHIVE"/gatekeeper.cfg -quit-if-no-nets-to-test | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt
 
