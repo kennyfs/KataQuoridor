@@ -68,6 +68,11 @@ namespace MainCmds {
 }
 
 namespace Version {
+  //KataQuoridor's own release version. getKataGoVersion() stays at the upstream base version because
+  //upstream code (analysis engine, model/config compatibility) may compare against it.
+  std::string getKataQuoridorVersion();
+  //"KataQuoridor <ver> (based on KataGo <ver>, git <sha>)", reported by `katago version` and QTP `version`.
+  std::string getKataQuoridorVersionString();
   std::string getKataGoVersion();
   std::string getKataGoVersionForHelp();
   std::string getKataGoVersionFullInfo();

@@ -249,17 +249,29 @@ int main(int argc, const char* const* argv) {
 }
 
 
+string Version::getKataQuoridorVersion() {
+  return string("0.1.0");
+}
+
+string Version::getKataQuoridorVersionString() {
+  //Abbreviate the full SHA, but keep a "-dirty" suffix (uncommitted changes at build time) visible.
+  string rev = Version::getGitRevision();
+  if(rev.size() > 8 && rev[0] != '<')
+    rev = rev.substr(0,8) + (Global::isSuffix(rev,"-dirty") ? "-dirty" : "");
+  return "KataQuoridor " + Version::getKataQuoridorVersion() + " (based on KataGo " + Version::getKataGoVersion() + ", git " + rev + ")";
+}
+
 string Version::getKataGoVersion() {
   return string("1.18.2");
 }
 
 string Version::getKataGoVersionForHelp() {
-  return string("KataGo v1.18.2");
+  return "KataQuoridor v" + Version::getKataQuoridorVersion() + " (based on KataGo v" + Version::getKataGoVersion() + ")";
 }
 
 string Version::getKataGoVersionFullInfo() {
   ostringstream out;
-  out << Version::getKataGoVersionForHelp() << endl;
+  out << Version::getKataQuoridorVersionString() << endl;
   out << "Git revision: " << Version::getGitRevision() << endl;
   out << "Compile Time: " << __DATE__ << " " << __TIME__ << endl;
 #if defined(USE_CUDA_BACKEND)

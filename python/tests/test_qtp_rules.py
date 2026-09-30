@@ -92,6 +92,11 @@ def _play_to_black_win(eng):
     assert eng.ok("winner") == "B"
 
 
+def test_name_and_version(eng):
+    assert eng.ok("name") == "KataQuoridor"
+    assert eng.ok("version").startswith("KataQuoridor 0.1.0 (based on KataGo 1.18.2, git ")
+
+
 GAME_OVER_COMMANDS = [
     "play w d8", "play b d1", "move d8", "move w d8", "wall a1h", "wall w a1h",
     "genmove w", "genmove b", "genmove_debug w", "kata-search w", "kata-search_debug w",

@@ -2375,21 +2375,14 @@ int MainCmds::gtp(const vector<string>& args) {
     }
 
     else if(command == "name") {
-      response = "KataGo";
+      response = "KataQuoridor";
     }
 
     else if(command == "version") {
       if(overrideVersion.size() > 0)
         response = overrideVersion;
-      else {
-        std::vector<string> parts;
-        parts.push_back(Version::getKataGoVersion());
-        if(engine->nnEval != NULL)
-          parts.push_back(engine->nnEval->getAbbrevInternalModelName());
-        if(engine->humanEval != NULL)
-          parts.push_back(engine->humanEval->getAbbrevInternalModelName());
-        response = Global::concat(parts,"+");
-      }
+      else
+        response = Version::getKataQuoridorVersionString();
     }
 
     else if(command == "known_command") {
