@@ -313,7 +313,7 @@ function detailSpatialInput(d) {
   }
   d.append(h("h3", {}, "Channels"));
   const tb = h("table", { class: "t" }, h("tr", {}, h("th", {}, "Channel"), h("th", {}, "mean"), h("th", {}, "conv |W|")));
-  f.forEach((ff, i) => tb.append(h("tr", { title: ff.desc }, h("td", {}, `S${i} ${ff.name}`, ff.continuous ? h("span", { class: "pill", title: "continuous at inference, binarized in training data" }, "⚠ continuous") : null),
+  f.forEach((ff, i) => tb.append(h("tr", { title: ff.desc }, h("td", {}, `S${i} ${ff.name}`, ff.continuous ? h("span", { class: "pill", title: "continuous BFS distance /32, stored raw in spatialDistNCHW" }, "continuous") : null),
     h("td", {}, st ? fmt.num(st.spatial_mean[i]) : "—"), h("td", {}, st ? fmt.num(st.spatial_norm[i]) : "—"))));
   d.append(tb);
 }

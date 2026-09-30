@@ -17,7 +17,8 @@ What it computes
   * feature importance on selfplay training rows (tdata, with their 600-visit search policy targets and game
     outcomes): permutation importance (single features and groups, overall and by game phase), gradient x input,
     and input-scaled first-layer weight norms;
-  * the train/inference input mismatch of spatial channels 8-11 (see quoridor_state.CONTINUOUS_SPATIAL);
+  * an input parity check: spatial channels 8-11 (BFS distances) as the trainer decodes them from spatialDistNCHW
+    vs a Python replica of QuoridorNN::fillRow (and, in the search part, vs the C++ engine);
   * value calibration against game outcomes;
   * C++ search (GTP kata-search_analyze) on positions sampled from selfplay .sgfs: raw net vs search, with a
     position browser, per-position attributions and attention maps.
@@ -47,6 +48,7 @@ sys.path.insert(0, HERE)
 
 from katago.train.load_model import load_model  # noqa: E402
 from katago.train import model_pytorch  # noqa: E402
+from katago.train.data_processing_pytorch import decode_binary_input  # noqa: E402
 import quoridor_state as qs  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -351,9 +353,10 @@ def load_tdata(tdata_dir, num_rows, seed):
             continue
         take = rng.choice(ok, size=min(per_file, len(ok)), replace=False)
         take.sort()
-        b = np.unpackbits(z["binaryInputNCHWPacked"][take], axis=2)[:, :, :N * N]
+        # Exactly what the trainer feeds: bit planes, with ch8-11 decoded from spatialDistNCHW (KeyError on old data).
+        sp = decode_binary_input(z["binaryInputNCHWPacked"][take], z["spatialDistNCHW"][take], N, f)
         parts.append({
-            "bin": b.reshape(len(take), qs.NUM_SPATIAL, N, N).astype(np.float32),
+            "sp": sp,
             "glob": z["globalInputNC"][take].astype(np.float32),
             "pol": z["policyTargetsNCMove"][take, 0].astype(np.float32),
             "gt": gt[take].astype(np.float32),
@@ -362,7 +365,7 @@ def load_tdata(tdata_dir, num_rows, seed):
         if total >= num_rows:
             break
     d = {k: np.concatenate([p[k] for p in parts])[:num_rows] for k in parts[0]}
-    log(f"loaded {d['bin'].shape[0]} training rows from {tdata_dir}")
+    log(f"loaded {d['sp'].shape[0]} training rows from {tdata_dir}")
     return d
 
 
@@ -839,15 +842,12 @@ def run_mcts(net, device, args, model_bin, picks):
                         legal.append((ms, qs.move_to_policy_index(mv, pla)))
                         cpp_prob[ms] = float(grid[y, x])
             s, gv = qs.fill_row(st)
-            sb = qs.binarize_like_training(s)
-            o = forward(net, np.stack([s, sb]), np.stack([gv, gv]), device)
+            o = forward(net, s[None], gv[None], device)
             idxs = np.array([i for _, i in legal])
             names = [m for m, _ in legal]
-            pols = {}
-            for k, name in ((0, "py"), (1, "pybin")):
-                lg = o["logits"][k, 0:3].reshape(-1)[idxs]
-                p = np.exp(lg - lg.max())
-                pols[name] = p / p.sum()
+            lg = o["logits"][0, 0:3].reshape(-1)[idxs]
+            py_pol = np.exp(lg - lg.max())
+            py_pol /= py_pol.sum()
             opt = o["logits"][0, 15:18].reshape(-1)[idxs]
             popt = np.exp(opt - opt.max()); popt /= popt.sum()
             cp = np.array([cpp_prob[m] for m in names])
@@ -872,9 +872,6 @@ def run_mcts(net, device, args, model_bin, picks):
                 "nn": {"win": r4(nn_win), "margin": r4(kv.get("whiteLead", 0) * win_sign),
                        "policy": board_policy_arrays(dict(zip(names, cp))),
                        "top": names[int(cp.argmax())], "wallMass": r4(float(sum(p for m, p in zip(names, cp) if m[-1] in "hv")))},
-                "pybin": {"win": r4(o["value"][1, 0]), "margin": r4(o["margin"][1]),
-                          "top": names[int(pols["pybin"].argmax())],
-                          "policy": board_policy_arrays(dict(zip(names, pols["pybin"])))},
                 "optimistic": {"top": names[int(popt.argmax())]},
                 "mcts": {"win": r4(mcts_win), "margin": r4(root.get("scoreMean", 0.0) * 1.0) if root else None,
                          "visits": int(root.get("visits", tot)) if root else tot, "best": best,
@@ -883,12 +880,10 @@ def run_mcts(net, device, args, model_bin, picks):
                                     "margin": r4(m.get("scoreMean")), "prior": r4(m.get("prior")),
                                     "pv": m.get("pv", [])[:8]} for m in moves[:10]],
                          "wallShare": r4(float(sum(v for m, v in visits.items() if m[-1] in "hv")))},
-                "check": {"py_vs_cpp_policy": r4(float(np.abs(pols["py"] - cp).max())),
-                          "py_vs_cpp_win": r4(abs(float(o["value"][0, 0]) - nn_win)),
-                          "pybin_vs_cpp_policy": r4(float(np.abs(pols["pybin"] - cp).max()))},
-                "kl_mcts_nn": r4(kl(mcts_vec, cp)), "kl_mcts_pybin": r4(kl(mcts_vec, pols["pybin"])),
+                "check": {"py_vs_cpp_policy": r4(float(np.abs(py_pol - cp).max())),
+                          "py_vs_cpp_win": r4(abs(float(o["value"][0, 0]) - nn_win))},
+                "kl_mcts_nn": r4(kl(mcts_vec, cp)),
                 "ce_mcts_nn": r4(float(-(mcts_vec * np.log(cp + 1e-12)).sum())),
-                "ce_mcts_pybin": r4(float(-(mcts_vec * np.log(pols["pybin"] + 1e-12)).sum())),
                 "prior_of_best": r4(cpp_prob.get(best, 0.0)),
                 "traj": {"me": r4(canon_to_board_map(o["traj"][0, 0], pla).reshape(-1)),
                          "opp": r4(canon_to_board_map(o["traj"][0, 1], pla).reshape(-1))},
@@ -916,13 +911,9 @@ def mcts_summary(positions):
         return {
             "n": len(ps),
             "top1_nn": r4(np.mean([p["nn"]["top"] == p["mcts"]["best"] for p in ps])),
-            "top1_pybin": r4(np.mean([p["pybin"]["top"] == p["mcts"]["best"] for p in ps])),
             "kl_nn": r4(np.mean([p["kl_mcts_nn"] for p in ps])),
-            "kl_pybin": r4(np.mean([p["kl_mcts_pybin"] for p in ps])),
             "ce_nn": r4(np.mean([p["ce_mcts_nn"] for p in ps])),
-            "ce_pybin": r4(np.mean([p["ce_mcts_pybin"] for p in ps])),
             "value_mae": r4(np.mean([abs(p["nn"]["win"] - p["mcts"]["win"]) for p in ps if p["mcts"]["win"] is not None])),
-            "value_mae_pybin": r4(np.mean([abs(p["pybin"]["win"] - p["mcts"]["win"]) for p in ps if p["mcts"]["win"] is not None])),
             "margin_mae": r4(np.mean([abs(p["nn"]["margin"] - p["mcts"]["margin"]) for p in ps if p["mcts"]["margin"] is not None])),
             "wall_mass_nn": r4(np.mean([p["nn"]["wallMass"] for p in ps])),
             "wall_share_mcts": r4(np.mean([p["mcts"]["wallShare"] for p in ps])),
@@ -936,7 +927,6 @@ def mcts_summary(positions):
         "phase": [agg(lambda p, i=i: phase_idx(p) == i) for i in range(len(PHASES))],
         "max_check_policy": r4(max((p["check"]["py_vs_cpp_policy"] for p in positions), default=None)),
         "max_check_win": r4(max((p["check"]["py_vs_cpp_win"] for p in positions), default=None)),
-        "mean_check_pybin_policy": r4(np.mean([p["check"]["pybin_vs_cpp_policy"] for p in positions])) if positions else None,
     }
 
 
@@ -1017,7 +1007,7 @@ def main():
         "selfplayDir": selfplay_dir, "tdataDir": tdata_dir, "visits": args.visits,
     }}
     result["features"] = {
-        "spatial": [{"idx": i, "name": qs.SPATIAL_NAMES[i], "desc": qs.SPATIAL_DESCS[i], "continuous": i in qs.CONTINUOUS_SPATIAL}
+        "spatial": [{"idx": i, "name": qs.SPATIAL_NAMES[i], "desc": qs.SPATIAL_DESCS[i], "continuous": i in qs.DIST_SPATIAL}
                     for i in range(qs.NUM_SPATIAL)],
         "global": [{"idx": i, "name": qs.GLOBAL_NAMES[i], "desc": qs.GLOBAL_DESCS[i]} for i in range(qs.NUM_GLOBAL)],
         "groups": [{"name": n, "spatial": s, "global": g} for n, s, g in GROUPS],
@@ -1025,11 +1015,9 @@ def main():
         "policyVariants": POLICY_VARIANTS,
     }
 
-    # --- training rows, inference-time inputs rebuilt from the stored bits ------------------------------------
+    # --- training rows, decoded exactly as the trainer does ------------------------------------------------------
     td = load_tdata(tdata_dir, args.tdata_rows, args.seed)
-    sp_train = td["bin"]
-    sp_inf = qs.continuous_from_training(sp_train)
-    rebuilt_ok = float(np.mean(qs.binarize_like_training(sp_inf) == sp_train))
+    sp_inf = td["sp"]
     gl = td["glob"]
     walls_placed = 20 - np.round(gl[:, 1] * 10) - np.round(gl[:, 2] * 10)
     phase = phase_of_walls(walls_placed)
@@ -1059,27 +1047,25 @@ def main():
     }
     result["calibration"] = calibration(base, td["gt"])
 
-    # --- train / inference mismatch ----------------------------------------------------------------------------
-    otr = forward(net, sp_train, gl, device)
-    ltr = row_losses(otr, td["pol"], td["gt"])
-    diff = compare_outputs(base, otr, lb, ltr)
-    ch = qs.CONTINUOUS_SPATIAL
-    result["mismatch"] = {
+    # --- input parity: trainer's decoded ch8-11 vs the Python fillRow replica --------------------------------
+    ch = qs.DIST_SPATIAL
+    sp_py = qs.dist_planes_from_board(sp_inf)
+    dd = np.abs(sp_py - sp_inf)
+    wn = np.sqrt((net.conv_spatial.weight.detach().float().cpu().numpy() ** 2).sum((0, 2, 3)))
+    others = [c for c in range(1, qs.NUM_SPATIAL) if c not in ch]
+    result["inputParity"] = {
         "channels": ch,
-        "rebuiltBitsMatch": r4(rebuilt_ok),
-        "trainNonzeroRows": r4(float((sp_train[:, ch].reshape(len(sp_train), -1).max(1) > 0).mean())),
-        "trainMean": r4(sp_train[:, ch].mean((0, 2, 3))),
-        "inferMean": r4(sp_inf[:, ch].mean((0, 2, 3))),
-        "lossInfer": {k: r4(wmean(lb[k], lb["w_" + k])) for k in ("pol", "val", "mar")},
-        "lossTrain": {k: r4(wmean(ltr[k], ltr["w_" + k])) for k in ("pol", "val", "mar")},
-        "lossInferPhase": [{k: r4(wmean(lb[k], lb["w_" + k], phase == i)) for k in ("pol", "val", "mar")} for i in range(len(PHASES))],
-        "lossTrainPhase": [{k: r4(wmean(ltr[k], ltr["w_" + k], phase == i)) for k in ("pol", "val", "mar")} for i in range(len(PHASES))],
-        "diff": {k: r4(float(v.mean())) for k, v in diff.items()},
-        "diffPhase": [{k: r4(float(v[phase == i].mean())) if (phase == i).any() else None for k, v in diff.items()} for i in range(len(PHASES))],
-        "dwinHist": np.histogram(diff["dwin"], bins=[0, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 1.0])[0].tolist(),
-        "dwinEdges": [0, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 1.0],
+        "rows": int(len(sp_inf)),
+        "maxAbsDiff": r4(float(dd.max())),
+        "rowsExact": r4(float((dd.reshape(len(dd), -1).max(1) == 0).mean())),
+        "otherChannelsExact": r4(float((sp_py[:, others] == sp_inf[:, others]).all(axis=(1, 2, 3)).mean())),
+        "mean": r4(sp_inf[:, ch].mean((0, 2, 3))),
+        "unreachableFrac": r4((sp_inf[:, ch] >= 1.0).mean((0, 2, 3))),
+        "stemNorm": r4(wn[ch]),
+        "stemNormOtherMedian": r4(float(np.median(wn[others]))),
+        "migrated": bool(train_state.get("s8_s11_dist_planes_migrated", False)),
     }
-    log("mismatch analysis done")
+    log(f"input parity: max |trainer - replica| on S8-S11 = {dd.max():.3g}")
 
     # --- C++ search on selfplay positions ----------------------------------------------------------------------
     positions = []

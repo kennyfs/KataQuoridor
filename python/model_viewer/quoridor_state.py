@@ -87,9 +87,9 @@ GLOBAL_DESCS = [
     "My BFS shortest distance to goal, /32.",
     "Opponent's BFS shortest distance to goal, /32.",
 ]
-# Spatial channels whose C++ value is continuous. The training data stores spatial inputs as packed
-# bits (TrainingWriteBuffers::addRow -> packBits casts each float to uint8), so these train as (x >= 1).
-CONTINUOUS_SPATIAL = [8, 9, 10, 11]
+# Spatial channels that hold continuous BFS distances. The training npz stores them raw in spatialDistNCHW
+# (the packed bit planes hold 0 there); the trainer decodes them to the same values as fillRow.
+DIST_SPATIAL = [8, 9, 10, 11]
 
 
 def move_str(kind, c, r):
@@ -264,13 +264,8 @@ def fill_row(st):
     return spatial, g
 
 
-def binarize_like_training(spatial):
-    """What the training data holds: packBits casts each float to uint8, so a value in [0, 1] survives only if it is 1."""
-    return (spatial >= 1.0).astype(np.float32)
-
-
-def continuous_from_training(spatial_bin):
-    """Rebuilds the inference-time continuous channels 8..11 of rows read from training data (batched, (B,17,9,9)).
+def dist_planes_from_board(spatial_bin):
+    """Recomputes channels 8..11 from the pawn and blocked-edge planes of training rows (batched, (B,17,9,9)), as fillRow does.
 
     Works in canonical space: ch3/ch4 block steps toward row rCanon-1 / rCanon+1, ch5/ch6 east / west,
     my goal is canonical row 0, the opponent's is row 8. Returns a copy with ch8..11 replaced.

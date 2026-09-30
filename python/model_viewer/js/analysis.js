@@ -1,5 +1,5 @@
 "use strict";
-// ---- Tab 2: feature importance, train/inference mismatch, calibration, search -----------------------------------
+// ---- Tab 2: feature importance, input parity, calibration, search -----------------------------------
 const METRICS = [
   ["kl", "Policy KL (output change)", "Mean KL(original policy || ablated policy).", x => fmt.fix(x, 3)],
   ["dwin", "|Δ P(win)|", "Mean absolute change of the side-to-move win probability.", x => fmt.pct(x, 1)],
@@ -24,7 +24,7 @@ function renderAnalysis() {
   const sections = [];
   const add = (c, lab) => { body.append(c); sections.push([lab, c.id]); };
   add(summaryCard(), "Summary");
-  if (DATA.mismatch) add(mismatchCard(), "⚠ Input mismatch");
+  if (DATA.inputParity) add(parityCard(), "Input parity");
   add(importanceCard(), "Feature importance");
   add(phaseCard(), "By game phase");
   add(stemCard(), "First-layer weights");
@@ -58,44 +58,33 @@ function summaryCard() {
   const rows = allFeatureRows();
   const best = kind => rows.filter(r => r.kind === kind).sort((a, b) => metricValue(b, "kl") - metricValue(a, "kl"))[0];
   const bestV = rows.slice().sort((a, b) => metricValue(b, "dwin") - metricValue(a, "dwin"))[0];
-  const c = card("sec-summary", `Feature analysis · ${m.name}`, `${fmt.int(I.rows)} selfplay training rows from <code>${esc(m.tdataDir)}</code>, evaluated with the inputs the C++ engine actually feeds (distance channels rebuilt from the stored bits). Generated ${esc(m.generated)}.`);
+  const c = card("sec-summary", `Feature analysis · ${m.name}`, `${fmt.int(I.rows)} selfplay training rows from <code>${esc(m.tdataDir)}</code>, decoded exactly as the trainer does (distance channels S8–S11 from <code>spatialDistNCHW</code>). Generated ${esc(m.generated)}.`);
   const t = h("div", { class: "tiles" });
   t.append(tile("Base policy loss", fmt.fix(I.baseLoss.pol, 3), "vs 600-visit search targets"),
     tile("Base value loss", fmt.fix(I.baseLoss.val, 3), "vs game outcomes"),
     tile("Policy relies most on", best("s").label.replace(/^S\d+ · /, ""), `spatial · KL ${fmt.fix(metricValue(best("s"), "kl"), 2)}`),
     tile("Value relies most on", bestV.label.replace(/^[SG]\d+ · /, ""), `|ΔP(win)| ${fmt.pct(metricValue(bestV, "dwin"))}`));
-  if (DATA.mismatch) t.append(tile("Train/infer mismatch", fmt.pct(DATA.mismatch.diff.dwin, 1), "mean |ΔP(win)| from S8–S11", "warn"));
+  if (DATA.inputParity) { const ok = DATA.inputParity.maxAbsDiff < 1e-6; t.append(tile("Train = inference inputs", ok ? "✓" : "✗", `max |Δ| S8–S11 ${fmt.num(DATA.inputParity.maxAbsDiff)}`, ok ? null : "warn")); }
   if (DATA.mcts && DATA.mcts.summary) t.append(tile("Net top move = search", fmt.pct(DATA.mcts.summary.all.top1_nn, 0), `${DATA.mcts.summary.all.n} positions · ${m.visits} visits`));
   c.append(t);
   return c;
 }
 
-function mismatchCard() {
-  const M = DATA.mismatch, ph = DATA.features.phases;
+function parityCard() {
+  const M = DATA.inputParity, F = DATA.features.spatial;
   const chs = M.channels.map(i => "S" + i).join(", ");
-  const c = card("sec-mismatch", "⚠ Train / inference input mismatch", `Channels ${chs} (BFS distances /32) are continuous in <code>QuoridorNN::fillRow</code>, but <code>TrainingWriteBuffers</code> stores spatial inputs with <code>packBits</code>, which casts each float to <code>uint8</code>: every value below 1 becomes 0. So in training these planes are only 1 on unreachable cells (nonzero in ${fmt.pct(M.trainNonzeroRows, 0)} of rows; mean ${M.trainMean.map(x => fmt.fix(x, 3)).join(" / ")}), while at inference they average ${M.inferMean.map(x => fmt.fix(x, 2)).join(" / ")}. The net never learned what these values mean, yet it sees them in every selfplay search.`, "warn");
+  const ok = M.maxAbsDiff < 1e-6;
+  const c = card("sec-parity", "Input parity (S8–S11 distance planes)", `Channels ${chs} are continuous BFS distances /32. The training data stores them raw in <code>spatialDistNCHW</code> and the trainer decodes them to the same values <code>QuoridorNN::fillRow</code> feeds at inference (see <code>docs/DistPlanesUpgrade.md</code>). This check recomputes them from each row's pawn and blocked-edge planes with a Python replica of <code>fillRow</code> and compares.`, ok ? "" : "warn");
   const t = h("div", { class: "tiles" });
-  t.append(tile("Mean |ΔP(win)|", fmt.pct(M.diff.dwin, 1), "continuous vs training-style input"), tile("Top move differs", fmt.pct(M.diff.top1, 0), "of positions"),
-    tile("Policy KL", fmt.fix(M.diff.kl, 3)), tile("Mean |Δ margin|", fmt.fix(M.diff.dmargin, 2) + " moves"));
+  t.append(tile("Max |trainer − replica|", fmt.num(M.maxAbsDiff), `S8–S11 over ${fmt.int(M.rows)} rows`, ok ? null : "warn"),
+    tile("Rows identical", fmt.pct(M.rowsExact, 1), "S8–S11"),
+    tile("Checkpoint migrated", M.migrated ? "yes" : "no", "zeroed stem weights for S8–S11 once"));
+  if (DATA.mcts && DATA.mcts.summary) t.append(tile("Replica vs C++", fmt.num(DATA.mcts.summary.max_check_policy), "max |policy diff| on searched positions"));
   c.append(t);
-  const tb = h("table", { class: "t", style: "max-width:720px" }, h("tr", {}, h("th", {}, "Loss on training rows"), h("th", {}, "as trained (binary)"), h("th", {}, "as used in C++ (continuous)"), h("th", {}, "difference")));
-  for (const [k, lab] of [["pol", "Policy CE (targets from searches that used continuous inputs)"], ["val", "Value CE (game outcome)"], ["mar", "Margin Huber (final margin)"]]) {
-    const a = M.lossTrain[k], b = M.lossInfer[k], d = b - a;
-    tb.append(h("tr", {}, h("td", {}, lab), h("td", {}, fmt.fix(a, 4)), h("td", {}, fmt.fix(b, 4)), h("td", { class: d > 0 ? "worse" : "better" }, fmt.sgn(d, 4))));
-  }
-  c.append(tb);
-  const cols = h("div", { class: "cols2", style: "margin-top:14px" });
-  cols.append(h("div", { class: "chart" }, h("div", { class: "ttl" }, "Output change by game phase"), h("div", { class: "sub" }, "Mean |ΔP(win)| between the two input versions"),
-    groupedBars(ph.map(p => p.name), [{ name: "|ΔP(win)|", color: "var(--s4)", vals: M.diffPhase.map(d => d.dwin) }], { yFmt: x => fmt.pct(x, 0), sub: DATA.importance.phaseCounts.map(n => fmt.int(n) + " rows") })));
-  const labs = M.dwinEdges.slice(0, -1).map((e, i) => `${fmt.pct(e, 1)}–${fmt.pct(M.dwinEdges[i + 1], 0)}`);
-  cols.append(h("div", { class: "chart" }, h("div", { class: "ttl" }, "Distribution of |ΔP(win)|"), h("div", { class: "sub" }, "Rows per bin"),
-    groupedBars(labs, [{ name: "rows", color: "var(--s4)", vals: M.dwinHist }], { yFmt: fmt.si })));
-  c.append(cols);
-  if (DATA.mcts && DATA.mcts.summary) {
-    const S = DATA.mcts.summary.all;
-    c.append(h("div", { class: "note" }, `Against the C++ search (${S.n} positions): value MAE vs search ${fmt.fix(S.value_mae, 3)} (continuous) vs ${fmt.fix(S.value_mae_pybin, 3)} (binary); policy CE vs visits ${fmt.fix(S.ce_nn, 3)} vs ${fmt.fix(S.ce_pybin, 3)}. The search itself runs on the continuous inputs, so this comparison favors them; the game-outcome losses above do not.`));
-  }
-  c.append(h("div", { class: "note" }, "Fix options: write these planes pre-binarized in C++ too (drop the information), store them in a float array in the training data, or replace them by binary encodings (e.g. thresholds) in a new I/O version. Any fix changes the net's inputs, so it needs retraining or a new I/O version."));
+  const tb = h("table", { class: "t", style: "max-width:760px" }, h("tr", {}, h("th", {}, "Plane"), h("th", {}, "mean value"), h("th", {}, "cells unreachable / ≥32"), h("th", {}, "conv_spatial |W|"), h("th", {}, "|W| / median other plane")));
+  M.channels.forEach((ch, i) => tb.append(h("tr", {}, h("td", {}, `S${ch} ${F[ch].name}`), h("td", {}, fmt.fix(M.mean[i], 3)), h("td", {}, fmt.pct(M.unreachableFrac[i], 2)),
+    h("td", {}, fmt.num(M.stemNorm[i])), h("td", {}, fmt.fix(M.stemNorm[i] / M.stemNormOtherMedian, 2)))));
+  c.append(tb, h("div", { class: "note" }, "After the migration these first-layer weights restarted from zero; their norm relative to the other planes shows how far the net has re-learned to read the distances."));
   return c;
 }
 
@@ -207,7 +196,7 @@ function searchCard() {
 
 let browserSort = "kl", browserSel = 0, browserOverlay = "nn";
 function browserCard() {
-  const c = card("sec-browser", "Position browser", "Sampled positions with the raw net, the search, the training-style (binarized) input variant, per-position attributions (grad × input) and the auxiliary heads. Hover moves for numbers.");
+  const c = card("sec-browser", "Position browser", "Sampled positions with the raw net, the search, per-position attributions (grad × input) and the auxiliary heads. Hover moves for numbers.");
   const P = DATA.mcts.positions;
   const list = h("div", { class: "plist" }), boardBox = h("div", { class: "boardBox" }), info = h("div", {});
   const sorts = { kl: ["KL(search‖net)", p => -p.kl_mcts_nn, p => fmt.fix(p.kl_mcts_nn, 2)], prior: ["Low prior of best", p => p.prior_of_best, p => fmt.pct(p.prior_of_best, 0)],
@@ -222,14 +211,14 @@ function browserCard() {
         h("span", { class: "i" }, "#" + (i + 1)), h("span", { class: "m" }, `${p.state.toMove} · ${p.walls}w · ${disagree ? "≠ " : ""}${p.mcts.best}`), h("span", { class: "v" }, sorts[browserSort][2](p))));
     }
   };
-  const overlays = [["nn", "Net policy"], ["mcts", "Search visits"], ["pybin", "Binary-input policy"], ["attrV", "Value attribution"], ["attrP", "Policy attribution"], ["traj", "Trajectory"], ["walls", "Final walls"]];
+  const overlays = [["nn", "Net policy"], ["mcts", "Search visits"], ["attrV", "Value attribution"], ["attrP", "Policy attribution"], ["traj", "Trajectory"], ["walls", "Final walls"]];
   const drawPos = () => {
     const p = P[browserSel]; if (!p) return;
     boardBox.innerHTML = "";
     const svg = svgRoot(10, 10), st = p.state, o = {};
     const pct = v => v >= 0.995 ? "99" : (v * 100).toFixed(v < 0.1 ? 1 : 0);
-    if (["nn", "mcts", "pybin"].includes(browserOverlay)) {
-      const pol = browserOverlay === "nn" ? p.nn.policy : browserOverlay === "mcts" ? p.mcts.policy : p.pybin.policy;
+    if (["nn", "mcts"].includes(browserOverlay)) {
+      const pol = browserOverlay === "nn" ? p.nn.policy : p.mcts.policy;
       const all = [...pol.pawn, ...pol.v, ...pol.h].filter(v => v != null);
       const max = Math.max(1e-9, ...all);
       o.cellHeat = { vals: pol.pawn, kind: "policy", max, labels: v => pct(v), labelMin: 0.02 };
@@ -258,10 +247,10 @@ function browserCard() {
     const add = (k, v) => kv.append(h("dt", {}, k), h("dd", {}, v));
     add("Game", `${p.file} · ply ${p.ply}/${p.nMoves} · ${p.gtype} · result ${p.result}`);
     add("To move", `${p.state.toMove === "B" ? "Black" : "White"} · fences B ${p.state.fB} / W ${p.state.fW}`);
-    add("P(win) mover", `net ${fmt.pct(p.nn.win)} · search ${fmt.pct(p.mcts.win)} · binary-input ${fmt.pct(p.pybin.win)}`);
-    add("Margin mover", `net ${fmt.fix(p.nn.margin, 2)} · search ${fmt.fix(p.mcts.margin, 2)} · binary ${fmt.fix(p.pybin.margin, 2)}`);
-    add("Top move", `net ${p.nn.top} · search ${p.mcts.best} · binary ${p.pybin.top} · played ${p.played}`);
-    add("KL(search‖net)", fmt.fix(p.kl_mcts_nn, 3) + ` (binary ${fmt.fix(p.kl_mcts_pybin, 3)})`);
+    add("P(win) mover", `net ${fmt.pct(p.nn.win)} · search ${fmt.pct(p.mcts.win)}`);
+    add("Margin mover", `net ${fmt.fix(p.nn.margin, 2)} · search ${fmt.fix(p.mcts.margin, 2)}`);
+    add("Top move", `net ${p.nn.top} · search ${p.mcts.best} · played ${p.played}`);
+    add("KL(search‖net)", fmt.fix(p.kl_mcts_nn, 3));
     info.append(kv);
     const tb = h("table", { class: "t", style: "margin-top:10px" }, h("tr", {}, ...["Move", "visits", "prior", "win", "margin", "PV"].map(x => h("th", {}, x))));
     for (const m of p.mcts.moves) tb.append(h("tr", { class: m.move === p.mcts.best ? "hl" : null }, h("td", { class: "mv" }, m.move), h("td", {}, m.visits), h("td", {}, fmt.pct(m.prior, 1)), h("td", {}, fmt.pct(m.win, 1)), h("td", {}, fmt.fix(m.margin, 1)), h("td", { class: "mv", style: "text-align:left" }, (m.pv || []).join(" "))));
