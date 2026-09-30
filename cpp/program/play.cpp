@@ -888,13 +888,7 @@ static void extractQValueTargets(
 }
 
 static NNRawStats computeNNRawStats(const Search* bot, const Board& board, const BoardHistory& hist, Player pla) {
-  if(hist.isGameFinished) {
-    NNRawStats nnRawStats;
-    nnRawStats.whiteWinLoss = (hist.winner == P_WHITE) ? 1.0 : (hist.winner == P_BLACK) ? -1.0 : 0.0;
-    nnRawStats.whiteScoreMean = nnRawStats.whiteWinLoss;
-    nnRawStats.policyEntropy = 0.0;
-    return nnRawStats;
-  }
+  testAssert(!hist.isGameFinished);
   NNResultBuf buf;
   MiscNNInputParams nnInputParams;
   nnInputParams.drawEquivalentWinsForWhite = bot->searchParams.drawEquivalentWinsForWhite;
@@ -2553,6 +2547,7 @@ void Play::maybeForkGame(
     nnInputParams.excludeTerritoryAdjAtariOverride =
       Search::resolveExcludeTerritoryAdjacentToAtari(bot->searchParams, bot->nnEvaluator) ? 1 : 0;
     double whiteScore = 0.0;
+    // To prevent fork at the game end. Pass is always legal in Go so evaluate won't report error.
     if(copyHist.isGameFinished) {
       whiteScore = (copyHist.winner == P_WHITE) ? 100.0 : (copyHist.winner == P_BLACK) ? -100.0 : 0.0;
     }
