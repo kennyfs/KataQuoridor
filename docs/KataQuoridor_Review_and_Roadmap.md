@@ -482,6 +482,19 @@ Each phase is sized for one or two focused Claude Code sessions. Each ends with 
    - The rate of self-play games hitting the 300-move cutoff drops below ~1%. **Log this rate per generation.**
    - A new net beats the Phase 1 net at equal visits in gatekeeping.
 
+### Phase 2b: Guards before the first real run (small; do now)
+
+These are Go code paths that are currently off only because a config key happens to be 0. If any one of them is
+turned on, it silently corrupts self-play:
+
+- `handicapProb > 0`: `playExtraBlack` places Go stones on a Quoridor board.
+- `sekiForkHackProb > 0`: Go-only.
+- `estimateLeadProb > 0`: `computeLead` changes komi, and `setKomi` is a no-op for Quoridor. The resulting garbage
+  lead then *overrides* the margin target, because `trainingwrite` prefers `hasLead`.
+
+Make each of these a hard config error for Quoridor (not a warning), next to the existing
+`normalAsymmetricPlayoutProb` check. Then start self-play. **Nothing in Phase 6 is a prerequisite for starting.**
+
 ### Phase 3: Performance and hardware decision (1 session plus measurement)
 
 1. **Add a Quoridor benchmark mode.** Upstream `benchmark` is Go-oriented. Measure NN rows/s and visits/s at several
@@ -495,6 +508,7 @@ Each phase is sized for one or two focused Claude Code sessions. Each ends with 
 
 - Remove Go stubs from `Board`/`BoardHistory`/`Rules` one by one: delete the method, fix callers, run tests.
   `chain_head`/`next_in_chain` alone add ~1.4 KB to every `Board` copy.
+  **Exceptions: keep `Rules::komi` and the playout-doubling plumbing.** Phase 6 gives them Quoridor meanings.
 - Delete dead Go commands (`evalsgf` Go paths, `startposes` Go logic, …) and dead configs.
 - Replace `README.md` with KataQuoridor docs (build, QTP, training loop, model format). Keep upstream's in `docs/`.
 - Add CI (GitHub Actions): Eigen `RelWithDebInfo` build + `runtests` + `pytest` + the parity test on a tiny net.
@@ -506,6 +520,55 @@ Each phase is sized for one or two focused Claude Code sessions. Each ends with 
   shortest-path-greedy bot.
 - Tag `v1.0.0` once gatekeeping has promoted a few generations and you have Elo anchors (§6.5).
 - `version` output: `KataQuoridor 0.1.0 (KataGo 1.18.2 base, git <sha>)`.
+
+### Phase 6: Quoridor I/O v2 — margin komi `k` and playout doubling advantage (deferred, data-driven)
+
+**What.**
+- **Margin komi `k`:** the game still ends when a pawn reaches its goal, but White wins iff `whiteMargin − k > 0`.
+  `k` is a half-integer, stored in `Rules::komi`, so that `setKomi`, `computeLead`, and `adjustKomiToEven` work
+  almost unchanged.
+- **Lead becomes a real quantity:** "how many moves of margin to concede for 50/50". It gets its own head and target
+  (C21 goes back to lead; the margin target moves out, as `margin − k`).
+- **Playout doubling advantage (PDA):** needs a PDA global feature plus asymmetric self-play games
+  (`normalAsymmetricPlayoutProb > 0`) to generate the training signal. It pays off when the engine plays much weaker
+  opponents (handicap-like play, a more aggressive style). That only matters once the engine clearly beats strong
+  humans.
+- Both need new global input features, so they ship together as **Quoridor I/O v2**.
+
+**Implementation outline.**
+1. **Rules:** apply `k` in `BoardHistory`'s win decision.
+2. **Inputs:** add global features for `k` (e.g. `k/10`) and PDA.
+3. **Self-play:**
+   - most games use k = 0; a fraction use a random half-integer k (e.g. ±0.5…±5.5), in the style of upstream
+     `komiStdev`;
+   - re-enable `forkCompensateKomiProb` / `compensateAfterPolicyInitProb`;
+   - enable `normalAsymmetricPlayoutProb` for PDA.
+4. **Targets:**
+   - re-enable `estimateLeadProb`;
+   - move the margin target out of C21 (store it as `margin − k`), give C21 back to lead, and remove the branch in
+     `trainingwrite` that prefers `hasLead`;
+   - at game end, lead = margin.
+5. **Net and export:** add a separate lead head to `QuoridorValueHead`, and export it to `scoreValue[2]`.
+6. **Search:** score utility keeps using the margin (`scoreMean`) only; lead is for compensation, display, and
+   evaluation.
+
+**Why deferred.** Neither is needed to start training, and adding them later is cheap *if* done as follows:
+- **Encode each new feature so that 0 means "current behavior"** (k = 0, PDA = 0).
+- **Old v1 data then stays valid:** the loader appends zeros to the global inputs of v1 rows. For lead targets, the
+  weight is 0.
+- **Migrate the current checkpoint instead of retraining:** add zero-initialized input columns to `linear_global`,
+  so the migrated net computes exactly what it did before, then continue training.
+
+Fork games without komi compensation are not a *bias* in the value data. The outcomes are still true outcomes;
+they are only less informative. So the missing `k` is not urgent.
+
+**Triggers to start Phase 6.** Read these from the per-generation self-play stats:
+- first-player win rate stays clearly away from 50% (e.g. outside 45–55%) after the net stabilizes;
+- fork/side positions are very lopsided, e.g. most forked games decided within a few moves, or value loss on fork
+  rows much higher than on normal rows;
+- you want a reliable "leading by x moves" display, or handicap games for evaluation;
+- for PDA specifically: the engine is well beyond human level and you want it to play for more than a win against
+  weaker opponents.
 
 ---
 
