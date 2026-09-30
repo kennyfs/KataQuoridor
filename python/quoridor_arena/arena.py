@@ -5,9 +5,11 @@ Usage (from the python/ directory):
     python -m quoridor_arena.arena --roster R.json --out DIR --engines sq-random,sq-greedy,kq-latest-v16 \
         --games-per-pair 10 --verify
     python -m quoridor_arena.arena --roster R.json --out DIR --pairs kq-a-v256:kq-b-v256,sq-search-d4:kq-b-v1
+    python -m quoridor_arena.arena --roster R.json --out DIR --pairs kq-a-v256:kq-b-v256 --komi 1.5 --white-walls 9
 
 Results go to DIR/results.jsonl (one JSON object per game; reruns skip finished games), SGFs to
-DIR/sgfs/<pair>.sgfs, and the Elo report to DIR/report.md. See docs/Evaluation.md.
+DIR/sgfs/<pair>.sgfs, and the Elo report to DIR/report.md. Games can have a non-standard komi and initial walls
+(roster "rules" / "pair_rules", or --komi / --black-walls / --white-walls). See docs/Evaluation.md.
 """
 import argparse
 import collections
@@ -20,7 +22,8 @@ import time
 
 from . import elo, openings
 from .qtp import QTPEngine, QTPError
-from .referee import Arbiter, Player, RefereeError, VerifyMismatch, play_game
+from .referee import (Arbiter, Player, RefereeError, RulesError, VerifyMismatch, is_standard, make_rules, play_game,
+                      rules_tag)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -50,13 +53,21 @@ def check_env_resolved(argvs):
 
 
 def load_roster(path, out_dir):
-    """Returns a list of engine specs: {name, argv, seed, ...}.
+    """Returns (engine specs {name, argv, seed, supports_rules, ...}, arbiter argv, rules config).
 
     Entry kinds:
       {"name", "command", "args": [...], "seed"}         generic; "{seed}", "{out}", "{repo}", the roster's
                                                           "vars" and "{env:NAME}" are substituted in command/args
       {"name", "katago_model": "<dir name>", "visits": V} shorthand for a KataQuoridor engine built from
                                                           vars katago, models_dir, gtp_config, katago_overrides
+    An entry's "supports_rules" (default: true for katago_model entries, false otherwise) says whether the engine
+    understands QTP komi and kata-set-rule blackInitialWalls / whiteInitialWalls; engines that don't (SimpleQuoridor)
+    can only play the standard game.
+
+    Game rules (komi, blackInitialWalls, whiteInitialWalls; default the standard -0.5, 10, 10):
+      "rules": {"komi": 1.5, ...}                          for all games
+      "pair_rules": [{"pair": ["a", "b"], "komi": ...}]    for the games of one pair (either order), over "rules"
+    The rules config returned is {"rules": {...}, "pair_rules": {frozenset({a, b}): {...}}}, unvalidated.
     """
     with open(path) as f:
         data = json.load(f)
@@ -84,29 +95,63 @@ def load_roster(path, out_dir):
         argv = [_subst(command, v)] + [_subst(a, v) for a in args]
         spec = dict(e)
         spec["argv"] = argv
+        spec["supports_rules"] = bool(e.get("supports_rules", "katago_model" in e))
         specs.append(spec)
     arbiter_argv = [_subst(a, variables) for a in data.get("arbiter", [
         "{arbiter_katago}", "gtp", "-model", "/dev/null", "-config", "{gtp_config}", "-override-config",
         "debugSkipNeuralNet=true,logAllGTPCommunication=false,logSearchInfo=false,logDir={out}/gtp_logs"])]
-    return specs, arbiter_argv
+    pair_rules = {}
+    for pr in data.get("pair_rules", []):
+        pr = dict(pr)
+        pair = pr.pop("pair", None)
+        if not isinstance(pair, list) or len(pair) != 2 or pair[0] == pair[1]:
+            raise SystemExit("pair_rules entries need \"pair\": [a, b] with two engine names in %s" % path)
+        if pair[0] not in names or pair[1] not in names:
+            raise SystemExit("unknown engine in pair_rules %s in %s" % (pair, path))
+        pair_rules[frozenset(pair)] = pr
+    return specs, arbiter_argv, {"rules": data.get("rules", {}), "pair_rules": pair_rules}
+
+
+def pair_rules_fn(rules_config, cli_rules):
+    """A function (a, b) -> the validated rules of that pair's games: standard < roster "rules" < command line
+    < roster "pair_rules"."""
+    def fn(a, b):
+        pr = rules_config["pair_rules"].get(frozenset((a, b)), {})
+        try:
+            return make_rules(rules_config["rules"], cli_rules, pr, where="rules of %s vs %s" % (a, b))
+        except ValueError as e:
+            raise SystemExit(str(e))
+    return fn
 
 
 # -- schedule -----------------------------------------------------------------
 
-def game_id(a, b, k, swap):
-    return "%s_vs_%s_o%03d_%s" % (a, b, k, "ba" if swap else "ab")
+def game_id(a, b, k, swap, rules=None):
+    """Standard games keep the ids of older runs; others carry the rules (so a rerun with other rules plays new
+    games), e.g. a_vs_b_o000_ab_k+1.5_w10-9."""
+    return "%s_vs_%s_o%03d_%s%s" % (a, b, k, "ba" if swap else "ab", rules_tag(rules))
 
 
-def make_schedule(names, pairs, games_per_pair):
-    """Ordered list of (id, (a, b), opening k, black, white). Games of one pair are contiguous, and
-    each opening is played twice with colours swapped."""
+def make_schedule(names, pairs, games_per_pair, rules_of_pair=None):
+    """Ordered list of (id, (a, b), opening k, black, white, rules). Games of one pair are contiguous, and
+    each opening is played twice with colours swapped (with the same komi and walls)."""
     sched = []
     for a, b in pairs:
+        rules = rules_of_pair(a, b) if rules_of_pair else make_rules()
         for g in range(games_per_pair):
             k, swap = divmod(g, 2)
             black, white = (b, a) if swap else (a, b)
-            sched.append((game_id(a, b, k, swap), (a, b), k, black, white))
+            sched.append((game_id(a, b, k, swap, rules), (a, b), k, black, white, rules))
     return sched
+
+
+def check_rules_support(specs, schedule):
+    """Engines without komi / walls support may only play standard games."""
+    supports = {s["name"]: s["supports_rules"] for s in specs}
+    bad = sorted({n for g in schedule if not is_standard(g[5]) for n in (g[3], g[4]) if not supports[n]})
+    if bad:
+        raise SystemExit("engines without komi / initial-walls support (roster \"supports_rules\") scheduled in "
+                         "non-standard games: %s" % ", ".join(bad))
 
 
 class Scheduler:
@@ -256,12 +301,12 @@ class Worker(threading.Thread):
                 g = self.sched.next_game()
                 if g is None:
                     break
-                gid, pair, k, black, white = g
+                gid, pair, k, black, white, rules = g
                 keep = {black, white}
                 pb, pw = self.player(black, keep), self.player(white, keep)
                 try:
                     res = play_game(self.arbiter, pb, pw, self.openings[k], max_plies=self.args.max_plies,
-                                    verify=self.args.verify, log=self.output.log)
+                                    verify=self.args.verify, log=self.output.log, rules=rules)
                 except RefereeError as e:
                     self.output.log("!!! referee error in %s (game not recorded): %s" % (gid, e))
                     self.arbiter.engine.ensure_running()
@@ -274,9 +319,10 @@ class Worker(threading.Thread):
                 self.output.write_game(rec, sgf)
                 self.sched.record(rec)
                 self.stats.done(rec, self.sched, self.output)
-        except VerifyMismatch as e:
+        except (VerifyMismatch, RulesError) as e:
             self.error = e
-            self.output.log("!!! VERIFY MISMATCH, aborting run: %s" % e)
+            self.output.log("!!! %s, aborting run: %s" % (
+                "VERIFY MISMATCH" if isinstance(e, VerifyMismatch) else "RULES REJECTED", e))
             with self.sched.lock:
                 self.sched.abort = str(e)
         except Exception as e:  # noqa: BLE001 - report and stop this worker
@@ -306,8 +352,9 @@ class Stats:
         el = time.time() - self.t0
         eta = el / n * rem / 3600 if n else 0
         w = rec["winner_name"] or "draw"
-        output.log("%4d done, %d left (<= %.1fh) | %s  %s(B) vs %s(W): %s, %s, %d plies, %.1fs" % (
-            n, rem, eta, rec["id"], rec["black"], rec["white"], w, rec["reason"], rec["plies"], rec["seconds"]))
+        output.log("%4d done, %d left (<= %.1fh) | %s  %s(B) vs %s(W): %s %s, %s, %d plies, %.1fs" % (
+            n, rem, eta, rec["id"], rec["black"], rec["white"], w, rec["result"], rec["reason"], rec["plies"],
+            rec["seconds"]))
 
 
 # -- main ---------------------------------------------------------------------
@@ -339,6 +386,10 @@ def main(argv=None):
     ap.add_argument("--wall-frac", type=float, default=0.2, help="probability mass of walls in openings")
     ap.add_argument("--seed", type=int, default=1, help="opening seed")
     ap.add_argument("--max-plies", type=int, default=300, help="draw after this many plies")
+    ap.add_argument("--komi", type=float, help="komi of all games (default -0.5, the standard game); roster "
+                    "pair_rules still override it")
+    ap.add_argument("--black-walls", type=int, help="Black's initial walls in all games (default 10)")
+    ap.add_argument("--white-walls", type=int, help="White's initial walls in all games (default 10)")
     ap.add_argument("--skip-min-games", type=int, default=20, help="0 disables the adaptive skip")
     ap.add_argument("--skip-threshold", type=float, default=0.975)
     ap.add_argument("--verify", action="store_true", help="compare legal_moves with the arbiter every ply")
@@ -351,7 +402,9 @@ def main(argv=None):
 
     args.out = os.path.abspath(os.path.expanduser(args.out))
     os.makedirs(args.out, exist_ok=True)
-    specs, arbiter_argv = load_roster(args.roster, args.out)
+    specs, arbiter_argv, rules_config = load_roster(args.roster, args.out)
+    cli_rules = {k: v for k, v in (("komi", args.komi), ("blackInitialWalls", args.black_walls),
+                                   ("whiteInitialWalls", args.white_walls)) if v is not None}
     if args.engines:
         want = [n.strip() for n in args.engines.split(",") if n.strip()]
         known = {s["name"] for s in specs}
@@ -370,18 +423,25 @@ def main(argv=None):
 
     check_env_resolved([s["argv"] for s in specs] + [arbiter_argv])
 
-    schedule = make_schedule(names, pairs, args.games_per_pair)
+    schedule = make_schedule(names, pairs, args.games_per_pair, pair_rules_fn(rules_config, cli_rules))
+    check_rules_support(specs, schedule)
     n_openings = (args.games_per_pair + 1) // 2
 
     # Record the roster and parameters (the report uses the roster order).
     with open(os.path.join(args.out, "roster_used.json"), "w") as f:
         json.dump({"engines": [{"name": s["name"], "argv": s["argv"]} for s in specs],
-                   "arbiter": arbiter_argv, "args": vars(args)}, f, indent=1)
+                   "arbiter": arbiter_argv, "args": vars(args),
+                   "rules_by_pair": {"%s:%s" % g[1]: g[5] for g in schedule}}, f, indent=1)
 
     if args.dry_run:
         for s in specs:
             print(s["name"], ":", " ".join(s["argv"]))
         print("arbiter :", " ".join(arbiter_argv))
+        seen = set()
+        for g in schedule:
+            if g[1] not in seen:
+                seen.add(g[1])
+                print("rules %s vs %s: %s" % (g[1][0], g[1][1], json.dumps(g[5])))
         print("%d pairs, %d games scheduled" % (len(pairs), len(schedule)))
         return 0
 

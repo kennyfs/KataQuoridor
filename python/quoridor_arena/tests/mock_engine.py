@@ -3,11 +3,16 @@
 
 - each pawn moves one row towards its goal (Black e9 -> row 1, White e1 -> row 9) or one column sideways;
 - "walls" a1h..c1h are always legal and do nothing (they exist to exercise opening weights);
-- the first pawn to reach its goal row wins.
+- the game ends when a pawn reaches its goal row, and is scored like KataQuoridor (docs/QuoridorIOv2.md): the margin
+  is the other pawn's distance, the tempo t = margin if White arrived, 1 - margin if Black did, and White wins iff
+  t + komi > 0 (komi -0.5 by default); the result is the lead |t + komi|;
+- after --max-plies plies (default 300) without an arrival, the game is a draw.
 
-It speaks the same QTP subset the arena uses, so it can serve as both arbiter and player.
+It speaks the same QTP subset the arena uses, including komi and kata-set-rule blackInitialWalls / whiteInitialWalls
+(they only show in printsgf), so it can serve as both arbiter and player.
 Flags: --illegal (genmove answers "z9"), --crash-after N (exit after N genmoves),
---hang-after N (stop answering after N genmoves), --no-legal (unknown legal_moves).
+--hang-after N (stop answering after N genmoves), --no-legal (unknown legal_moves),
+--no-rules (unknown komi / kata-set-rule, like SimpleQuoridor), --max-plies N.
 """
 import argparse
 import sys
@@ -16,20 +21,43 @@ import time
 COLS = "abcdefghi"
 
 
+STANDARD_RULES = {"komi": -0.5, "blackInitialWalls": 10, "whiteInitialWalls": 10}
+
+
 class Game:
-    def __init__(self):
+    def __init__(self, rules, max_plies):
         self.pos = {"b": (4, 9), "w": (4, 1)}
         self.to_move = "b"
         self.moves = []
+        self.rules = rules
+        self.max_plies = max_plies
 
     def goal(self, c):
         return 1 if c == "b" else 9
 
-    def winner(self):
+    def lead(self):
+        """White's lead t + komi once a pawn arrived, else None."""
         for c in "bw":
             if self.pos[c][1] == self.goal(c):
-                return c.upper()
+                margin = max(1, self.dist("w" if c == "b" else "b"))
+                t = margin if c == "w" else 1 - margin
+                return t + self.rules["komi"]
         return None
+
+    def winner(self):
+        """'B', 'W', 'Draw' or None."""
+        s = self.lead()
+        if s is not None:
+            return "W" if s > 0 else "B"
+        if len(self.moves) >= self.max_plies:
+            return "Draw"
+        return None
+
+    def result(self):
+        w = self.winner()
+        if w is None:
+            return None
+        return "0" if w == "Draw" else "%s+%g" % (w, abs(self.lead()))
 
     def legal(self, c=None):
         c = c or self.to_move
@@ -62,9 +90,12 @@ def main():
     ap.add_argument("--crash-after", type=int, default=-1)
     ap.add_argument("--hang-after", type=int, default=-1)
     ap.add_argument("--no-legal", action="store_true")
+    ap.add_argument("--no-rules", action="store_true")
+    ap.add_argument("--max-plies", type=int, default=300)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
-    g = Game()
+    rules = dict(STANDARD_RULES)
+    g = Game(rules, args.max_plies)
     genmoves = 0
 
     def reply(ok, text=""):
@@ -84,10 +115,27 @@ def main():
                      "showboard"}
             if not args.no_legal:
                 known.add("legal_moves")
+            if not args.no_rules:
+                known.update({"komi", "get_komi", "kata-set-rule"})
             reply(True, "true" if rest and rest[0] in known else "false")
         elif cmd == "clear_board":
-            g = Game()
+            # Like KataQuoridor, the rules persist across clear_board.
+            g = Game(rules, args.max_plies)
             reply(True)
+        elif cmd == "komi" and not args.no_rules:
+            k = float(rest[0]) if len(rest) == 1 else 0.0
+            ok = (k * 2) == int(k * 2) and int(k * 2) % 2 == 1
+            if ok:
+                rules["komi"] = k
+            reply(ok, "" if ok else "bad komi")
+        elif cmd == "get_komi" and not args.no_rules:
+            reply(True, "%g" % rules["komi"])
+        elif cmd == "kata-set-rule" and not args.no_rules:
+            ok = len(rest) == 2 and rest[0] in ("blackInitialWalls", "whiteInitialWalls") and not g.moves
+            if ok:
+                rules[rest[0]] = int(rest[1])
+                g = Game(rules, args.max_plies)
+            reply(ok, "" if ok else "cannot set rule")
         elif cmd == "play":
             ok = len(rest) == 2 and g.play(rest[0].lower()[0], rest[1].lower())
             reply(ok, "" if ok else "illegal move")
@@ -110,7 +158,10 @@ def main():
             reply(True, "B: %d W: %d" % (g.dist("b"), g.dist("w")))
         elif cmd == "printsgf":
             body = "".join(";%s[%s]" % (c.upper(), m) for c, m in g.moves)
-            reply(True, "(;FF[4]GM[1]SZ[17]PB[]PW[]KM[7.5]RU[Quoridor]%s)" % body)
+            res = g.result()
+            reply(True, "(;FF[4]GM[1]SZ[17]PB[]PW[]KM[%g]WB[%d]WW[%d]RU[Quoridor]%s%s)" % (
+                rules["komi"], rules["blackInitialWalls"], rules["whiteInitialWalls"],
+                "" if res is None else "RE[%s]" % res, body))
         elif cmd == "showboard":
             reply(True, "line one\nline two\nline three")
         else:
