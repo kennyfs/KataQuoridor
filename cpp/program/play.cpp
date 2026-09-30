@@ -1953,8 +1953,12 @@ FinishedGameData* Play::runGame(
     pla = getOpp(pla);
   }
 
+  //A game drawn by Rules::maxPlies is a normal finished game (docs/QuoridorIOv2.md): its rows are written like any
+  //other (value 0.5 / 0.5, u = 0, no lead target, see TrainingWriteBuffers::addRow), with side positions and
+  //reanalysis. Only a game stopped before its end by maxMovesPerGame (which must equal maxPlies, so normally
+  //never) hits the turn limit and is discarded by self-play.
   if(hist.isGameFinished) {
-    gameData->hitTurnLimit = Play::DISCARD_MAX_PLIES_DRAWS && hist.isDraw();
+    gameData->hitTurnLimit = false;
   }
   else {
     gameData->hitTurnLimit = true;

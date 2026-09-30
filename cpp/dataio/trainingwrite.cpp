@@ -293,13 +293,23 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
    spatialDistNCHW({maxRws, QuoridorNN::NUM_DIST_CHANNELS, yLen, xLen}),
    globalInputNC({maxRws, numFChannels}),
-   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, (iVersion == 1 ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(xLen,yLen))}),
+   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN}),
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
    scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
    valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
-   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, (iVersion == 1 ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(xLen,yLen))}),
+   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN}),
    metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS})
 {
+  //Only the current Quoridor I/O version is written: older training data has different inputs and targets
+  //(docs/QuoridorIOv2.md) and must not be mixed in.
+  if(iVersion != QuoridorNN::TRAINING_IO_VERSION)
+    throw StringError(
+      "Training write buffers: only Quoridor I/O version " + Global::intToString(QuoridorNN::TRAINING_IO_VERSION) +
+      " training data can be written, got version " + Global::intToString(iVersion));
+  if(numBChannels != QuoridorNN::numSpatialFeatures(iVersion) || numFChannels != QuoridorNN::numGlobalFeatures(iVersion))
+    throw StringError("Training write buffers: wrong number of input channels for Quoridor I/O version " + Global::intToString(iVersion));
+  if(xLen != QuoridorNN::MODEL_LEN || yLen != QuoridorNN::MODEL_LEN)
+    throw StringError("Training write buffers: data board size must be the model's " + Global::intToString(QuoridorNN::MODEL_LEN));
   binaryInputNCHWUnpacked = new float[numBChannels * xLen * yLen];
 }
 
@@ -345,18 +355,6 @@ static void uniformPolicyTarget(int policySize, int16_t* target) {
     target[pos] = 1;
 }
 
-//Copy playouts into target, expanding out the sparse representation into a full plane.
-static void fillPolicyTarget(const vector<PolicyTargetMove>& policyTargetMoves, int policySize, int dataXLen, int dataYLen, int boardXSize, int16_t* target) {
-  zeroPolicyTarget(policySize,target);
-  size_t size = policyTargetMoves.size();
-  for(size_t i = 0; i<size; i++) {
-    const PolicyTargetMove& move = policyTargetMoves[i];
-    int pos = NNPos::locToPos(move.loc, boardXSize, dataXLen, dataYLen);
-    testAssert(pos >= 0 && pos < policySize);
-    target[pos] = move.policyTarget;
-  }
-}
-
 static void fillPolicyTargetQuoridor(const vector<PolicyTargetMove>& policyTargetMoves, int policySize, int boardXSize, Player nextPlayer, int16_t* target) {
   testAssert(policySize == (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN));
   zeroPolicyTarget(policySize, target);
@@ -394,59 +392,6 @@ static void fillPolicyTargetQuoridor(const vector<PolicyTargetMove>& policyTarge
       testAssert(slot >= 0 && slot < policySize);
       target[slot] = move.policyTarget;
     }
-  }
-}
-
-//Clamps a value to integer in [-120,120] to pack down to 8 bits.
-//Randomizes to make sure the expectation is exactly correct.
-static int8_t clampToRadius120(float x, Rand& rand) {
-  //We need to pack this down to 8 bits, so map into [-120,120].
-  //Randomize to ensure the expectation is exactly correct.
-  int low = (int)floor(x);
-  int high = low+1;
-  if(low < -120) return -120;
-  if(high > 120) return 120;
-
-  float lambda = (float)(x-low);
-  if(lambda == 0.0f) return (int8_t)low;
-  else return (int8_t)(rand.nextBool(lambda) ? high : low);
-}
-static int16_t clampToRadius32000(float x, Rand& rand) {
-  //We need to pack this down to 16 bits, so clamp into an integer [-32000,32000].
-  //Randomize to ensure the expectation is exactly correct.
-  int low = (int)floor(x);
-  int high = low+1;
-  if(low < -32000) return -32000;
-  if(high > 32000) return 32000;
-
-  float lambda = (float)(x-low);
-  if(lambda == 0.0f) return (int16_t)low;
-  else return (int16_t)(rand.nextBool(lambda) ? high : low);
-}
-
-static void fillQValueTarget(const vector<QValueTargetMove>& whiteQValueTargets, Player nextPlayer, int policySize, int dataXLen, int dataYLen, int boardXSize, int16_t* cPosTarget, Rand& rand) {
-  for(int i = 0; i < QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize; i++) {
-    cPosTarget[i] = 0;
-  }
-
-  float scoreTargetCap = (float)(NNPos::MAX_BOARD_AREA + NNPos::EXTRA_SCORE_DISTR_RADIUS);
-
-  size_t size = whiteQValueTargets.size();
-  for(size_t i = 0; i<size; i++) {
-    const QValueTargetMove& entry = whiteQValueTargets[i];
-    int pos = NNPos::locToPos(entry.loc, boardXSize, dataXLen, dataYLen);
-    testAssert(pos >= 0 && pos < policySize);
-
-    float winLoss = nextPlayer == P_WHITE ? entry.winLoss : -entry.winLoss;
-    float score = nextPlayer == P_WHITE ? entry.score : -entry.score;
-    if(score > scoreTargetCap)
-      score = scoreTargetCap;
-    if(score < -scoreTargetCap)
-      score = -scoreTargetCap;
-
-    cPosTarget[pos] = clampToRadius32000(winLoss*32000.0f,rand);
-    cPosTarget[pos+policySize] = clampToRadius32000(score*60.0f,rand);
-    cPosTarget[pos+policySize*2] = (int16_t)(std::max((int64_t)0,std::min(entry.visits,(int64_t)32000)));
   }
 }
 
@@ -497,8 +442,8 @@ void TrainingWriteBuffers::fillQuoridorInputRow(
   uint8_t* rowDist,
   float* rowGlobal
 ) {
-  const int ioVersion = 1;
-  const int numChannels = QuoridorNN::NUM_FEATURES_SPATIAL_V1;
+  const int ioVersion = QuoridorNN::TRAINING_IO_VERSION;
+  const int numChannels = QuoridorNN::numSpatialFeatures(ioVersion);
   const int posArea = QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
   const int packedArea = (posArea + 7) / 8;
   const bool inputsUseNHWC = false;
@@ -558,8 +503,12 @@ void TrainingWriteBuffers::addRow(
   Rand& rand,
   const ReanalysisData& reanalysisData
 ) {
-  if(inputsVersion < 1 || inputsVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION)
-    throw StringError("Training write buffers: Does not support input version: " + Global::intToString(inputsVersion));
+  testAssert(inputsVersion == QuoridorNN::TRAINING_IO_VERSION);
+  //Go-only targets (ownership, area, scoring)
+  (void)finalBoard;
+  (void)finalFullArea;
+  (void)finalOwnership;
+  (void)finalWhiteScoring;
 
   int posArea = dataXLen*dataYLen;
   testAssert(curRows < maxRows);
@@ -575,9 +524,8 @@ void TrainingWriteBuffers::addRow(
       testAssert(playoutDoublingAdvantage == 0.0);
     }
 
-    testAssert(inputsVersion == 1);
-    testAssert(QuoridorNN::NUM_FEATURES_SPATIAL_V1 == numBinaryChannels);
-    testAssert(QuoridorNN::NUM_FEATURES_GLOBAL_V1 == numGlobalChannels);
+    testAssert(QuoridorNN::numSpatialFeatures(inputsVersion) == numBinaryChannels);
+    testAssert(QuoridorNN::numGlobalFeatures(inputsVersion) == numGlobalChannels);
     testAssert(posArea == QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
     fillQuoridorInputRow(
       board, hist, nextPlayer, nnInputParams, binaryInputNCHWUnpacked,
@@ -594,46 +542,25 @@ void TrainingWriteBuffers::addRow(
   rowGlobal[25] = targetWeight;
 
   //Fill policy
-  const int policySize = (inputsVersion == 1) ? (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN) : NNPos::getPolicySize(dataXLen,dataYLen);
+  const int policySize = QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
   int16_t* rowPolicy = policyTargetsNCMove.data + curRows * POLICY_TARGET_NUM_CHANNELS * policySize;
 
-  if(inputsVersion == 1) {
-    if(policyTarget0 != NULL) {
-      fillPolicyTargetQuoridor(*policyTarget0, policySize, board.x_size, nextPlayer, rowPolicy + 0 * policySize);
-      rowGlobal[26] = 1.0f;
-    }
-    else {
-      uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
-      rowGlobal[26] = 0.0f;
-    }
-
-    if(policyTarget1 != NULL) {
-      fillPolicyTargetQuoridor(*policyTarget1, policySize, board.x_size, nextPlayer, rowPolicy + 1 * policySize);
-      rowGlobal[28] = 1.0f;
-    }
-    else {
-      uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
-      rowGlobal[28] = 0.0f;
-    }
+  if(policyTarget0 != NULL) {
+    fillPolicyTargetQuoridor(*policyTarget0, policySize, board.x_size, nextPlayer, rowPolicy + 0 * policySize);
+    rowGlobal[26] = 1.0f;
   }
   else {
-    if(policyTarget0 != NULL) {
-      fillPolicyTarget(*policyTarget0, policySize, dataXLen, dataYLen, board.x_size, rowPolicy + 0 * policySize);
-      rowGlobal[26] = 1.0f;
-    }
-    else {
-      uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
-      rowGlobal[26] = 0.0f;
-    }
+    uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
+    rowGlobal[26] = 0.0f;
+  }
 
-    if(policyTarget1 != NULL) {
-      fillPolicyTarget(*policyTarget1, policySize, dataXLen, dataYLen, board.x_size, rowPolicy + 1 * policySize);
-      rowGlobal[28] = 1.0f;
-    }
-    else {
-      uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
-      rowGlobal[28] = 0.0f;
-    }
+  if(policyTarget1 != NULL) {
+    fillPolicyTargetQuoridor(*policyTarget1, policySize, board.x_size, nextPlayer, rowPolicy + 1 * policySize);
+    rowGlobal[28] = 1.0f;
+  }
+  else {
+    uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
+    rowGlobal[28] = 0.0f;
   }
 
   //Fill td-like value targets
@@ -649,45 +576,39 @@ void TrainingWriteBuffers::addRow(
   fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 1.0/(1.0 + boardArea * 0.016), rowGlobal+12);
   fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 1.0, rowGlobal+16);
 
-  //Lead
-  rowGlobal[21] = 0.0f;
-  rowGlobal[29] = 0.0f;
+  //Outcome targets of Quoridor I/O v2 (docs/QuoridorIOv2.md §4): the final utility score u (C20), the final tempo
+  //lead s (C21) and the plies left until the game ended (C23), from the perspective of the player to move.
+  //They need the actual continuation of this row: a main row (not a side position, not a reanalyzed row without
+  //outcome targets, i.e. posHistForFutureBoards given) of a game that finished with a result. A draw at maxPlies
+  //is such a game: u = 0 and its remaining plies count, but it carries no tempo information, so its lead weight
+  //is 0. C20 and C23 are weighted by C27, C21 by C29.
+  const bool hasGameOutcome =
+    posHistForFutureBoards != NULL && actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult;
+  const ValueTargets& finalTargets = whiteValueTargets[whiteValueTargets.size()-1];
   const ValueTargets& thisTargets = whiteValueTargets[whiteValueTargetsIdx];
-  //If the actual game ended in a no-result, we don't use lead for any position during the game
-  //including side positions, just in case.
-  if(inputsVersion == 1) {
-    // Quoridor: the game-margin target is the final margin of the game (QuoridorNN in quoridornn.h),
-    // from White's perspective, flipped to nextPlayer's perspective below. The weight stays 0 when the
-    // final margin is unknown: drawn/cutoff games, and side positions (whose continuation is not the
-    // actual game and which have no future boards).
-    if(actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult) {
-      bool known = false;
-      float whiteMargin = 0.0f;
-      if(thisTargets.hasLead) {
-        whiteMargin = thisTargets.lead;
-        known = true;
-      } else if(posHistForFutureBoards != NULL && !posHistForFutureBoards->empty() &&
-                (actualGameEndHist.winner == P_WHITE || actualGameEndHist.winner == P_BLACK)) {
-        whiteMargin = posHistForFutureBoards->back().whiteMarginWhenWonBy(actualGameEndHist.winner);
-        known = true;
-      }
-      if(known) {
-        rowGlobal[21] = (nextPlayer == P_WHITE) ? whiteMargin : -whiteMargin;
-        rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
-      }
-    }
+  rowGlobal[20] = 0.0f;
+  rowGlobal[21] = 0.0f;
+  rowGlobal[23] = 0.0f;
+  rowGlobal[27] = hasGameOutcome ? valueTargetWeight : 0.0f;
+  rowGlobal[29] = 0.0f;
+  if(hasGameOutcome) {
+    testAssert(finalTargets.hasLead);
+    rowGlobal[20] = nextPlayer == P_WHITE ? finalTargets.score : -finalTargets.score;
+    int64_t remainingPlies = actualGameEndHist.getCurrentTurnNumber() - hist.getCurrentTurnNumber();
+    testAssert(remainingPlies >= 0);
+    rowGlobal[23] = (float)remainingPlies;
   }
-  else if(thisTargets.hasLead && !(actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
-    //Flip based on next player for training
-    float lead = nextPlayer == P_WHITE ? thisTargets.lead : -thisTargets.lead;
-    float scoreTargetCap = NNPos::MAX_BOARD_AREA + NNPos::EXTRA_SCORE_DISTR_RADIUS;
-    if(lead > scoreTargetCap)
-      lead = scoreTargetCap;
-    if(lead < -scoreTargetCap)
-      lead = -scoreTargetCap;
-
-    rowGlobal[21] = lead;
-    //Lead weight scales by how much we trust value in general
+  //A lead estimated by a search for this position (estimateLeadProb, as upstream; off in the Quoridor configs)
+  //takes precedence over the game's final lead. For a main row, the final entry of whiteValueTargets is the
+  //game's result, never this row's own targets; a side row has only its own.
+  const bool hasLeadEstimate =
+    thisTargets.hasLead && (isSidePosition || whiteValueTargetsIdx < (int)whiteValueTargets.size()-1);
+  if(hasLeadEstimate && !(actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
+    rowGlobal[21] = nextPlayer == P_WHITE ? thisTargets.lead : -thisTargets.lead;
+    rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
+  }
+  else if(hasGameOutcome && !actualGameEndHist.isDraw()) {
+    rowGlobal[21] = nextPlayer == P_WHITE ? finalTargets.lead : -finalTargets.lead;
     rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
   }
 
@@ -706,8 +627,6 @@ void TrainingWriteBuffers::addRow(
     rowGlobal[22] = (float)sum;
   }
 
-  //Unused
-  rowGlobal[23] = 0.0f;
   rowGlobal[24] = (float)(1.0f - tdValueTargetWeight);
   rowGlobal[30] = (float)policySurprise;
   rowGlobal[31] = (float)policyEntropy;
@@ -807,203 +726,75 @@ void TrainingWriteBuffers::addRow(
   int8_t* rowScoreDistr = scoreDistrN.data + curRows * scoreDistrLen;
   int8_t* rowOwnership = valueTargetsNCHW.data + curRows * VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea;
 
-  if(inputsVersion == 1) {
-    // Dummy score distribution for Quoridor (not used in Quoridor loss, but required for valid npz format)
-    for(int i = 0; i < scoreDistrLen; i++)
-      rowScoreDistr[i] = 0;
-    rowScoreDistr[scoreDistrMid - 1] = 50;
-    rowScoreDistr[scoreDistrMid] = 50;
+  // Dummy score distribution for Quoridor (not used in Quoridor loss, but required for valid npz format)
+  for(int i = 0; i < scoreDistrLen; i++)
+    rowScoreDistr[i] = 0;
+  rowScoreDistr[scoreDistrMid - 1] = 50;
+  rowScoreDistr[scoreDistrMid] = 50;
 
-    // Clear 4 spatial value target channels
-    std::fill(rowOwnership, rowOwnership + VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea, 0);
+  // Clear 4 spatial value target channels
+  std::fill(rowOwnership, rowOwnership + VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea, 0);
 
-    if(posHistForFutureBoards != NULL && actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult) {
-      rowGlobal[27] = valueTargetWeight; // target_weight_aux
+  //Trajectory and final-wall targets, weighted by C27 (set above: main rows of a game with a result, draws
+  //included)
+  if(hasGameOutcome) {
+    const vector<Board>& boards = *posHistForFutureBoards;
+    testAssert(boards.size() > 0);
 
-      const vector<Board>& boards = *posHistForFutureBoards;
-      testAssert(boards.size() > 0);
+    // Channel 0: Current player pawn future trajectory
+    // Channel 1: Opponent player pawn future trajectory
+    for(size_t t = (size_t)whiteValueTargetsIdx; t < boards.size(); t++) {
+      const Board& b = boards[t];
+      Loc locPla = (nextPlayer == P_BLACK) ? b.blackPawnLoc : b.whitePawnLoc;
+      Loc locOpp = (nextPlayer == P_BLACK) ? b.whitePawnLoc : b.blackPawnLoc;
 
-      // Channel 0: Current player pawn future trajectory
-      // Channel 1: Opponent player pawn future trajectory
-      for(size_t t = (size_t)whiteValueTargetsIdx; t < boards.size(); t++) {
-        const Board& b = boards[t];
-        Loc locPla = (nextPlayer == P_BLACK) ? b.blackPawnLoc : b.whitePawnLoc;
-        Loc locOpp = (nextPlayer == P_BLACK) ? b.whitePawnLoc : b.blackPawnLoc;
-
-        if(locPla != Board::NULL_LOC && locPla != Board::PASS_LOC) {
-          int x = Location::getX(locPla, board.x_size);
-          int y = Location::getY(locPla, board.x_size);
-          int c = x / 2;
-          int r = y / 2;
-          int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
-          if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
-            rowOwnership[0 * posArea + rCanon * 9 + c] = 1;
-        }
-
-        if(locOpp != Board::NULL_LOC && locOpp != Board::PASS_LOC) {
-          int x = Location::getX(locOpp, board.x_size);
-          int y = Location::getY(locOpp, board.x_size);
-          int c = x / 2;
-          int r = y / 2;
-          int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
-          if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
-            rowOwnership[1 * posArea + rCanon * 9 + c] = 1;
-        }
+      if(locPla != Board::NULL_LOC && locPla != Board::PASS_LOC) {
+        int x = Location::getX(locPla, board.x_size);
+        int y = Location::getY(locPla, board.x_size);
+        int c = x / 2;
+        int r = y / 2;
+        int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
+        if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
+          rowOwnership[0 * posArea + rCanon * 9 + c] = 1;
       }
 
-      // Channel 2: Terminal Vertical Wall anchors
-      // Channel 3: Terminal Horizontal Wall anchors
-      // Read straight from Board's explicit wall arrays (the single source of truth), rather than
-      // reconstructing from `colors`, which is ambiguous when neighboring walls' arms touch.
-      const Board& finalB = boards.back();
-      for(int r = 0; r < 8; r++) {
-        for(int c = 0; c < 8; c++) {
-          int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
-          if(finalB.vWalls[c][r])
-            rowOwnership[2 * posArea + rCanon * 9 + c] = 1;
-          if(finalB.hWalls[c][r])
-            rowOwnership[3 * posArea + rCanon * 9 + c] = 1;
-        }
-      }
-    }
-    else {
-      rowGlobal[27] = 0.0f;
-    }
-  }
-  else {
-    if(finalOwnership == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
-      rowGlobal[27] = 0.0f;
-      rowGlobal[20] = 0.0f;
-      for(int i = 0; i<posArea*2; i++)
-        rowOwnership[i] = 0;
-      for(int i = 0; i<scoreDistrLen; i++)
-        rowScoreDistr[i] = 0;
-      //Dummy value, to make sure it still sums to 100
-      rowScoreDistr[scoreDistrMid-1] = 50;
-      rowScoreDistr[scoreDistrMid] = 50;
-    }
-    else {
-      testAssert(finalFullArea != NULL);
-      testAssert(finalBoard != NULL);
-
-      //Ownership weight scales by value weight
-      rowGlobal[27] = valueTargetWeight;
-      //Fill score info
-      const ValueTargets& lastTargets = whiteValueTargets[whiteValueTargets.size()-1];
-      float score = nextPlayer == P_WHITE ? lastTargets.score : -lastTargets.score;
-      rowGlobal[20] = score;
-
-      //Fill with zeros in case the buffers differ in size
-      for(int i = 0; i<posArea*2; i++)
-        rowOwnership[i] = 0;
-
-      //Fill ownership info
-      Player opp = getOpp(nextPlayer);
-      for(int y = 0; y<board.y_size; y++) {
-        for(int x = 0; x<board.x_size; x++) {
-          int pos = NNPos::xyToPos(x,y,dataXLen);
-          Loc loc = Location::getLoc(x,y,board.x_size);
-          if(finalOwnership[loc] == nextPlayer) rowOwnership[pos] = 1;
-          else if(finalOwnership[loc] == opp) rowOwnership[pos] = -1;
-          //Mark full area points that ended up not being owned
-          if(finalFullArea[loc] != C_EMPTY && finalOwnership[loc] == C_EMPTY)
-            rowOwnership[pos+posArea] = (finalFullArea[loc] == nextPlayer ? 1 : -1);
-        }
-      }
-
-      //Fill score vector "onehot"-like
-      for(int i = 0; i<scoreDistrLen; i++)
-        rowScoreDistr[i] = 0;
-      int centerScore = (int)round(score);
-      int lowerIdx = centerScore+scoreDistrMid-1;
-      int upperIdx = centerScore+scoreDistrMid;
-      if(upperIdx <= 0)
-        rowScoreDistr[0] = 100;
-      else if(lowerIdx >= scoreDistrLen-1)
-        rowScoreDistr[scoreDistrLen-1] = 100;
-      else {
-        float lambda = score - (centerScore-0.5f);
-        int upperProp = (int)round(lambda*100.0f);
-        rowScoreDistr[lowerIdx] = 100-upperProp;
-        rowScoreDistr[upperIdx] = upperProp;
+      if(locOpp != Board::NULL_LOC && locOpp != Board::PASS_LOC) {
+        int x = Location::getX(locOpp, board.x_size);
+        int y = Location::getY(locOpp, board.x_size);
+        int c = x / 2;
+        int r = y / 2;
+        int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
+        if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
+          rowOwnership[1 * posArea + rCanon * 9 + c] = 1;
       }
     }
 
-    if(posHistForFutureBoards == NULL) {
-      rowGlobal[33] = 0.0f;
-      for(int i = 0; i<posArea; i++) {
-        rowOwnership[i+posArea*2] = 0;
-        rowOwnership[i+posArea*3] = 0;
-      }
-    }
-    else {
-      const vector<Board>& boards = *posHistForFutureBoards;
-      testAssert(boards.size() == whiteValueTargets.size());
-      testAssert(boards.size() > 0);
-
-      // Future position weight
-      rowGlobal[33] = 1.0f;
-      int endIdx = (int)boards.size()-1;
-      const Board& board2 = boards[std::min(whiteValueTargetsIdx+8,endIdx)];
-      const Board& board3 = boards[std::min(whiteValueTargetsIdx+32,endIdx)];
-      testAssert(board2.y_size == board.y_size && board2.x_size == board.x_size);
-      testAssert(board3.y_size == board.y_size && board3.x_size == board.x_size);
-
-      for(int i = 0; i<posArea; i++) {
-        rowOwnership[i+posArea*2] = 0;
-        rowOwnership[i+posArea*3] = 0;
-      }
-      Player pla = nextPlayer;
-      Player opp = getOpp(nextPlayer);
-      for(int y = 0; y<board.y_size; y++) {
-        for(int x = 0; x<board.x_size; x++) {
-          int pos = NNPos::xyToPos(x,y,dataXLen);
-          Loc loc = Location::getLoc(x,y,board.x_size);
-          if(board2.colors[loc] == pla) rowOwnership[pos+posArea*2] = 1;
-          else if(board2.colors[loc] == opp) rowOwnership[pos+posArea*2] = -1;
-          if(board3.colors[loc] == pla) rowOwnership[pos+posArea*3] = 1;
-          else if(board3.colors[loc] == opp) rowOwnership[pos+posArea*3] = -1;
-        }
-      }
-    }
-
-    if(finalWhiteScoring == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
-      rowGlobal[34] = 0.0f;
-      for(int i = 0; i<posArea; i++) {
-        rowOwnership[i+posArea*4] = 0;
-      }
-    }
-    else {
-      // Scoring weight scales with value weight
-      rowGlobal[34] = valueTargetWeight;
-      //Fill with zeros in case the buffers differ in size
-      for(int i = 0; i<posArea; i++) {
-        rowOwnership[i+posArea*4] = 0;
-      }
-
-      for(int y = 0; y<board.y_size; y++) {
-        for(int x = 0; x<board.x_size; x++) {
-          int pos = NNPos::xyToPos(x,y,dataXLen);
-          Loc loc = Location::getLoc(x,y,board.x_size);
-          float scoring = (nextPlayer == P_WHITE ? finalWhiteScoring[loc] : -finalWhiteScoring[loc]);
-          testAssert(scoring <= 1.0f && scoring >= -1.0f);
-          rowOwnership[pos+posArea*4] = clampToRadius120(scoring*120.0f,rand);
-        }
+    // Channel 2: Terminal Vertical Wall anchors
+    // Channel 3: Terminal Horizontal Wall anchors
+    // Read straight from Board's explicit wall arrays (the single source of truth), rather than
+    // reconstructing from `colors`, which is ambiguous when neighboring walls' arms touch.
+    const Board& finalB = boards.back();
+    for(int r = 0; r < 8; r++) {
+      for(int c = 0; c < 8; c++) {
+        int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
+        if(finalB.vWalls[c][r])
+          rowOwnership[2 * posArea + rCanon * 9 + c] = 1;
+        if(finalB.hWalls[c][r])
+          rowOwnership[3 * posArea + rCanon * 9 + c] = 1;
       }
     }
   }
+  //No Go future-position or area/territory targets
+  rowGlobal[33] = 0.0f;
+  rowGlobal[34] = 0.0f;
 
   //Q values
   if(whiteQValueTargets.size() > 0) {
     testAssert(whiteValueTargetsIdx < whiteQValueTargets.size());
     int16_t* rowQValues = qValueTargetsNCMove.data + curRows * QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize;
-    if(inputsVersion == 1) {
-      for(int i = 0; i < QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize; i++)
-        rowQValues[i] = 0;
-    }
-    else {
-      fillQValueTarget(whiteQValueTargets[whiteValueTargetsIdx].targets, nextPlayer, policySize, dataXLen, dataYLen, board.x_size, rowQValues, rand);
-    }
+    //Quoridor has no q-value head
+    for(int i = 0; i < QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize; i++)
+      rowQValues[i] = 0;
   }
 
   if(hasMetadataInput) {
@@ -1175,12 +966,15 @@ TrainingDataWriter::TrainingDataWriter(const string& outDir, ostream* dbgOut, in
   int numGlobalChannels;
   //Note that this inputsVersion is for data writing, it might be different than the inputsVersion used
   //to feed into a model during selfplay
-  if(inputsVersion == 1) {
-    numBinaryChannels = QuoridorNN::NUM_FEATURES_SPATIAL_V1;
-    numGlobalChannels = QuoridorNN::NUM_FEATURES_GLOBAL_V1;
+  //Only the current Quoridor I/O version (QuoridorNN::TRAINING_IO_VERSION) can be written.
+  if(inputsVersion == QuoridorNN::TRAINING_IO_VERSION) {
+    numBinaryChannels = QuoridorNN::numSpatialFeatures(inputsVersion);
+    numGlobalChannels = QuoridorNN::numGlobalFeatures(inputsVersion);
   }
   else {
-    throw StringError("TrainingDataWriter: Unsupported inputs version: " + Global::intToString(inputsVersion));
+    throw StringError(
+      "TrainingDataWriter: only Quoridor I/O version " + Global::intToString(QuoridorNN::TRAINING_IO_VERSION) +
+      " training data can be written (config inputsVersion), got: " + Global::intToString(inputsVersion));
   }
 
   const bool hasMetadataInput = false;
@@ -1284,12 +1078,6 @@ void TrainingDataWriter::writeGame(const FinishedGameData& data) {
     else
       testAssert(lastTargets.noResult == 0.0f);
 
-    if(inputsVersion != 1) {
-      testAssert(data.finalFullArea != NULL);
-      testAssert(data.finalOwnership != NULL);
-      testAssert(data.finalSekiAreas != NULL);
-      testAssert(data.finalWhiteScoring != NULL);
-    }
     testAssert(!data.endHist.isResignation);
   }
 

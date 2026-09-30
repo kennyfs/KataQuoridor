@@ -204,16 +204,21 @@ struct TrainingWriteBuffers {
   //C12-15: MCTS win-loss-noresult estimate td-like target, lambda = 1 - 1/(1 + boardArea * 0.016)
   //C16-19: MCTS win-loss-noresult estimate td-like target, lambda = 0 (so, actually just the immediate MCTS result).
 
-  //C20: Actual final score, from the perspective of the player to move, adjusted for draw utility, zero if C27 is zero.
-  //C21: Lead in points, number of points to make the game fair, zero if C29 is zero.
+  //Quoridor I/O v2 (docs/QuoridorIOv2.md §4): the score is the utility score u, the lead the tempo lead s.
+  //C20: Actual final score u of the game, from the perspective of the player to move, zero if C27 is zero.
+  //C21: Lead s: the game's final lead, or a search's lead estimate for this position (estimateLeadProb), zero if C29
+  //is zero (draws: C29 is zero).
   //C22: Expected arrival time of WL variance.
-  //C23: Unused
+  //C23: Quoridor: plies from this position to the end of the game (draws included), zero if C27 is zero.
   //C24: 1.0 minus weight assigned to td value targets
 
   //C25 Weight multiplier for row as a whole
 
   //C26: Weight assigned to the policy target
   //C27: Weight assigned to the final board ownership target and score distr targets. Most training rows will have this be 1, some will be 0.
+  //Quoridor: weight of the outcome targets C20, C23 and the trajectory / final-wall targets: the value target
+  //weight on main rows of a game with a result (draws included), 0 on side positions and reanalyzed rows without
+  //outcome targets.
   //C28: Weight assigned to the next move policy target
   //C29: Weight assigned to the lead target
   //C30: Policy Surprise (for statistical purposes)
@@ -313,9 +318,9 @@ struct TrainingWriteBuffers {
   TrainingWriteBuffers(const TrainingWriteBuffers&) = delete;
   TrainingWriteBuffers& operator=(const TrainingWriteBuffers&) = delete;
 
-  //Encodes one Quoridor (I/O v1) input row exactly as addRow stores it: packed bit planes (channels
-  //8-11 written as 0), raw canonical distances for channels 8-11, and global features.
-  //rowBinScratch must hold NUM_FEATURES_SPATIAL_V1 * 81 floats.
+  //Encodes one Quoridor input row (I/O version QuoridorNN::TRAINING_IO_VERSION, the only one written) exactly as
+  //addRow stores it: packed bit planes (channels 8-11 written as 0), raw canonical distances for channels 8-11,
+  //and global features. rowBinScratch must hold numSpatialFeatures(TRAINING_IO_VERSION) * 81 floats.
   static void fillQuoridorInputRow(
     const Board& board,
     const BoardHistory& hist,
