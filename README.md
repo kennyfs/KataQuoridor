@@ -4,7 +4,7 @@ KataQuoridor is a [Quoridor](GameRules.md) engine and self-play training pipelin
 [KataGo](https://github.com/lightvector/KataGo) v1.18.2.
 
 - **Game:** Quoridor Duel only: 9 × 9 board, two players, 10 walls each. Race and Four-at-a-Table are not
-  implemented. See [GameRules.md](GameRules.md).
+  implemented. KataQuoridor adds a 300-ply draw, komi and a fence handicap. See [GameRules.md](GameRules.md).
 - **Engine:** KataGo's Monte-Carlo graph search, neural-net evaluator and CUDA/Eigen backends, driven through a
   Quoridor dialect of GTP (called QTP here).
 - **Training:** KataGo's self-play → shuffle → train → export → gatekeeper loop, with Quoridor inputs, heads and
@@ -84,10 +84,12 @@ answered by `= <result>` or `? <error>` and a blank line.
 | `move [color] <cell>`, `wall [color] <wall>` | The same, restricted to pawn moves or walls; the colour defaults to the side to move. |
 | `genmove <color>` | Search, play and return the engine's move. |
 | `legal_moves [color]` | All legal moves, space-separated (for `color` as if it were to move). |
-| `winner` | `B`, `W` or `none`. |
+| `winner` | `B`, `W`, `Draw` (after the 300-ply draw) or `none`. |
+| `komi <k>`, `get_komi` | Set or show the komi (a half-integer, standard −0.5; see [Scores and komi](#scores-and-komi)). |
+| `kata-get-rules`, `kata-set-rule <key> <value>`, `kata-set-rules <rules>` | Show or set `maxPlies`, `timeBonusPerPly`, `blackInitialWalls`, `whiteInitialWalls` (JSON or `Quoridor:key=value,...`). `maxPlies` and the walls can only change before the first move. |
 | `walls [color]` | Walls left: `B: 10 W: 9`, or one number. |
 | `dist [color]` | Shortest-path distance to the goal row: `B: 7 W: 9`, or one number. |
-| `showboard` | ASCII board with pawns, walls, walls left, distances and the side to move. |
+| `showboard` | ASCII board with pawns, walls, walls left, distances, the side to move and the ply count (plies until the draw); komi when not standard. |
 | `undo`, `clear_board` | Take back one move; start a new game. |
 | `printsgf`, `loadsgf <file> [movenum]` | Save or load a game as SGF. |
 | `kata-analyze`, `kata-genmove_analyze`, `kata-raw-nn` | KataGo's analysis commands ([docs/GTP_Extensions.md](docs/GTP_Extensions.md)); moves use the notation above. |
@@ -99,8 +101,10 @@ Rules the engine enforces:
 - The game ends as soon as a pawn reaches its goal row. From then on, every move and `genmove` variant fails
   with `? game is over`, `legal_moves` is empty and `winner` keeps the result. `undo`, `clear_board` and
   `loadsgf` still work.
-- The engine itself has no move limit. Self-play and the arena cut games off at 300 plies (the arena scores
-  them as draws).
+- A game that reaches 300 plies (`maxPlies`) without a pawn on its goal is a draw: `winner` says `Draw`, and
+  nothing more can be played. Search sees the draw too. Self-play discards drawn games for now.
+- The winner is decided by the tempo and komi (see below); with the standard komi −0.5 it is simply the player
+  whose pawn arrives first.
 
 Example session:
 
@@ -126,6 +130,24 @@ play w e8
 winner
 = none
 ```
+
+### Scores and komi
+
+KataQuoridor scores a finished game in tempo, from White's point of view ([GameRules.md](GameRules.md),
+[docs/QuoridorIOv2.md](docs/QuoridorIOv2.md)):
+
+- **Komi** is a half-integer; the **standard game is komi −0.5**. White wins iff `tempo + komi > 0`, where the
+  tempo is the loser's remaining distance if White's pawn arrived, and 1 minus it if Black's did. An equal race
+  (B+1) is tempo 0, so with komi −0.5 Black wins it.
+- **`scoreLead`** (KataGo's lead) is the **tempo lead** `tempo + komi`: +0.5 means White wins by one tempo. SGF
+  results are written the same way (`W+0.5`, `B+2.5`, `0` for a draw).
+- **`scoreMean`** (KataGo's score; search and training use it) is the **utility score**: the lead plus a time
+  bonus, `sign(lead) × timeBonusPerPly × (300 − plies)`, which rewards finishing a won game earlier. With
+  `timeBonusPerPly` > 0 it reads around `timeBonusPerPly × 300` at the start (e.g. +15 with 0.05) while the lead is
+  about 0; that is expected. `timeBonusPerPly` (default 0) must match what the net was trained with.
+- **GUIs should show `scoreLead`.** As in upstream KataGo, `kata-analyze` and the analysis engine report the
+  utility score as `scoreSelfplay`, and their `scoreMean` field is a copy of `scoreLead`; `kata-raw-nn` reports
+  `whiteLead` and `whiteScoreSelfplay`.
 
 ## Training
 

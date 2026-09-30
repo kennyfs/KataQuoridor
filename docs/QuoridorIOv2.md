@@ -2,7 +2,7 @@
 
 *Design document, started 2026-09-30. It is the source of truth for the three steps of the I/O v2 retrain:*
 
-1. *rules and scoring (game rules, terminal scores, komi, fence handicap, QTP/SGF), see
+1. *rules and scoring (game rules, terminal scores, komi, fence handicap, QTP/SGF). **Done**, see
    [§6](#6-step-1-where-things-live);*
 2. *the I/O v2 neural net (inputs, heads, training data, exporter, loader);*
 3. *self-play randomization and experiments.*
@@ -156,9 +156,12 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
 ## 3. Display: `scoreMean` vs `scoreLead`
 
 - `scoreLead` (KataGo's `lead`) is the **tempo lead** `s`: "White is ahead by 1.5 tempo".
-- `scoreMean` is the **utility score** `u`: it includes the time bonus, so with λ > 0 it can read around
-  λ·maxPlies (e.g. +15 for λ = 0.05) at the start while the lead is about 0. That is expected.
+- `scoreMean` (KataGo's score, internally) is the **utility score** `u`: it includes the time bonus, so with λ > 0
+  it can read around λ·maxPlies (e.g. +15 for λ = 0.05) at the start while the lead is about 0. That is expected.
 - **GUIs should show `scoreLead`.** At terminal search nodes `lead = s` while `scoreMean = u`.
+- Output field names follow upstream KataGo: `kata-analyze` and the analysis engine print the utility score as
+  `scoreSelfplay`, and their `scoreMean` field is a copy of `scoreLead` (upstream's compatibility choice);
+  `kata-raw-nn` prints `whiteLead` and `whiteScoreSelfplay`.
 - In the standard game (komi −0.5) an equal race reads `scoreLead ≈ −0.5`, and a lead of +0.5 means "White wins by
   one tempo".
 
@@ -207,20 +210,29 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
 - `Rules::isValidKomi` (half-integer, `|komi| <= Rules::MAX_KOMI` = 20.5) and `Rules::roundKomi` (to the nearest
   valid komi) are the single definition of a legal komi.
 - `Rules::toString()` is `Quoridor` for the standard game, and `Quoridor:key=value,...` listing the non-default
-  keys otherwise (e.g. `Quoridor:maxPlies=400,timeBonusPerPly=0.05`). This is what SGF `RU` holds. JSON uses the
-  keys above. The Go rule fields remain as inert stubs; the Go keys are accepted and ignored in JSON input.
+  keys otherwise (e.g. `Quoridor:maxPlies=400,timeBonusPerPly=0.05`); `toStringNoKomi()` leaves komi out and is
+  what SGF `RU` holds. JSON uses the keys above (`kata-get-rules` prints the JSON without komi). Parsing accepts
+  both forms plus `quoridor` / `default`; unknown keys are errors, the Go keys (`ko`, `scoring`, …) are accepted
+  and ignored in JSON input. The Go rule fields remain as inert stubs.
+- `Rules::validateOrThrow` checks the ranges (komi as above, `maxPlies` 1..100000, λ 0..1, walls 0..10).
 - `Rules::operator==` compares all Quoridor fields (it used to return `true`).
+- Config: `Setup::loadQuoridorRuleKeys` reads `maxPlies`, `timeBonusPerPly`, `blackInitialWalls`,
+  `whiteInitialWalls` (gtp and every tool through `Setup::loadSingleRules`, self-play through `GameInitializer`).
 
 ### 6.2 Results (`cpp/game/boardhistory.{h,cpp}`)
 
 - `BoardHistory::makeBoardMoveAssumeLegal` checks, after each move: goal reached → win (`scoreGameEndedAtGoal`),
-  else `getCurrentTurnNumber() >= maxPlies` → draw.
+  else `getCurrentTurnNumber() >= maxPlies` → draw. `BoardHistory::isDraw()` and `pliesUntilDraw()` report it.
 - Stored results: `finalWhiteMinusBlackScore = u` (what search and training use as the score) and
   `finalWhiteLead = s`.
 - `BoardHistory::setKomi` validates the komi and re-scores a finished game (the winner may flip), like upstream.
 - `BoardHistory::getSituationRulesAndKoHash` (used by both the graph-search hash and the NN cache) folds in komi,
   `maxPlies`, λ and the ply count. With λ > 0 or near the ply limit, the same position at a different ply has a
   different value, so transpositions must not merge across plies.
+- The only change in `cpp/search/`: at a finished game's terminal node, search takes `lead` from
+  `finalWhiteLead` instead of copying `scoreMean` (`Search::playoutDescend`).
+- `Board::setFencesLeft` applies the initial walls; `Board::checkConsistency` allows fewer walls on the board than
+  the players have spent from 10 each.
 
 ### 6.3 Upstream komi helpers
 
@@ -235,8 +247,11 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
 | `BoardHistory::setKomi` | set komi, re-score a finished game | Implemented (was a no-op); throws on an invalid Quoridor komi. |
 | `Search::setKomiIfNew` | | Unchanged (upstream search). |
 | `PlayUtils::roundAndClipKomi` | round to 0.5, clip to ±(20 + area) | Rounds to the nearest valid Quoridor komi, clips to ±20.5. |
-| `PlayUtils::setKomiWithNoise` / `setKomiWithoutNoise` | random rounding to the 0.5 grid | Random rounding between the two neighbouring valid komis. |
-| `PlayUtils::adjustKomiToEven`, `computeLead` | binary search on the 0.5 grid; area-scoring parity smoothing | Binary search on the Quoridor komi grid (step 1); no parity smoothing. |
+| `PlayUtils::setKomiWithNoise` / `setKomiWithoutNoise` | random / nearest rounding to the 0.5 grid | With noise: random rounding between the two neighbouring valid komis (so `komiAllowIntegerProb` has no effect). Without: the nearest valid komi. |
+| `PlayUtils::adjustKomiToEven`, `computeLead` | binary search on the 0.5 grid; area-scoring parity smoothing | Binary search on the Quoridor komi grid (steps of 1); the final komi is randomly rounded between neighbouring valid komis; no parity smoothing in `computeLead`. Unused until step 3 (and only meaningful with nets that see komi). |
+| `CompactSgf::getRulesOrWarn` / `getRulesOrFailAllowUnspecified` | missing `KM` → the caller's default komi | Missing `KM` → −0.5 (the SGF describes a standard game); `WB`/`WW` read. |
+| QTP `ignoreGTPAndForceKomi` (config) | forced komi | Validated with `isValidKomi`. |
+| `PlaySettings` `dynamicSelfKomiBonus*`, `fancyKomiVarying` | Go self-play komi tricks | Unchanged and off in the Quoridor configs; any komi they produce goes through `setKomi`, which throws on an invalid one. |
 | `SgfNode::getKomiOrDefault` | parses `KM`, Go-server quirks | Validates with `isValidKomi`; `KM[0]` (written by 0.1.0) reads as −0.5; Go quirks removed. |
 
 ### 6.4 Self-play, gatekeeper and match
@@ -247,16 +262,21 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
 - **Draw games are still discarded from training data**, as the 0.1.0 cutoff games were: `Play::runGame` marks a
   `maxPlies` draw as `hitTurnLimit` when `Play::DISCARD_MAX_PLIES_DRAWS` is true (the one switch; step 2 flips it).
   They still count as "cutoff" games in the self-play stats.
-- The self-play `komiMean` must be a valid komi (standard −0.5); the old `komiMean = 0` is rejected at startup.
+- The self-play `komiMean` must be a valid komi (standard −0.5, also the default); the old `komiMean = 0` is
+  rejected at startup. `GameInitializer` starts every game from the config's rules and applies the initial walls.
+- `Play::runGame` writes the final value targets' lead as `finalWhiteLead` (it used to copy the score).
 
 ### 6.5 QTP and SGF
 
 - QTP: `komi <k>`, `get_komi`; `kata-get-rules` / `kata-set-rule(s)` expose `maxPlies`, `timeBonusPerPly`,
-  `blackInitialWalls`, `whiteInitialWalls`. `showboard` prints the ply count and plies until draw, and komi / λ when
-  not standard. `winner` reports `Draw` after a `maxPlies` draw.
-- SGF: `KM` (komi), `WB` / `WW` (initial walls of Black / White, always written), `RU` (`Rules::toString()`), and
-  `RE` = `B+|s|` / `W+|s|` (e.g. `W+0.5`, `B+2.5`), `0` for a draw. **`RE` changed from integer margins to
-  half-integers.** SGFs without `KM` load as komi −0.5, without `WB`/`WW` as 10 walls.
+  `blackInitialWalls`, `whiteInitialWalls` (`maxPlies` and the walls only before the first move, since they define
+  the game from its start; komi and λ any time, and a komi change re-scores a finished game). `showboard` prints
+  `Ply: N (draw at M, K left)`, and komi / λ when not standard. `winner` reports `Draw` after a `maxPlies` draw.
+- SGF: `KM` (komi), `WB` / `WW` (initial walls of Black / White, named like `PB` / `PW`, always written), `RU`
+  (`Rules::toStringNoKomi()`), and `RE` = `B+|s|` / `W+|s|` (e.g. `W+0.5`, `B+2.5`), `0` for a draw. **`RE` changed
+  from integer margins to half-integers.** SGFs without `KM` load as komi −0.5 (and `KM[0]`, which 0.1.0 wrote for
+  the standard game, too), without `WB`/`WW` as 10 walls. `python/sgfs_viewer` bins half-integer results on the
+  half grid.
 - `Board::numStonesOnBoard()` (upstream's lower bound on the turn number of a setup position) returns the number of
   walls on the board, so SGF loads and `set_position` start counting plies at 0 (it used to return 2, the pawns).
 
@@ -276,3 +296,9 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
   games); switch them to the engine's `KM`/`RE` when the arena learns about komi.
 - **v1 nets and the NN cache.** The NN cache hash now includes the ply count, so a v1 net re-evaluates the same
   position at a different ply (e.g. after a pawn goes back and forth). Measure the cost if it matters.
+- **The v1 training writer** (`TrainingWriteBuffers::addRow`, I/O v1 branch) still writes the raw margin as the
+  score target for rows without a lead (the self-play default, `estimateLeadProb = 0`), but a row's lead where it
+  has one, which is now `s` (margin ∓ 0.5). Step 2 replaces these targets (`u` and `s`) anyway.
+- **Draw rows (step 2).** `hitTurnLimit` also feeds training-row global targets (a "game ended normally" flag). When
+  `Play::DISCARD_MAX_PLIES_DRAWS` is turned off, draws become normal finished games (`hitTurnLimit` false), so
+  their rows get value 0.5 / 0.5 through `whiteWinsOfWinner`; check the lead / score weights of those rows.
