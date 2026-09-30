@@ -221,7 +221,6 @@ static void checkBoardInvariants(const Board& b) {
 static void checkSameBoard(const Board& a, const Board& b) {
   testAssert(a.isEqualForTesting(b));
   testAssert(a.pos_hash == b.pos_hash);
-  testAssert(a.nextPla == b.nextPla);
   testAssert(a.movenum == b.movenum);
   for(int i = 0; i < Board::MAX_ARR_SIZE; i++)
     testAssert(a.colors[i] == b.colors[i]);
@@ -618,7 +617,6 @@ MoveNum: 2 HASH: 1A1440A04BD749E4AC8283D4AB8EF701
    +---+---+---+---+---+---+---+---+---+
 Black (B): e9 walls: 8 dist: 9 (goal row 1)
 White (W): e2 walls: 9 dist: 8 (goal row 9)
-Next player: Black
 )%%";
     expect("printBoard with marked vertical wall", out, expected);
   }
@@ -652,7 +650,6 @@ HASH: 1A1440A04BD749E4AC8283D4AB8EF701
    +---+---+---+---+---+---+---+---+---+
 Black (B): e9 walls: 8 dist: 9 (goal row 1)
 White (W): e2 walls: 9 dist: 8 (goal row 9)
-Next player: Black
 HASH: 1A1440A04BD749E4AC8283D4AB8EF701
      a   b   c   d   e   f   g   h   i
    +---+---+---+---+---+---+---+---+---+
@@ -676,7 +673,6 @@ HASH: 1A1440A04BD749E4AC8283D4AB8EF701
    +---+---+---+---+---+---+---+---+---+
 Black (B): e9 walls: 8 dist: 9 (goal row 1)
 White (W): e2 walls: 9 dist: 8 (goal row 9)
-Next player: Black
 )%%";
     expect("printBoard with marked pawn cell and horizontal wall", out, expected);
   }

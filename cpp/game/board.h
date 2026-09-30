@@ -207,7 +207,6 @@ struct Board {
     int oldBlackFences;
     int oldWhiteFences;
     int oldMovenum;
-    Player oldNextPla;
     Hash128 oldPosHash;
     // For walls: cells modified
     Loc modifiedCells[3];
@@ -237,8 +236,6 @@ struct Board {
   MoveRecord playMoveRecorded(Loc loc, Player pla);
   void undo(MoveRecord record);
 
-  Player nextnextPla() const;
-  Player prevPla() const;
   Hash128 getSitHash(Player pla) const;
   Hash128 getSitHashWithSimpleKo(Player pla) const { return getSitHash(pla); }
   Hash128 getPosHashAfterMove(Loc loc, Player pla) const;
@@ -332,7 +329,6 @@ struct Board {
   Loc blackPawnLoc;
   Loc whitePawnLoc;
   int movenum;
-  Color nextPla;
   Hash128 pos_hash;
   short adj_offsets[8];
 

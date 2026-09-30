@@ -290,7 +290,6 @@ static void testInitialBoardState() {
   Board b;
   testAssert(b.x_size == 17);
   testAssert(b.y_size == 17);
-  testAssert(b.nextPla == P_BLACK);
   testAssert(b.movenum == 0);
   testAssert(b.blackFences == 10);
   testAssert(b.whiteFences == 10);

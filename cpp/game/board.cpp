@@ -388,7 +388,6 @@ void Board::init(int xS, int yS) {
 
   Location::getAdjacentOffsets(adj_offsets, x_size);
 
-  nextPla = P_BLACK;
   blackFences = MAX_FENCE_NUM;
   whiteFences = MAX_FENCE_NUM;
   ko_loc = NULL_LOC;
@@ -950,9 +949,6 @@ void Board::playMoveAssumeLegal(Loc loc, Player pla) {
       bfsReachable(whitePawnLoc, y_size - 1, &cachedPathP2);
     }
   }
-
-  // Switch player
-  nextPla = getOpp(nextPla);
 }
 
 bool Board::playMove(Loc loc, Player pla, bool isMultiStoneSuicideLegal) {
@@ -971,7 +967,6 @@ Board::MoveRecord Board::playMoveRecorded(Loc loc, Player pla) {
   record.oldBlackFences = blackFences;
   record.oldWhiteFences = whiteFences;
   record.oldMovenum = movenum;
-  record.oldNextPla = nextPla;
   record.oldPosHash = pos_hash;
   record.numModifiedCells = 0;
 
@@ -1000,7 +995,6 @@ Board::MoveRecord Board::playMoveRecorded(Loc loc, Player pla) {
 
 void Board::undo(MoveRecord record) {
   movenum = record.oldMovenum;
-  nextPla = record.oldNextPla;
   pos_hash = record.oldPosHash;
 
   int x = Location::getX(record.loc, x_size);
@@ -1116,14 +1110,6 @@ bool Board::isBoardNotConnected() const {
   return !bfsReachable(blackPawnLoc, 0) || !bfsReachable(whitePawnLoc, y_size - 1);
 }
 
-Player Board::nextnextPla() const {
-  return nextPla;
-}
-
-Player Board::prevPla() const {
-  return getOpp(nextPla);
-}
-
 Hash128 Board::getSitHash(Player pla) const {
   return pos_hash ^ ZOBRIST_PLAYER_HASH[pla];
 }
@@ -1148,7 +1134,6 @@ Board Board::getMirroredX() const {
   b.blackFences = blackFences;
   b.whiteFences = whiteFences;
   b.movenum = movenum;
-  b.nextPla = nextPla;
   // Mirroring x maps wall anchor column c -> 7-c for both orientations; the row and
   // orientation (vertical/horizontal) are unaffected.
   for(int c = 0; c < 8; c++) {
@@ -1228,7 +1213,7 @@ bool Board::isEqualForTesting(const Board& other, bool checkNumCaptures, bool ch
     return false;
   if(blackFences != other.blackFences || whiteFences != other.whiteFences)
     return false;
-  if(nextPla != other.nextPla || movenum != other.movenum)
+  if(movenum != other.movenum)
     return false;
   for(int y = 0; y < y_size; y++) {
     for(int x = 0; x < x_size; x++) {
@@ -1349,7 +1334,6 @@ void Board::printBoard(ostream& out, const Board& board, Loc markLoc, const vect
   };
   printPlayer(P_BLACK);
   printPlayer(P_WHITE);
-  out << "Next player: " << PlayerIO::playerToString(board.nextPla) << "\n";
 }
 
 ostream& operator<<(ostream& out, const Board& board) {
@@ -1365,7 +1349,6 @@ nlohmann::json Board::toJson(const Board& board) {
   j["whitePawnLoc"] = board.whitePawnLoc;
   j["blackFences"] = board.blackFences;
   j["whiteFences"] = board.whiteFences;
-  j["nextPla"] = board.nextPla;
   j["movenum"] = board.movenum;
   j["pos_hash"] = board.pos_hash.toString();
 
@@ -1396,7 +1379,6 @@ Board Board::ofJson(const nlohmann::json& j) {
   b.whitePawnLoc = j["whitePawnLoc"].get<Loc>();
   b.blackFences = j["blackFences"].get<int>();
   b.whiteFences = j["whiteFences"].get<int>();
-  b.nextPla = j["nextPla"].get<Color>();
   b.movenum = j["movenum"].get<int>();
 
   vector<int> colArr = j["colors"].get<vector<int>>();

@@ -351,6 +351,7 @@ void BoardHistory::setWinnerByResignation(Player pla) {
 
 void BoardHistory::printBasicInfo(ostream& out, const Board& board) const {
   Board::printBoard(out, board, Board::NULL_LOC, &moveHistory);
+  out << "Next player: " << PlayerIO::playerToString(presumedNextMovePla) << endl;
   if(isGameFinished) {
     // A Quoridor game only ends without a winner when the move cap is hit (endAndScoreGameNow).
     if(winner == C_EMPTY)
