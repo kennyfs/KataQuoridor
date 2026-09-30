@@ -202,6 +202,25 @@ void GameInitializer::initShared(ConfigParser& cfg, Logger& logger) {
       Global::floatToString(komiMean) + " in " + cfg.getFileName()
     );
   komiStdev = cfg.contains("komiStdev") ? cfg.getFloat("komiStdev",0.0f,60.0f) : 0.0f;
+
+  //Quoridor I/O v2 step 3: komi and fence-handicap randomization (docs/QuoridorIOv2.md section 5), off by default.
+  auto loadOffsetWeights = [&cfg](const string& key, int maxOffset) {
+    vector<double> weights = cfg.contains(key) ? cfg.getDoubles(key,0.0,1e10) : vector<double>({0.6,0.3,0.1});
+    double sum = 0.0;
+    for(double w : weights)
+      sum += w;
+    if(weights.size() <= 0 || (int)weights.size() > maxOffset || !(sum > 0.0))
+      throw IOError(
+        key + " must list 1 to " + Global::intToString(maxOffset) +
+        " non-negative relative weights (of the offsets 1, 2, ...) with a positive sum in " + cfg.getFileName()
+      );
+    return weights;
+  };
+  quoridorKomiRandomProb = cfg.contains("quoridorKomiRandomProb") ? cfg.getDouble("quoridorKomiRandomProb",0.0,1.0) : 0.0;
+  quoridorKomiRandomWeights = loadOffsetWeights("quoridorKomiRandomWeights", 20);
+  quoridorFenceHandicapProb = cfg.contains("quoridorFenceHandicapProb") ? cfg.getDouble("quoridorFenceHandicapProb",0.0,1.0) : 0.0;
+  quoridorFenceHandicapWeights = loadOffsetWeights("quoridorFenceHandicapWeights", Board::MAX_FENCE_NUM);
+
   handicapProb = cfg.contains("handicapProb") ? cfg.getDouble("handicapProb",0.0,1.0) : 0.0;
   handicapCompensateKomiProb = cfg.contains("handicapCompensateKomiProb") ? cfg.getDouble("handicapCompensateKomiProb",0.0,1.0) : 0.0;
   komiBigStdevProb = cfg.contains("komiBigStdevProb") ? cfg.getDouble("komiBigStdevProb",0.0,1.0) : 0.0;
@@ -390,6 +409,20 @@ void GameInitializer::initShared(ConfigParser& cfg, Logger& logger) {
 
 GameInitializer::~GameInitializer()
 {}
+
+bool GameInitializer::mayCreateNonStandardGames() const {
+  Rules standard = Rules::getQuoridorRules();
+  return
+    quoridorKomiRandomProb > 0.0 ||
+    quoridorFenceHandicapProb > 0.0 ||
+    komiMean != Rules::DEFAULT_KOMI ||
+    komiStdev > 0.0f ||
+    (komiBigStdevProb > 0.0 && komiBigStdev > 0.0f) ||
+    (komiBiggerStdevProb > 0.0 && komiBiggerStdev > 0.0f) ||
+    komiAuto ||
+    baseRules.blackInitialFences != standard.blackInitialFences ||
+    baseRules.whiteInitialFences != standard.whiteInitialFences;
+}
 
 void GameInitializer::createGame(
   Board& board, Player& pla, BoardHistory& hist,
@@ -605,6 +638,19 @@ void GameInitializer::createGameSharedUnsynchronized(
   else {
     int xSize = allowedBSizes[bSizeIdx].first;
     int ySize = allowedBSizes[bSizeIdx].second;
+
+    //Quoridor fence handicap: one side (random) starts with n fewer walls. The initial walls are part of the rules,
+    //so they reach SGF WB/WW and the training data's rules.
+    bool isFenceHandicap = false;
+    if(quoridorFenceHandicapProb > 0.0 && rand.nextBool(quoridorFenceHandicapProb)) {
+      int n = 1 + (int)rand.nextUInt(quoridorFenceHandicapWeights.data(),quoridorFenceHandicapWeights.size());
+      if(rand.nextBool(0.5))
+        rules.blackInitialFences = std::max(0, rules.blackInitialFences - n);
+      else
+        rules.whiteInitialFences = std::max(0, rules.whiteInitialFences - n);
+      isFenceHandicap = true;
+    }
+
     board = Board(xSize,ySize);
     board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
     pla = P_BLACK;
@@ -617,6 +663,12 @@ void GameInitializer::createGameSharedUnsynchronized(
       komiBiggerStdevProb, komiBiggerStdev,
       board.sqrtBoardArea(), rand
     );
+    //Quoridor komi randomization: komiMean +/- n. It goes into komiMean (not only into hist), since runGame sets the
+    //komi again from extraBlackAndKomi (policy init, compensation).
+    if(quoridorKomiRandomProb > 0.0 && rand.nextBool(quoridorKomiRandomProb)) {
+      int n = 1 + (int)rand.nextUInt(quoridorKomiRandomWeights.data(),quoridorKomiRandomWeights.size());
+      extraBlackAndKomi.komiMean = Rules::roundKomi(komiMean + (rand.nextBool(0.5) ? n : -n));
+    }
     PlayUtils::setKomiWithNoise(extraBlackAndKomi, hist, rand);
 
     otherGameProps.isSgfPos = false;
@@ -627,7 +679,7 @@ void GameInitializer::createGameSharedUnsynchronized(
     otherGameProps.hintLoc = Board::NULL_LOC;
     otherGameProps.hintTurn = -1;
     otherGameProps.trainingWeight = 1.0;
-    makeGameFairProb = extraBlackAndKomi.extraBlack > 0 ? handicapCompensateKomiProb : 0.0;
+    makeGameFairProb = (extraBlackAndKomi.extraBlack > 0 || isFenceHandicap) ? handicapCompensateKomiProb : 0.0;
     extraBlackAndKomi.interpZero = (handicapKomiInterpZeroProb > 0 && extraBlackAndKomi.extraBlack > 0) ? rand.nextBool(handicapKomiInterpZeroProb) : false;
   }
 

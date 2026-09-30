@@ -116,6 +116,11 @@ class GameInitializer {
   bool isAllowedBSize(int xSize, int ySize) const;
 
   std::vector<std::pair<int,int>> getAllowedBSizes() const;
+
+  //Quoridor I/O v2 step 3 (docs/QuoridorIOv2.md section 5): whether any game may start from something other than the
+  //standard komi and 10/10 walls (komi or fence-handicap randomization, komi noise, a non-standard komiMean or
+  //initial walls). The gatekeeper refuses such configs.
+  bool mayCreateNonStandardGames() const;
   int getMinBoardXSize() const;
   int getMinBoardYSize() const;
   int getMaxBoardXSize() const;
@@ -154,6 +159,15 @@ class GameInitializer {
   Rules baseRules;
 
   float komiMean;
+  //Quoridor I/O v2 step 3 (docs/QuoridorIOv2.md section 5), all off by default. For games from the empty board:
+  //with probability quoridorKomiRandomProb the komi is komiMean +/- n (random sign), n = 1, 2, ... drawn with the
+  //relative weights quoridorKomiRandomWeights; independently, with probability quoridorFenceHandicapProb one side
+  //(random) starts with n fewer walls, n = 1, 2, ... drawn with the relative weights quoridorFenceHandicapWeights.
+  //Fence-handicap games get a fair komi with probability handicapCompensateKomiProb (see Play::runGame).
+  double quoridorKomiRandomProb;
+  std::vector<double> quoridorKomiRandomWeights;
+  double quoridorFenceHandicapProb;
+  std::vector<double> quoridorFenceHandicapWeights;
   float komiStdev;
   double komiAllowIntegerProb;
   double handicapProb;
