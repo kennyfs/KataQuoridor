@@ -520,6 +520,8 @@ Make each of these a hard config error for Quoridor (not a warning), next to the
   shortest-path-greedy bot.
 - Tag `v1.0.0` once gatekeeping has promoted a few generations and you have Elo anchors (§6.5).
 - `version` output: `KataQuoridor 0.1.0 (KataGo 1.18.2 base, git <sha>)`.
+- *Status (0.1.0):* done in `docs/releases/v0.1.0.md`. Tags get a `kq-` prefix (`kq-v0.1.0`) because the repo
+  still carries upstream's `v1.x` tags; `version` prints `KataQuoridor 0.1.0 (based on KataGo 1.18.2, git <sha>)`.
 
 ### Phase 6: Quoridor I/O v2 — margin komi `k` and playout doubling advantage (deferred, data-driven)
 
