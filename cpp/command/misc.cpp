@@ -728,6 +728,10 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
         currPla = getOpp(currPla);
       }
 
+      //NOTE: sample data for tests only (e.g. test_end_to_end_training.py), not real self-play. The game is not
+      //searched and is capped at maxTurns: an unfinished game is declared a Black win, every value target is the
+      //final result with a fixed placeholder margin of +-5 (hasLead set, so it is also the margin target), and the
+      //policy targets are just the moves played. Only the formats and shapes are meaningful, not the values.
       if(!currHist.isGameFinished) {
         currHist.isGameFinished = true;
         currHist.winner = P_BLACK;
