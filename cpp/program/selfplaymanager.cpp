@@ -507,6 +507,7 @@ void SelfplayManager::runDataWriteLoopImpl(ModelData* modelData) {
   if(logger != NULL) {
     logger->write("Final cleanup of net: " + modelData->nnEval->getModelFileName());
     logger->write(gameStatsSummary(modelData, modelData->gameStartedCount));
+    logger->write(quoridorStatsSummary(modelData));
     logger->write("Final games finished: " + Global::int64ToString(modelData->gamesFinishedCount.load(std::memory_order_relaxed)));
     logger->write("Final moves played: " + Global::int64ToString(modelData->movesPlayedCount.load(std::memory_order_relaxed)));
     logger->write("Final data rows: " + Global::int64ToString(modelData->tdataWriter->numRowsWritten()));
