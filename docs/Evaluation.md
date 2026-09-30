@@ -16,6 +16,9 @@ python -m quoridor_arena.arena --out ~/arena/smoke --engines sq-random,sq-greedy
     --games-per-pair 10 --verify
 # Explicit pairs instead of a round-robin:
 python -m quoridor_arena.arena --out ~/arena/gate --pairs kq-s12213504-v256:kq-s16141056-v256
+# Komi and fence handicap for all games (see "Komi and fence handicap" below):
+python -m quoridor_arena.arena --out ~/arena/komi15 --pairs kq-s12213504-v256:kq-s16141056-v256 \
+    --komi 1.5 --black-walls 9
 # Recompute the report only:
 python -m quoridor_arena.elo ~/arena/ladder1
 # Tests:
@@ -49,8 +52,8 @@ reimplements the rules:
 - Draw rule: after 300 plies (`--max-plies`) with `winner` = `none`, the game is a draw (reason `draw300`).
   Since the Quoridor I/O v2 rules ([QuoridorIOv2.md](QuoridorIOv2.md)), KataQuoridor itself ends a game at
   its `maxPlies` (default 300) and `winner` reports `Draw`; the referee records that as `draw<plies>` too, so
-  keep `--max-plies` equal to the arbiter's `maxPlies`. Arena games use the standard komi (−0.5), under which the
-  winner is the side whose pawn arrives.
+  keep `--max-plies` equal to the arbiter's `maxPlies`. `winner` knows the game's komi, so with a non-standard
+  komi the side whose pawn arrived can lose (see [Komi and fence handicap](#komi-and-fence-handicap)).
 - `--verify`: before every move, the arbiter's `legal_moves` is compared with the mover's (only for
   engines where `known_command legal_moves` is true). A mismatch aborts the whole run.
 
@@ -80,8 +83,8 @@ They are cached in `<out>/openings.json`. Every opening is played twice with col
 
 | Path | Content |
 |---|---|
-| `results.jsonl` | One JSON object per game: `id`, `pair`, `opening`, `opening_moves`, `black`, `white`, `winner` (`b`/`w`/null), `winner_name`, `margin`, `plies`, `reason` (`goal`/`draw300`/`illegal`/`timeout`/`crash`), `detail`, `moves`, `seconds`. |
-| `sgfs/<a>_vs_<b>.sgfs` | One SGF per line, same format as self-play SGFs: `PB`/`PW` = engine names, `RE` = `B+<margin>` / `W+<margin>` / `0` (draw), `KM[0]`, and a root comment with `startTurnIdx=<opening plies>` so the viewer shades the opening. Open with `python sgfs_viewer/serve.py DIR/sgfs/<file>.sgfs`. |
+| `results.jsonl` | One JSON object per game: `id`, `pair`, `opening`, `opening_moves`, `black`, `white`, `winner` (`b`/`w`/null), `winner_name`, `margin`, `lead`, `result`, `komi`, `black_walls`, `white_walls`, `plies`, `reason` (`goal`/`draw300`/`illegal`/`timeout`/`crash`), `detail`, `moves`, `seconds`. |
+| `sgfs/<a>_vs_<b>.sgfs` | One SGF per line, same format as self-play SGFs: `PB`/`PW` = engine names; `KM`, `WB`, `WW`, `RU` from the arbiter's `printsgf`; `RE` = the arbiter's result (the lead, e.g. `W+0.5`, `B+2.5`, or `0` for a draw), `B+F` / `W+F` for a forfeit, `0` for the referee's own `--max-plies` cutoff; and a root comment with `startTurnIdx=<opening plies>` so the viewer shades the opening. Open with `python sgfs_viewer/serve.py DIR/sgfs/<file>.sgfs`. |
 | `report.md` | Ratings, crosstable, per-pair statistics, anomalies. |
 | `openings.json`, `roster_used.json` | Parameters of the run. |
 | `anomalies.log`, `engine_logs/`, `gtp_logs/` | Forfeits and referee errors; engine stderr; KataGo logs. |
@@ -90,10 +93,43 @@ They are cached in `<out>/openings.json`. Every opening is played twice with col
 line from an interrupted run is dropped). Raising `--games-per-pair` adds only the new games. Changing
 the opening parameters for an existing directory is refused.
 
-**Margin** = max(1, the loser's shortest-path distance from the arbiter's `dist`), the same definition
-as the engine's margin (`Board::whiteMarginWhenWonBy`). Draws have margin 0. Arena SGFs write this integer margin
-in `RE` and `KM[0]`; the engine's own SGFs write the lead (margin − 0.5 in the standard game) and `KM[-0.5]`. Both
-load as standard games.
+**Margin** = max(1, the shortest-path distance of the pawn that did not arrive, from the arbiter's `dist`),
+the same definition as the engine's margin (`Board::whiteMarginWhenWonBy`); for a forfeit, the loser's distance.
+Draws have margin 0. **Lead** = |t + komi| from the arbiter's `RE` ([QuoridorIOv2.md](QuoridorIOv2.md) §2): margin
+− 0.5 in the standard game; 0 for a draw, null for a forfeit. **Result** is the SGF `RE`. Arena runs before
+the Quoridor I/O v2 step 3 wrote `KM[0]` and the integer margin in `RE`; those SGFs load as standard games, and
+their results have no `lead` / `result` / `komi` / walls fields (the report treats them as standard games).
+
+## Komi and fence handicap
+
+Games can use a non-standard komi (a half-integer; White wins iff tempo + komi > 0, the standard game is −0.5)
+and initial walls (`blackInitialWalls` / `whiteInitialWalls`, 0–10, standard 10), see
+[QuoridorIOv2.md](QuoridorIOv2.md) §2. They are set per game, layered from least to most specific:
+
+1. the standard game;
+2. the roster's `"rules"`, for all games: `"rules": {"komi": 1.5, "whiteInitialWalls": 9}`;
+3. the command line, for all games: `--komi 1.5`, `--black-walls 9`, `--white-walls 9`;
+4. the roster's `"pair_rules"`, for the games of one pair (either order):
+   `"pair_rules": [{"pair": ["kq-a-v256", "kq-b-v256"], "komi": -1.5}]`.
+
+Each layer only changes the keys it gives. Both games of an opening (colours swapped) use the same rules, so each
+engine plays the favoured and the disfavoured side equally often.
+
+- The referee sends them through QTP after `clear_board`, to both engines and the arbiter: `komi <k>`,
+  `kata-set-rule blackInitialWalls <n>`, `kata-set-rule whiteInitialWalls <n>`. QTP rules persist across
+  `clear_board`, so the referee tracks each process's rules and sends only changes (a restarted process has the
+  standard rules). The arbiter decides the winner with the komi, and the SGF records `KM`, `WB`, `WW` and `RE`.
+- Only engines with `"supports_rules": true` can play non-standard games. It defaults to true for
+  `katago_model` entries (KataQuoridor ≥ the I/O v2 rules) and false otherwise (SimpleQuoridor). A run that
+  schedules an unsupported engine in a non-standard game stops at startup; an engine that rejects a rules command
+  aborts the run (`!!! RULES REJECTED`).
+- Game ids of non-standard games carry the rules, e.g. `a_vs_b_o000_ab_k+1.5_w9-10`, so rerunning a directory
+  with other rules plays new games; standard ids are unchanged. The report's per-pair table gets a Rules column.
+- Openings are sampled on the standard board; with very few walls (fewer than the opening's walls for a side) an
+  opening can be illegal, and the game is not recorded (referee error).
+- With I/O v1 nets (0.1.0), komi and the walls change the game but the nets only see the walls: they have no komi
+  input, so their play ignores the komi except at terminal nodes of the search. Use this for plumbing tests or
+  handicap experiments with v1, and for real komi evaluation with I/O v2 nets.
 
 ## Ratings
 
@@ -111,7 +147,8 @@ opening in one pair), so the two colour-swapped games are resampled together.
 - anomalies: every game that did not end by reaching the goal or by a draw;
 - the rating table: Elo, 95% CI, games, score;
 - the crosstable: the row player's score against each column player, with game counts;
-- per pair: games, score, Black win rate, draw rate, average plies, average margin, other end reasons.
+- per pair: games, score, Black win rate, draw rate, average plies, average margin, other end reasons, and the
+  rules (komi, walls) when some games are not standard.
 
 ## Roster format
 
@@ -122,9 +159,14 @@ opening in one pair), so the two colour-swapped games are resampled together.
     {"name": "sq-greedy", "command": "{simple_quoridor}", "args": ["--qtp", "--player", "greedy", "--seed", "{seed}"], "seed": 2},
     {"name": "kq-s16141056-v256", "katago_model": "run1-s16141056-d2846694", "visits": 256}
   ],
-  "arbiter": ["optional argv for the arbiter; the default uses {arbiter_katago}"]
+  "arbiter": ["optional argv for the arbiter; the default uses {arbiter_katago}"],
+  "rules": {"komi": -0.5, "blackInitialWalls": 10, "whiteInitialWalls": 10},
+  "pair_rules": [{"pair": ["kq-a-v256", "kq-b-v256"], "komi": 1.5}]
 }
 ```
+
+`rules` and `pair_rules` are optional (see [Komi and fence handicap](#komi-and-fence-handicap)); an engine entry's
+optional `"supports_rules"` says whether it understands `komi` and `kata-set-rule` for the walls.
 
 `{seed}`, `{name}`, `{out}`, `{repo}` (this checkout), every key of `vars` and `{env:NAME}` (the environment
 variable `NAME`) are substituted in `command` and `args`. An unset environment variable is an error only if an

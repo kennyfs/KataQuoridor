@@ -388,6 +388,7 @@ int MainCmds::selfplay(const vector<string>& args) {
       bool shouldContinue = gameData != NULL;
       //Note that if we've gotten a newNNEval, we're actually pushing the game as data for the new one, rather than the old one!
       if(gameData != NULL) {
+        manager->countQuoridorGameResult(nnEval, *gameData);
         if(gameData->hitTurnLimit) {
           manager->countOneGameHitCutoff(nnEval, (int64_t)(gameData->endHist.moveHistory.size() - gameData->startHist.moveHistory.size()));
           delete gameData;

@@ -11,6 +11,7 @@
 #include "../search/asyncbot.h"
 #include "../program/setup.h"
 #include "../program/play.h"
+#include "../program/playutils.h"
 #include "../command/commandline.h"
 #include "../core/test.h"
 #include "../main.h"
@@ -55,13 +56,12 @@ namespace {
     int numGameThreads;
     bool isDraining;
 
-    double drawEquivalentWinsForWhite;
-    double noResultUtilityForWhite;
-
     int numGamesTallied;
-    // A game without a winner is a draw by Rules::maxPlies (or one cut off early by a stop request).
     int numDecisiveGames;
-    int numDrawsByCutoff;
+    int numBlackWins;
+    // Games without a winner, each worth 0.5 to both sides: draws by Rules::maxPlies, and games cut off early.
+    int numRuleDraws;
+    int numOtherDraws;
     int64_t totalMovesInGames;
     double numBaselineWinPoints;
     double numCandidateWinPoints;
@@ -93,11 +93,11 @@ namespace {
        finishedGameQueue(),
        numGameThreads(0),
        isDraining(false),
-       drawEquivalentWinsForWhite(0.5),
-       noResultUtilityForWhite(0.0),
        numGamesTallied(0),
        numDecisiveGames(0),
-       numDrawsByCutoff(0),
+       numBlackWins(0),
+       numRuleDraws(0),
+       numOtherDraws(0),
        totalMovesInGames(0),
        numBaselineWinPoints(0.0),
        numCandidateWinPoints(0.0),
@@ -106,9 +106,6 @@ namespace {
        terminated(false)
     {
       SearchParams baseParams = Setup::loadSingleParams(cfg,Setup::SETUP_FOR_OTHER);
-
-      drawEquivalentWinsForWhite = baseParams.drawEquivalentWinsForWhite;
-      noResultUtilityForWhite = baseParams.noResultUtilityForWhite;
 
       //Initialize object for randomly pairing bots. Actually since this is only selfplay, this only
       //ever gives is the trivial base-vs-candidate pairing, but we use it also for keeping the game count and some logging.
@@ -139,40 +136,32 @@ namespace {
         if(!suc || data == NULL)
           break;
 
-        double whitePoints;
-        double blackPoints;
-        if(data->endHist.isGameFinished && data->endHist.isNoResult) {
-          whitePoints = drawEquivalentWinsForWhite;
-          blackPoints = 1.0 - whitePoints;
-          logger.write("Game " + Global::intToString(numGamesTallied) + ": noresult");
+        //Quoridor I/O v2: a game without a winner (the maxPlies draw rule, or a game cut off early) is exactly half a
+        //point for each side (docs/QuoridorIOv2.md section 5).
+        BoardHistory hist(data->endHist);
+        const bool isRuleDraw = hist.isGameFinished && hist.isDraw();
+        if(!hist.isGameFinished)
+          hist.endAndScoreGameNow(hist.getRecentBoard(0));
+        const double whitePoints = PlayUtils::whitePointsOfGame(hist);
+        const double blackPoints = 1.0 - whitePoints;
+        ostringstream oresult;
+        WriteSgf::printGameResult(oresult,hist);
+        if(hist.winner == P_BLACK || hist.winner == P_WHITE) {
+          numDecisiveGames++;
+          if(hist.winner == P_BLACK)
+            numBlackWins++;
+          logger.write(
+            "Game " + Global::intToString(numGamesTallied) + ": winner " + (hist.winner == P_BLACK ? "black " + data->bName : "white " + data->wName) +
+            " " + oresult.str()
+          );
+        }
+        else if(isRuleDraw) {
+          numRuleDraws++;
+          logger.write("Game " + Global::intToString(numGamesTallied) + ": draw (maxPlies " + Global::intToString(hist.rules.maxPlies) + ") " + oresult.str());
         }
         else {
-          BoardHistory hist(data->endHist);
-          const Board& endBoard = hist.getRecentBoard(0);
-          //Force game end just in caseif we crossed a move limit
-          if(!hist.isGameFinished)
-            hist.endAndScoreGameNow(endBoard);
-
-          ostringstream oresult;
-          WriteSgf::printGameResult(oresult,hist);
-          if(hist.winner == P_BLACK) {
-            whitePoints = 0.0;
-            blackPoints = 1.0;
-            numDecisiveGames++;
-            logger.write("Game " + Global::intToString(numGamesTallied) + ": winner black " + data->bName + " " + oresult.str());
-          }
-          else if(hist.winner == P_WHITE) {
-            whitePoints = 1.0;
-            blackPoints = 0.0;
-            numDecisiveGames++;
-            logger.write("Game " + Global::intToString(numGamesTallied) + ": winner white " + data->wName + " " + oresult.str());
-          }
-          else {
-            whitePoints = 0.5 * noResultUtilityForWhite + 0.5;
-            blackPoints = 1.0 - whitePoints;
-            numDrawsByCutoff++;
-            logger.write("Game " + Global::intToString(numGamesTallied) + ": draw (hit maxPlies) " + oresult.str());
-          }
+          numOtherDraws++;
+          logger.write("Game " + Global::intToString(numGamesTallied) + ": no winner (cut off) " + oresult.str());
         }
 
         numGamesTallied++;
@@ -342,6 +331,13 @@ int MainCmds::gatekeeper(const vector<string>& args) {
 
   PlaySettings playSettings = PlaySettings::loadForGatekeeper(cfg);
   GameRunner* gameRunner = new GameRunner(cfg, playSettings, logger);
+  //Quoridor I/O v2: gating compares nets on the standard game only (komi -0.5, 10/10 walls).
+  if(gameRunner->getGameInitializer()->mayCreateNonStandardGames())
+    throw StringError(
+      "gatekeeper plays the standard game only: remove komi / fence-handicap randomization (quoridorKomiRandomProb, "
+      "quoridorFenceHandicapProb, komiStdev, komiBigStdevProb, ...), komiAuto, and non-standard komiMean or initial walls "
+      "from " + cfg.getFileName()
+    );
   const int minBoardXSizeUsed = gameRunner->getGameInitializer()->getMinBoardXSize();
   const int minBoardYSizeUsed = gameRunner->getGameInitializer()->getMinBoardYSize();
   const int maxBoardXSizeUsed = gameRunner->getGameInitializer()->getMaxBoardXSize();
@@ -589,12 +585,14 @@ int MainCmds::gatekeeper(const vector<string>& args) {
 
     logger.write(
       Global::strprintf(
-        "Game stats for %s vs %s: %d games, %d decisive, %d draws by cutoff, avg game length %.1f",
+        "Game stats for %s vs %s: %d games, %d decisive (%d black wins), %d draws by maxPlies, %d cut off, avg game length %.1f",
         netAndStuff->modelNameBaseline.c_str(),
         netAndStuff->modelNameCandidate.c_str(),
         netAndStuff->numGamesTallied,
         netAndStuff->numDecisiveGames,
-        netAndStuff->numDrawsByCutoff,
+        netAndStuff->numBlackWins,
+        netAndStuff->numRuleDraws,
+        netAndStuff->numOtherDraws,
         netAndStuff->numGamesTallied > 0 ? (double)netAndStuff->totalMovesInGames / netAndStuff->numGamesTallied : 0.0
       )
     );

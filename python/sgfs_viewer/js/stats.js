@@ -7,7 +7,7 @@ function summarize(line, h) {
     winner: h.winner, gtype: h.gtype, margin: Math.abs(parseFloat(h.result.slice(2)) || 0),
     used: { B: 0, W: 0 }, hw: 0, vw: 0, pawnMoves: 0, evs: [], firstWallSearch: null,
     firstToMove: g.moves[g.startTurnIdx]?.pla ?? null,
-    pb: h.pb, pw: h.pw, winnerModel: h.winnerModel,
+    pb: h.pb, pw: h.pw, winnerModel: h.winnerModel, komi: h.komi, wb: h.wb, ww: h.ww, rulesLabel: h.rulesLabel,
   };
   s.signed = s.winner === "W" ? s.margin : -s.margin;
   s.walls = 0;
@@ -216,7 +216,7 @@ function renderStats() {
 
   // 3. win rates by slice
   {
-    const c = card("Win rate: Black (1st) vs White (2nd)", "Share of games won by each side, overall and by slice.");
+    const c = card("Win rate: Black (1st) vs White (2nd)", "Share of games won by Black; the rest is White's wins and draws. Overall and by slice, including by komi and initial walls when some games are not standard.");
     legend(c, [["Black (1st)", C_B], ["White (2nd)", C_W]]);
     const rows = [["All games", S]];
     for (const gt of [...new Set(S.map(s => s.gtype))].sort()) rows.push([`gtype = ${gt || "—"}`, S.filter(s => s.gtype === gt)]);
@@ -225,12 +225,23 @@ function renderStats() {
     const q = [dAll.p25, dAll.median, dAll.p75];
     rows.push([`Short games (≤ ${f1(q[0])})`, S.filter(s => s.n <= q[0])]);
     rows.push([`Long games (> ${f1(q[2])})`, S.filter(s => s.n > q[2])]);
+    // Quoridor I/O v2 self-play and arena games can have a komi and a fence handicap: slices by komi (10/10 walls)
+    // and by initial walls. Positive komi favours White. Shown only when some games are non-standard.
+    if (S.some(s => s.rulesLabel)) {
+      const tenTen = S.filter(s => s.wb === STANDARD_WALLS && s.ww === STANDARD_WALLS);
+      for (const k of [...new Set(tenTen.map(s => s.komi))].sort((a, b) => a - b))
+        rows.push([`Komi ${fmtKomi(k)}${k === STANDARD_KOMI ? " (standard)" : ""}, walls 10/10`, tenTen.filter(s => s.komi === k)]);
+      const hc = S.filter(s => s.wb !== STANDARD_WALLS || s.ww !== STANDARD_WALLS);
+      rows.push(["Black has fewer walls", hc.filter(s => s.wb < s.ww)]);
+      rows.push(["White has fewer walls", hc.filter(s => s.ww < s.wb)]);
+    }
     for (const [lab, arr] of rows) {
       if (!arr.length) continue;
       const b = arr.filter(s => s.winner === "B").length / arr.length;
+      const nDraw = arr.filter(s => s.winner !== "B" && s.winner !== "W").length;
       const d = document.createElement("div");
       d.className = "wr-row";
-      d.innerHTML = `<div class="lab">${lab}<small>${arr.length} games</small></div><div><div class="wr-bar"><div style="flex-basis:${100 * b}%;background:${C_B}"></div><div style="flex:1;background:${C_W}"></div></div><div class="wr-nums"><span>B ${pct(b)}</span><span>W ${pct(1 - b)}</span></div></div>`;
+      d.innerHTML = `<div class="lab">${lab}<small>${arr.length} games${nDraw ? ` · ${nDraw} draws` : ""}</small></div><div><div class="wr-bar"><div style="flex-basis:${100 * b}%;background:${C_B}"></div><div style="flex:1;background:${C_W}"></div></div><div class="wr-nums"><span>B ${pct(b)}</span><span>W ${pct(1 - b)}</span></div></div>`;
       c.appendChild(d);
     }
   }

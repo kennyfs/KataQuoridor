@@ -304,16 +304,119 @@ counts only games stopped by `maxMovesPerGame` before their end, which can't hap
 (`modelconfigs.get_quoridor_io_version`, default 1). `is_quoridor()` stays keyed on `"game": "quoridor"`, and the
 presets without `_v2` stay v1 (for existing nets). **The retrain must use a `_v2` preset** (`-model-kind`).
 
-## 5. Step 3: self-play (plan)
+## 5. Step 3: self-play
 
-- **Komi randomization:** most games standard (−0.5), a fraction with a random half-integer komi.
-- **Fence-handicap randomization:** most games 10/10, a fraction with fewer walls for one side.
-- **`forkCompensateKomiProb`:** make fork / side positions fair with `PlayUtils::adjustKomiToEven`, which now works
-  on the Quoridor komi grid (§6.3).
-- **Score utility:** `staticScoreUtilityFactor = 0` (dynamic score utility only), and λ experiments:
-  0 / 0.05 / 0.15 on a small net. The score-utility scale (`atan(u / (scale · 9))`) may need retuning once `u`
-  includes a time bonus.
-- **Metrics:** draw rate, average plies vs. weak opponents (does the engine finish?), first-player win rate, Elo.
+*Implemented except the λ experiments, which need I/O v2 nets (step 2). Code locations in
+[§9](#9-step-3-where-things-live).* Every new randomization and compensation is **off by default in code**, so
+GTP, `match`, the gatekeeper and the step-1 configs create the same games as before; they are on only in
+`cpp/configs/training/selfplay_quoridor_v2.cfg`. (The gatekeeper's scoring of draws changed, §5.4.)
+
+### 5.1 Komi and fence-handicap randomization
+
+For games from the empty board (not forks, side positions or SGF start positions), `GameInitializer` draws,
+**independently**:
+
+| Config key | Default | v2 self-play | Meaning |
+|---|---|---|---|
+| `quoridorKomiRandomProb` | 0 | 0.3 | Probability of a non-standard komi `komiMean ± n` (sign 50/50). |
+| `quoridorKomiRandomWeights` | `0.6,0.3,0.1` | same | Relative weights of n = 1, 2, 3, … (up to 20 entries). |
+| `quoridorFenceHandicapProb` | 0 | 0.1 | Probability that one side (50/50) starts with `n` fewer walls; the other keeps its walls. |
+| `quoridorFenceHandicapWeights` | `0.6,0.3,0.1` | same | Relative weights of n = 1, 2, 3, … (up to 10 entries). |
+
+With `komiMean = -0.5` the v2 self-play komi is −0.5 in 70% of normal games and −1.5 / +0.5 (18%), −2.5 / +1.5
+(9%), −3.5 / +2.5 (3%) otherwise; 10% of normal games have 9, 8 or 7 walls (60/30/10) for one side. The komi goes
+into `ExtraBlackAndKomi::komiMean` (so the policy-init and compensation steps of `Play::runGame` start from it) and
+the walls into the game's `Rules` (so SGF `WB`/`WW` and the training data's rules carry them). Fork games keep the
+komi and walls of the game they fork from. Measured over 40000 sampled games (`runtests quoridorselfplay`, fixed
+seed): random komi 29.96%, n = 1/2/3 60.8/29.7/9.5%, sign 49.6% positive; fence handicap 10.19%, n = 1/2/3
+59.9/30.2/9.9%, Black handicapped 51.0%; both 3.18% (independent: 3%). In a 400-game smoke run with the v2 config,
+the SGFs had 69% `KM[-0.5]` (forks included) and 12% non-10/10 walls.
+
+**Why new keys rather than upstream's `komiStdev` / `komiBigStdevProb` / `komiBigStdev`:** those draw a truncated
+Gaussian (scaled by board size), randomly rounded to the komi grid. They can't give "exactly standard in 70% of
+games, otherwise ±1..3 with given weights": a Gaussian's rounding puts much of its mass back on −0.5, its tail goes
+past ±3, and the fraction of standard games and the offset weights can't be set separately. The upstream keys still
+work (applied on top, with the Quoridor komi rounding), and are 0 in the Quoridor configs.
+
+### 5.2 Komi compensation
+
+| Config key | Default | v2 self-play | Games |
+|---|---|---|---|
+| `forkCompensateKomiProb` | = `handicapCompensateKomiProb` (upstream) | 0.8 | Fork games (early forks and forks): a fair komi for the fork position. |
+| `handicapCompensateKomiProb` | 0 | 0.5 | Fence-handicap games: a fair komi after the handicap is applied (it replaces a random komi). |
+| `compensateKomiVisits` | 20 | 20 | Visits per evaluation of the fair-komi search. |
+
+A fair komi comes from `PlayUtils::adjustKomiToEven`: a few steps along the lead, then a binary search on the
+winrate over the Quoridor komi grid (steps of 1), interpolated between the two neighbouring komis and randomly
+rounded to one of them (`PlayUtils::findEvenKomi`, `roundKomiRandomly`).
+
+**Only with nets that see komi.** `Play::runGame` compensates only if both nets have Quoridor I/O version ≥ 2
+(`PlayUtils::nnEvalSeesKomi`, from the model header). With an **I/O v1 net it is a no-op**, logged once
+("WARNING: skipping komi compensation …"): the game keeps the komi `GameInitializer` gave it. v1 nets see komi only
+at terminal nodes, so a fair-komi search with them would drift. The same gate covers `compensateAfterPolicyInitProb`
+and `fancyKomiVarying` (both 0 / off in the Quoridor configs). A no-op rather than an error, so the v2 config can
+be smoke-tested with the 0.1.0 net. Test gap: there is no I/O v2 test net yet, so `runtests quoridorselfplay` tests
+the search on a synthetic evaluator that sees komi (lead = t₀ + komi; it finds the fair komi −t₀ within 0.2 for t₀
+from −12.2 to +19.6) and the no-op with the random test net, which reports I/O v1 (`MAX_SUPPORTED_IO_VERSION`).
+When step 2 raises that to 2, the same test runs the real compensation with the random net instead.
+
+### 5.3 The v2 configs
+
+`cpp/configs/training/selfplay_quoridor_v2.cfg` is `selfplay_quoridor.cfg` with:
+
+- `maxPlies = 300`;
+- `timeBonusPerPly = 0.05`, a **placeholder**: λ is a property of the training run and will be chosen by experiment
+  (0 / 0.05 / 0.15 on a small net);
+- `staticScoreUtilityFactor = 0` (dynamic score utility only; `dynamicScoreUtilityFactor = 0.30` as before): with
+  λ > 0, `u` at the start is about λ·maxPlies (+15 for 0.05), which the dynamic utility re-centres;
+- the randomizations and compensations of §5.1 and §5.2.
+
+`gatekeeper_quoridor_v2.cfg` is `gatekeeper_quoridor.cfg` with the same `maxPlies`, `timeBonusPerPly` and
+`staticScoreUtilityFactor = 0`. `gtp_quoridor.cfg` keeps the standard rules, with a comment that `timeBonusPerPly`
+must be the λ the net was trained with.
+
+### 5.4 Gatekeeper
+
+- A game without a winner (the `maxPlies` draw, or a game cut off early) scores **exactly 0.5** for each side
+  (`PlayUtils::whitePointsOfGame`), no longer `0.5·noResultUtilityForWhite + 0.5` (this settles the §7 question).
+  Rule draws, cut-off games and Black's wins are counted and logged separately:
+  `Game stats for A vs B: N games, D decisive (K black wins), R draws by maxPlies, C cut off, avg game length L`.
+- Gatekeeper games are always the **standard game** (komi −0.5, 10/10 walls): the gatekeeper refuses a config that
+  can create anything else (`GameInitializer::mayCreateNonStandardGames`: komi or fence randomization, komi noise,
+  `komiAuto`, a non-standard `komiMean` or initial walls).
+
+### 5.5 Self-play stats
+
+Every `logGamesEvery` started games, and at a net's final cleanup, self-play logs per model, next to the
+started / finished / cutoff line:
+
+    Quoridor stats for <model>: completed N, draws D (rate r), avg plies P, black win rate in normal standard games
+    b (k/n), by komi (10/10 walls): -1.5 0.778 (21/27) -0.5 0.622 (102/164) +0.5 0.385 (10/26) ..., fence handicap
+    f (k/n)
+
+All completed games count, including those not written to training data (draws while
+`Play::DISCARD_MAX_PLIES_DRAWS` is true). "Normal" games are `FinishedGameData::MODE_NORMAL` (not forks); plies
+are counted from the real game start. Training data is unchanged by step 3.
+
+### 5.6 Arena and viewer
+
+- `python/quoridor_arena`: komi and initial walls per game, globally (roster `"rules"`, `--komi`,
+  `--black-walls`, `--white-walls`) or per pair (roster `"pair_rules"`), sent through QTP to both engines and the
+  arbiter. Engines without support (SimpleQuoridor; roster `"supports_rules"`) only play standard games. SGFs take
+  `KM` / `WB` / `WW` / `RE` from the arbiter's `printsgf` (the `KM[0]` / integer-margin workaround of §7 is gone),
+  and an arbiter rule draw is a draw. Details in [Evaluation.md](Evaluation.md#komi-and-fence-handicap).
+- `python/sgfs_viewer`: komi and initial walls in the game list and info panel when not standard, walls counters
+  from the initial walls, and win-rate slices by komi and by fence handicap on the stats page.
+
+### 5.7 Still to do (after merging step 2)
+
+- **λ experiments:** self-play runs with `timeBonusPerPly` 0 / 0.05 / 0.15 on a small v2 net, the gatekeeper with the
+  same λ per run; compare draw rate and average plies vs weak opponents (arena), first-player win rate by komi
+  (self-play stats), and Elo (arena, standard game). Retune `dynamicScoreCenterScale` if the score utility is too
+  weak or too strong with λ > 0 (§7).
+- Check the compensation end to end with a v2 net (the log should no longer warn, fork games should end nearer
+  50% by komi bucket).
+- If draws are written to training data (step 2), the self-play stats need no change (they already count draws).
 
 ## 6. Step 1: where things live
 
@@ -455,3 +558,18 @@ Open points after step 2:
   plies expect many draws early in the retrain. Draw rows have no lead target, so the lead head learns from
   decisive games only.
 - **CUDA parity for v2** was not run in step 2 (Eigen FP32 only); `scripts/cuda_parity.sh` covers v1 and v2.
+
+## 9. Step 3: where things live
+
+| What | Where |
+|---|---|
+| Komi / fence-handicap randomization, config keys | `GameInitializer::initShared`, `createGameSharedUnsynchronized` (`cpp/program/play.{h,cpp}`) |
+| Gatekeeper's standard-game check | `GameInitializer::mayCreateNonStandardGames`; `cpp/command/gatekeeper.cpp` |
+| Compensation gate for I/O v1 nets | `Play::runGame` (`canCompensateKomi`); `PlayUtils::nnEvalSeesKomi`, `MIN_QUORIDOR_IO_VERSION_SEEING_KOMI` |
+| Fair-komi search, random rounding | `PlayUtils::findEvenKomi`, `roundKomiRandomly`, used by `adjustKomiToEven` / `computeLead` (`cpp/program/playutils.{h,cpp}`) |
+| Gatekeeper points | `PlayUtils::whitePointsOfGame`; `NetAndStuff::runWriteDataLoop` (`cpp/command/gatekeeper.cpp`) |
+| Self-play stats | `SelfplayManager::countQuoridorGameResult`, `quoridorStatsSummary` (`cpp/program/selfplaymanager.{h,cpp}`), called from `cpp/command/selfplay.cpp` |
+| Configs | `cpp/configs/training/selfplay_quoridor_v2.cfg`, `gatekeeper_quoridor_v2.cfg`; λ note in `cpp/configs/gtp_quoridor.cfg` |
+| C++ tests | `cpp/tests/testquoridorselfplay.cpp` (`runtests quoridorselfplay`) |
+| Arena | `referee.py` (`make_rules`, `RulesState`, `play_game(rules=...)`, result from the arbiter's `RE`), `arena.py` (roster `rules` / `pair_rules` / `supports_rules`, `--komi` / `--black-walls` / `--white-walls`, rules in game ids), `elo.py` (Rules column); tests `tests/test_arena.py`, `tests/test_referee_rules.py`, mock engine `tests/mock_engine.py` |
+| Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`), `viewer.js` (tags, info, walls counters), `stats.js` (win-rate slices) |

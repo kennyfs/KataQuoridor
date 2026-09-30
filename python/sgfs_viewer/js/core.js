@@ -43,8 +43,24 @@ function headerOf(line, i) {
   const result = re ? re[1] : "?";
   const pb = (/PB\[([^\]]*)\]/.exec(line) || [])[1] || "", pw = (/PW\[([^\]]*)\]/.exec(line) || [])[1] || "";
   return { i, result, winner: result[0], nMoves, gtype: kv.gtype || "", startTurnIdx: +kv.startTurnIdx || 0, pb, pw,
-    winnerModel: result[0] === "B" ? pb : result[0] === "W" ? pw : "" };
+    winnerModel: result[0] === "B" ? pb : result[0] === "W" ? pw : "", ...rulesOf(line) };
 }
+
+// Komi and initial walls (docs/QuoridorIOv2.md): KM (missing, or KM[0] as 0.1.0 wrote it: the standard -0.5),
+// WB / WW (missing: 10). rulesLabel is "" for the standard game.
+const STANDARD_KOMI = -0.5, STANDARD_WALLS = 10;
+function rulesOf(line) {
+  const semi = line.indexOf(";", 2), root = semi < 0 ? line : line.slice(0, semi);
+  const prop = p => (new RegExp("(?<![A-Z])" + p + "\\[([^\\]]*)\\]").exec(root) || [])[1];
+  let komi = parseFloat(prop("KM"));
+  if (!isFinite(komi) || komi === 0) komi = STANDARD_KOMI;
+  const wb = parseInt(prop("WB") ?? STANDARD_WALLS, 10), ww = parseInt(prop("WW") ?? STANDARD_WALLS, 10);
+  const parts = [];
+  if (komi !== STANDARD_KOMI) parts.push(`komi ${fmtKomi(komi)}`);
+  if (wb !== STANDARD_WALLS || ww !== STANDARD_WALLS) parts.push(`walls ${wb}/${ww}`);
+  return { komi, wb, ww, rulesLabel: parts.join(" · ") };
+}
+const fmtKomi = k => (k > 0 ? "+" : k < 0 ? "−" : "") + Math.abs(k);
 
 function parseGame(line) {
   const semi = line.indexOf(";", 2);

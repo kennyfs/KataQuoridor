@@ -249,9 +249,19 @@ def make_report(out_dir, names=None, anchor="sq-random", resamples=1000, seed=0,
         lines.append("| %d | %s | %s |" % (r, a, " | ".join(cells)))
     lines.append("")
 
-    # Per pair
-    lines += ["## Pairs", "", "| Pair | Games | Score (first) | Black wins | Draws | Avg plies | Avg margin | Other ends |",
-              "|---|---:|---:|---:|---:|---:|---:|---|"]
+    # Per pair. Games without komi / walls fields (older runs) are standard games.
+    def rules_label(g):
+        k, bw, ww = g.get("komi", -0.5), g.get("black_walls", 10), g.get("white_walls", 10)
+        return "standard" if (k, bw, ww) == (-0.5, 10, 10) else "komi %+g, walls %d/%d" % (k, bw, ww)
+
+    show_rules = any(rules_label(g) != "standard" for g in games)
+    lines += ["## Pairs", ""]
+    if show_rules:
+        lines += ["Rules: komi (White wins iff tempo + komi > 0; standard -0.5) and Black/White initial walls. "
+                  "Avg margin is the distance of the pawn that did not arrive.", ""]
+    lines += ["| Pair | " + ("Rules | " if show_rules else "") +
+              "Games | Score (first) | Black wins | Draws | Avg plies | Avg margin | Other ends |",
+              "|---|" + ("---|" if show_rules else "") + "---:|---:|---:|---:|---:|---:|---|"]
     for (a, b), gs in sorted(pair_games.items(), key=lambda kv: (order.index(kv[0][0]), order.index(kv[0][1]))):
         k = len(gs)
         sc = sum(game_score(g, a) for g in gs) / k
@@ -261,8 +271,9 @@ def make_report(out_dir, names=None, anchor="sq-random", resamples=1000, seed=0,
         decided = [g["margin"] for g in gs if g["winner"] is not None]
         mg = sum(decided) / len(decided) if decided else float("nan")
         other_ends = collections.Counter(g["reason"] for g in gs if g["reason"] != "goal")
-        lines.append("| %s vs %s | %d | %s | %s | %s | %.1f | %s | %s |" % (
-            a, b, k, _pct(sc), _pct(bw), _pct(dr), pl, _num(mg, "%.1f"),
+        rules_cell = ", ".join(sorted({rules_label(g) for g in gs})) + " | " if show_rules else ""
+        lines.append("| %s vs %s | %s%d | %s | %s | %s | %.1f | %s | %s |" % (
+            a, b, rules_cell, k, _pct(sc), _pct(bw), _pct(dr), pl, _num(mg, "%.1f"),
             ", ".join("%s %d" % kv for kv in sorted(other_ends.items()))))
     lines.append("")
     return "\n".join(lines) + "\n"

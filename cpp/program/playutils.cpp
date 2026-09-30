@@ -451,24 +451,31 @@ static std::pair<double,double> evalKomi(
   return result;
 }
 
-static double getNaiveEvenKomiHelper(
-  map<float,std::pair<double,double>>& scoreWLCache,
-  Search* botB,
-  Search* botW,
-  const Board& board,
-  BoardHistory& hist,
-  Player pla,
-  int64_t numVisits,
-  const OtherGameProperties& otherGameProps
-) {
-  float oldKomi = hist.rules.komi;
+double PlayUtils::whitePointsOfGame(const BoardHistory& endHist) {
+  if(endHist.isGameFinished && !endHist.isNoResult) {
+    if(endHist.winner == P_WHITE)
+      return 1.0;
+    if(endHist.winner == P_BLACK)
+      return 0.0;
+  }
+  return 0.5;
+}
+
+bool PlayUtils::nnEvalSeesKomi(const NNEvaluator* nnEval) {
+  return nnEval != NULL && nnEval->getInputsVersion() >= MIN_QUORIDOR_IO_VERSION_SEEING_KOMI;
+}
+
+//KataQuoridor: the upstream helper, with the search's komi tracked in curKomi instead of hist, so that it can run on
+//any evaluator (see findEvenKomi).
+double PlayUtils::findEvenKomi(const std::function<std::pair<double,double>(float)>& leadAndWinLossOfKomi, float startKomi) {
+  float curKomi = Rules::roundKomi(startKomi);
 
   //A few times iterate based on expected score a few times to hopefully get a value close to fair
   double lastShift = 0.0;
   double lastWinLoss = 0.0;
   double lastLead = 0.0;
   for(int i = 0; i<3; i++) {
-    std::pair<double,double> result = evalKomi(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps,hist.rules.komi);
+    std::pair<double,double> result = leadAndWinLossOfKomi(curKomi);
     double lead = result.first;
     double winLoss = result.second;
 
@@ -479,17 +486,12 @@ static double getNaiveEvenKomiHelper(
          (lastWinLoss > 0 && winLoss > lastWinLoss + 0.1) ||
          (lastWinLoss < 0 && winLoss < lastWinLoss - 0.1)
       ) {
-        float fairKomi = PlayUtils::roundAndClipKomi(hist.rules.komi - lastShift * 0.5f, board);
-        hist.setKomi(fairKomi);
-        // cout << "STOP" << endl;
-        // cout << lastLead << " " << lead << " " << lastWinLoss << " " << winLoss << endl;
+        curKomi = Rules::roundKomi(curKomi - lastShift * 0.5f);
         break;
       }
     }
     lastLead = lead;
     lastWinLoss = winLoss;
-
-    // cout << hist.rules.komi << " " << lead << " " << winLoss << endl;
 
     //Shift by the predicted lead
     double shift = -lead;
@@ -504,9 +506,7 @@ static double getNaiveEvenKomiHelper(
     if((shift > 0 && winLoss > 0) || (shift < 0 && lead < 0))
       break;
 
-    // cout << "Shifting by " << shift << endl;
-    float fairKomi = PlayUtils::roundAndClipKomi(hist.rules.komi + shift, board);
-    hist.setKomi(fairKomi);
+    curKomi = Rules::roundKomi(curKomi + shift);
 
     //After a small shift, break out to the binary search.
     if(std::fabs(shift) < 16.0)
@@ -515,10 +515,7 @@ static double getNaiveEvenKomiHelper(
 
   //Try a small window and do a binary search
   auto evalWinLoss = [&](double delta) {
-    double newKomi = hist.rules.komi + delta;
-    double winLoss = evalKomi(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps,PlayUtils::roundAndClipKomi(newKomi,board)).second;
-    // cout << "Delta " << delta << " wr " << winLoss << endl;
-    return winLoss;
+    return leadAndWinLossOfKomi(Rules::roundKomi(curKomi + delta)).second;
   };
 
   double lowerDelta;
@@ -583,10 +580,31 @@ static double getNaiveEvenKomiHelper(
   else
     finalDelta = lowerDelta + (upperDelta - lowerDelta) * (0-lowerWinLoss) / (upperWinLoss-lowerWinLoss);
 
-  double newKomi = hist.rules.komi + finalDelta;
-  // cout << "Final " << finalDelta << " " << newKomi << endl;
+  return curKomi + finalDelta;
+}
 
-  hist.setKomi(oldKomi);
+float PlayUtils::roundKomiRandomly(double komi, Rand& rand) {
+  double lower = floor(komi - 0.5) + 0.5;
+  double upper = lower + 1.0;
+  return Rules::roundKomi(rand.nextBool((komi - lower) / (upper - lower)) ? upper : lower);
+}
+
+static double getNaiveEvenKomiHelper(
+  map<float,std::pair<double,double>>& scoreWLCache,
+  Search* botB,
+  Search* botW,
+  const Board& board,
+  BoardHistory& hist,
+  Player pla,
+  int64_t numVisits,
+  const OtherGameProperties& otherGameProps
+) {
+  float oldKomi = hist.rules.komi;
+  double newKomi = PlayUtils::findEvenKomi(
+    [&](float komi) { return evalKomi(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps,komi); },
+    oldKomi
+  );
+  testAssert(hist.rules.komi == oldKomi);
   return newKomi;
 }
 
@@ -603,15 +621,11 @@ void PlayUtils::adjustKomiToEven(
   map<float,std::pair<double,double>> scoreWLCache;
   double newKomi = getNaiveEvenKomiHelper(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps);
   //KataQuoridor: randomly round to one of the two neighbouring valid komis (n + 0.5).
-  double lower = floor(newKomi - 0.5) + 0.5;
-  double upper = lower + 1.0;
-  if(rand.nextBool((newKomi - lower) / (upper - lower)))
-    newKomi = upper;
-  else
-    newKomi = lower;
-  hist.setKomi(PlayUtils::roundAndClipKomi(newKomi,board));
+  hist.setKomi(PlayUtils::roundKomiRandomly(newKomi,rand));
 }
 
+//KataQuoridor: no area-scoring parity to smooth over; the lead moves in steps of one tempo like komi (upstream's
+//smoothing for coarse granularity is removed).
 float PlayUtils::computeLead(
   Search* botB,
   Search* botW,
@@ -624,48 +638,8 @@ float PlayUtils::computeLead(
   map<float,std::pair<double,double>> scoreWLCache;
   float oldKomi = hist.rules.komi;
   double naiveKomi = getNaiveEvenKomiHelper(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps);
-
-  //KataQuoridor: no area-scoring parity to smooth over; the lead moves in steps of one tempo like komi.
-  bool granularityIsCoarse = false;
-  if(!granularityIsCoarse) {
-    testAssert(hist.rules.komi == oldKomi);
-    return (float)(oldKomi - naiveKomi);
-  }
-
-  auto evalWinLoss = [&](double newKomi) {
-    double winLoss = evalKomi(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps,PlayUtils::roundAndClipKomi(newKomi,board)).second;
-    // cout << "Delta " << delta << " wr " << winLoss << endl;
-    return winLoss;
-  };
-
-  //Smooth over area scoring 2-point granularity
-
-  //If komi is exactly an integer, then we're good.
-  if(naiveKomi == round(naiveKomi)) {
-    testAssert(hist.rules.komi == oldKomi);
-    return (float)(oldKomi - naiveKomi);
-  }
-
-  double lower = floor(naiveKomi * 2.0) * 0.5;
-  double upper = lower + 0.5;
-
-  //Average out the oscillation
-  double lowerWinLoss = 0.5 * (evalWinLoss(upper) + evalWinLoss(lower-0.5));
-  double upperWinLoss = 0.5 * (evalWinLoss(upper + 0.5) + evalWinLoss(lower));
-
-  //If the winLoss are crossed, potentially due to noise, then just pick the average
-  double result;
-  if(lowerWinLoss >= upperWinLoss - 1e-30)
-    result = 0.5 * (lower + upper);
-  else {
-    //Interpolate
-    result = lower + (upper - lower) * (0-lowerWinLoss) / (upperWinLoss-lowerWinLoss);
-    //Bound the result to be within lower-0.5 and upper+0.5
-    if(result < lower-0.5) result = lower-0.5;
-    if(result > upper+0.5) result = upper+0.5;
-  }
   testAssert(hist.rules.komi == oldKomi);
-  return (float)(oldKomi - result);
+  return (float)(oldKomi - naiveKomi);
 }
 
 
