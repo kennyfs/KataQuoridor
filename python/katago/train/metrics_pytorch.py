@@ -1108,13 +1108,25 @@ class Metrics:
                 global_weight,
             ).sum()
 
-            shortterm_value_actual = target_global_nc[:, 4] - target_global_nc[:, 5]
-            shortterm_value_pred = torch.nn.functional.softmax(td_value_logits[:, 0, :].detach(), dim=1)
+            # Short-term optimistic policy, as upstream: weight by the short-term (horizon index 2,
+            # globalTargetsNC[12:16]) value or margin outcome being around 1.5 sigma better than expected.
+            # There is no TD-margin head, so the margin excess is measured against the game-margin
+            # prediction, which is also what the shortterm margin error head is trained against.
+            shortterm_value_actual = target_global_nc[:, 12] - target_global_nc[:, 13]
+            shortterm_value_pred = torch.nn.functional.softmax(td_value_logits[:, 2, :].detach(), dim=1)
             shortterm_value_pred = shortterm_value_pred[:, 0] - shortterm_value_pred[:, 1]
-            shortterm_value_excess = shortterm_value_actual - shortterm_value_pred
+            shortterm_value_stdevs_excess = (shortterm_value_actual - shortterm_value_pred) / torch.sqrt(pred_shortterm_value_error.detach() + 0.0001)
+            shortterm_margin_stdevs_excess = (target_global_nc[:, 15] - pred_game_margin.detach()) / torch.sqrt(pred_shortterm_margin_error.detach() + 0.25)
             target_weight_shortoptimistic_policy = torch.clamp(
-                torch.sigmoid((shortterm_value_excess - 0.5) * 3.0), min=0.0, max=1.0
-            ) * target_weight_policy_player
+                torch.sigmoid((shortterm_value_stdevs_excess - 1.5) * 3.0) + torch.sigmoid((shortterm_margin_stdevs_excess - 1.5) * 3.0),
+                min=0.0,
+                max=1.0,
+            )
+            target_weight_shortoptimistic_policy = (
+                target_weight_shortoptimistic_policy
+                * target_weight_policy_player # game has normal target
+                * target_global_nc[:, 27] # and the game actually ended, not a side position
+            )
             loss_shortoptimistic_policy = self.loss_policy_player_samplewise(
                 policy_logits[:, 5, :],
                 target_policy_player,

@@ -172,6 +172,51 @@ def test_quoridor_backward_and_gradients():
     assert torch.isfinite(model.value_head.conv_wall_graph.weight.grad).all()
 
 
+def test_quoridor_shortterm_optimistic_policy_weight_uses_short_horizon():
+    # The short-term optimistic policy (exported as the search's optimistic policy channel) is weighted by how
+    # much better than expected the short-term TD target turned out: horizon index 2, globalTargetsNC[12:16],
+    # whose nowFactor 1/(1 + 81*0.016) is the largest. globalTargetsNC[4:8] is the longest horizon.
+    torch.manual_seed(0)
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor"]
+    model = Model(cfg, pos_len=9)
+    model.initialize()
+    model.eval()
+    metrics = Metrics(world_size=1, raw_model=model)
+
+    def shortopt_weight(short_win, long_win):
+        spatial = torch.zeros(1, 17, 9, 9)
+        spatial[:, 0, :, :] = 1.0
+        with torch.no_grad():
+            post = model.postprocess_output(model(spatial, torch.zeros(1, 15)))
+        g = torch.zeros(1, 80)
+        g[:, 0:2] = 0.5
+        g[:, 4:6] = torch.tensor([long_win, 1.0 - long_win])
+        g[:, 8:10] = 0.5
+        g[:, 12:14] = torch.tensor([short_win, 1.0 - short_win])
+        g[:, 16:18] = 0.5
+        g[:, 25] = 1.0  # global weight
+        g[:, 26] = 1.0  # p0 weight
+        g[:, 27] = 1.0  # game finished, not a side position
+        batch = {
+            "binaryInputNCHW": spatial,
+            "policyTargetsNCMove": torch.zeros(1, 2, 243),
+            "globalTargetsNC": g,
+            "valueTargetsNCHW": torch.zeros(1, 4, 9, 9),
+        }
+        batch["policyTargetsNCMove"][:, :, 0] = 1.0
+        results = metrics.metrics_dict_batchwise(
+            raw_model=model, model_output_postprocessed_byheads=post, extra_outputs=None, batch=batch,
+            is_training=False, soft_policy_weight_scale=1.0, disable_optimistic_policy=False,
+            meta_kata_only_soft_policy=False, value_loss_scale=1.5, td_value_loss_scales=[0.2, 0.2, 0.2, 0.2],
+            seki_loss_scale=1.0, variance_time_loss_scale=1.0, main_loss_scale=1.0, intermediate_loss_scale=0.25,
+            include_model_norms=False,
+        )
+        return float(results["p0soptw_sum"])
+
+    assert shortopt_weight(short_win=1.0, long_win=0.0) > 0.5
+    assert shortopt_weight(short_win=0.0, long_win=1.0) < 0.1
+
+
 def test_quoridor_symmetries():
     B = 3
     # 1. Spatial symmetry (channels 14..16 are 8x8 wall anchors and domain mask; row 8/col 8 are 0)
