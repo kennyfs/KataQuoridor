@@ -2,11 +2,12 @@
  * nnparity.cpp
  * NN parity harness (docs/KataQuoridor_Review_and_Roadmap.md §5 Phase 0 step 4).
  *
- *   katago dumpnninputs -n 200 -seed parity -output rows.npz
- *     Plays random games and writes, for a sample of non-terminal positions, the V1 input rows exactly as
- *     QuoridorNN::fillRow produces them, the legal moves in search space, and the raw board state (so that
- *     Python can re-derive the features and the legal moves independently). It also writes the same rows encoded
- *     the way the training data writer stores them (train* arrays), for the train/inference input parity test.
+ *   katago dumpnninputs -n 200 -seed parity -io-version 2 -output rows.npz
+ *     Plays random games and writes, for a sample of non-terminal positions, the input rows of the given Quoridor
+ *     I/O version (default: the latest) exactly as QuoridorNN::fillRow produces them, the legal moves in search
+ *     space, and the raw board state and rules (so that Python can re-derive the features and the legal moves
+ *     independently). For the training I/O version it also writes the same rows encoded the way the training data
+ *     writer stores them (train* arrays), for the train/inference input parity test.
  *
  *   katago evalnnparity -model x.bin.gz -n 200 -seed parity -symmetry 0 -output out.npz [-config ...]
  *     Regenerates the same positions (same -n and -seed) and evaluates each one through NNEvaluator, which is
@@ -52,18 +53,23 @@ static bool isTerminal(const BoardHistory& hist) {
 static vector<ParityPosition> generatePositions(int numRows, const string& seed) {
   Rand rand("nnparity:" + seed);
   vector<ParityPosition> out;
-  const int maxPlies = 300;
   for(int game = 0; (int)out.size() < numRows; game++) {
     // Same mix as the rule fuzz test: 0 = uniform over legal moves, 1 = pawn move half the time,
     // 2 = mostly shortest-path pawn moves. This covers wall-heavy middlegames, jumps, and endgames.
     int style = game % 3;
+    // Every other game from game 1 on has non-standard rules, for the I/O v2 komi and plies-until-draw inputs.
+    Rules rules = Rules::getQuoridorRules();
+    if(game % 2 == 1) {
+      rules.komi = (float)(rand.nextInt(-6, 5) + 0.5);
+      rules.maxPlies = rand.nextInt(20, 300);
+    }
     Board board;
     Player pla = P_BLACK;
-    BoardHistory hist(board, pla, Rules::getQuoridorRules(), 0, BoardHistoryModes());
-    for(int ply = 0; ply < maxPlies && !isTerminal(hist) && (int)out.size() < numRows; ply++) {
+    BoardHistory hist(board, pla, rules, 0, BoardHistoryModes());
+    while(!isTerminal(hist) && (int)out.size() < numRows) {
       // Once both players are out of walls games get long and repetitive, so sample those more sparsely.
       bool anyWallsLeft = board.blackFences > 0 || board.whiteFences > 0;
-      if((game == 0 && ply == 0) || rand.nextBool(anyWallsLeft ? 0.5 : 0.05))
+      if((game == 0 && hist.moveHistory.empty()) || rand.nextBool(anyWallsLeft ? 0.5 : 0.05))
         out.push_back(ParityPosition{board, hist, pla});
 
       vector<Loc> moves;
@@ -109,18 +115,23 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
 
   int numRows;
   string seed;
+  int ioVersion;
   string outputFile;
   try {
     KataGoCommandLine cmd("Dump Quoridor NN input rows for random positions, for the NN parity test.");
     TCLAP::ValueArg<int> numRowsArg("n", "num-rows", "Number of positions to dump", false, 200, "N");
     TCLAP::ValueArg<string> seedArg("", "seed", "Seed for the random games", false, "parity", "SEED");
+    TCLAP::ValueArg<int> ioVersionArg(
+      "", "io-version", "Quoridor I/O version of the input rows", false, QuoridorNN::MAX_SUPPORTED_IO_VERSION, "N");
     TCLAP::ValueArg<string> outputArg("", "output", "Output .npz file", true, string(), "FILE");
     cmd.add(numRowsArg);
     cmd.add(seedArg);
+    cmd.add(ioVersionArg);
     cmd.add(outputArg);
     cmd.parseArgs(args);
     numRows = numRowsArg.getValue();
     seed = seedArg.getValue();
+    ioVersion = ioVersionArg.getValue();
     outputFile = outputArg.getValue();
   }
   catch(TCLAP::ArgException& e) {
@@ -131,8 +142,12 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
     cerr << "-n must be positive" << endl;
     return 1;
   }
+  if(ioVersion < 1 || ioVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION) {
+    cerr << "-io-version must be between 1 and " << QuoridorNN::MAX_SUPPORTED_IO_VERSION << endl;
+    return 1;
+  }
+  const bool writeTrainRows = ioVersion == QuoridorNN::TRAINING_IO_VERSION;
 
-  const int ioVersion = QuoridorNN::MAX_SUPPORTED_IO_VERSION;
   const int C = QuoridorNN::numSpatialFeatures(ioVersion);
   const int G = QuoridorNN::numGlobalFeatures(ioVersion);
   const int X = QuoridorNN::MODEL_LEN;
@@ -148,6 +163,8 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   NumpyBuffer<int8_t> fencesLeft({numRows, 2});   // black, white
   NumpyBuffer<uint8_t> hWalls({numRows, 8, 8});   // [r][c] anchors, board coords
   NumpyBuffer<uint8_t> vWalls({numRows, 8, 8});
+  NumpyBuffer<int32_t> plyInfo({numRows, 2});     // ply (BoardHistory::getCurrentTurnNumber), Rules::maxPlies
+  NumpyBuffer<float> komi({numRows, 1});          // Rules::komi (White's view)
   // Same rows as TrainingWriteBuffers stores them (packed bits + raw S8-S11 distances + globals).
   const int packedArea = (X * Y + 7) / 8;
   NumpyBuffer<uint8_t> trainPacked({numRows, C, packedArea});
@@ -160,12 +177,17 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
     const ParityPosition& p = positions[i];
     const Board& b = p.board;
     QuoridorNN::fillRow(b, p.hist, p.pla, nnInputParams, ioVersion, false, spatial.data + (size_t)i * C * X * Y, global.data + (size_t)i * G);
-    TrainingWriteBuffers::fillQuoridorInputRow(
-      b, p.hist, p.pla, nnInputParams, trainScratch.data(),
-      trainPacked.data + (size_t)i * C * packedArea,
-      trainDist.data + (size_t)i * QuoridorNN::NUM_DIST_CHANNELS * X * Y,
-      trainGlobal.data + (size_t)i * G
-    );
+    if(writeTrainRows) {
+      TrainingWriteBuffers::fillQuoridorInputRow(
+        b, p.hist, p.pla, nnInputParams, trainScratch.data(),
+        trainPacked.data + (size_t)i * C * packedArea,
+        trainDist.data + (size_t)i * QuoridorNN::NUM_DIST_CHANNELS * X * Y,
+        trainGlobal.data + (size_t)i * G
+      );
+    }
+    plyInfo.data[i * 2 + 0] = (int32_t)p.hist.getCurrentTurnNumber();
+    plyInfo.data[i * 2 + 1] = (int32_t)p.hist.rules.maxPlies;
+    komi.data[i] = p.hist.rules.komi;
 
     for(int pos = 0; pos < POLICY_SIZE; pos++) {
       Loc loc = NNPos::posToLoc(pos, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN);
@@ -198,11 +220,15 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   writeArray(zip, "fencesLeft", fencesLeft, numRows);
   writeArray(zip, "hWalls", hWalls, numRows);
   writeArray(zip, "vWalls", vWalls, numRows);
-  writeArray(zip, "trainBinaryInputNCHWPacked", trainPacked, numRows);
-  writeArray(zip, "trainSpatialDistNCHW", trainDist, numRows);
-  writeArray(zip, "trainGlobalInputNC", trainGlobal, numRows);
+  writeArray(zip, "plyInfo", plyInfo, numRows);
+  writeArray(zip, "komi", komi, numRows);
+  if(writeTrainRows) {
+    writeArray(zip, "trainBinaryInputNCHWPacked", trainPacked, numRows);
+    writeArray(zip, "trainSpatialDistNCHW", trainDist, numRows);
+    writeArray(zip, "trainGlobalInputNC", trainGlobal, numRows);
+  }
   zip.close();
-  cout << "Wrote " << numRows << " rows to " << outputFile << endl;
+  cout << "Wrote " << numRows << " I/O v" << ioVersion << " rows to " << outputFile << endl;
   return 0;
 }
 

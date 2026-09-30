@@ -669,29 +669,40 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
   MakeDir::make(outDir);
 
   Rand rand("writesampletrainquoridor");
-  int inputsVersion = 1;
-  int nnXLen = 9;
-  int nnYLen = 9;
+  int inputsVersion = QuoridorNN::TRAINING_IO_VERSION;
+  int nnXLen = QuoridorNN::MODEL_LEN;
+  int nnYLen = QuoridorNN::MODEL_LEN;
+  int numGames = 0;
+  int numDrawnGames = 0;
 
   for(int f = 0; f < numFiles; f++) {
     TrainingWriteBuffers buffers(
-      inputsVersion, rowsPerFile, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+      inputsVersion, rowsPerFile, QuoridorNN::numSpatialFeatures(inputsVersion), QuoridorNN::numGlobalFeatures(inputsVersion),
+      nnXLen, nnYLen, false
     );
 
     while(buffers.curRows < rowsPerFile) {
       Board startBoard(17, 17);
       Player startPla = P_BLACK;
       Rules rules = Rules::getTrompTaylorish();
+      //Some games with a short ply limit, so that the sample data has draws; some with a non-standard komi.
+      if(rand.nextBool(0.3))
+        rules.maxPlies = 12;
+      if(rand.nextBool(0.3))
+        rules.komi = rand.nextBool(0.5) ? 1.5f : -2.5f;
       BoardHistory startHist(startBoard, startPla, rules, 0, BoardHistoryModes(false, false));
 
       vector<Board> posHist;
       posHist.push_back(startBoard);
+      //The history before each move, so rows see the real ply count, komi and rules.
+      vector<BoardHistory> histBeforeTurn;
 
       Board currBoard = startBoard;
       BoardHistory currHist = startHist;
       Player currPla = startPla;
 
-      int maxTurns = 30;
+      //Long enough for every game to end: pawns walk towards their goal whenever they don't place a wall.
+      int maxTurns = 1000;
       int turnsPlayed = 0;
 
       for(int t = 0; t < maxTurns; t++) {
@@ -721,6 +732,7 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
         }
         if(chosenMove == Board::NULL_LOC) break;
 
+        histBeforeTurn.push_back(currHist);
         currHist.makeBoardMoveAssumeLegal(currBoard, chosenMove, currPla, NULL);
         posHist.push_back(currBoard);
         turnsPlayed++;
@@ -729,24 +741,24 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
       }
 
       //NOTE: sample data for tests only (e.g. test_end_to_end_training.py), not real self-play. The game is not
-      //searched and is capped at maxTurns: an unfinished game is declared a Black win, every value target is the
-      //final result with a fixed placeholder margin of +-5 (hasLead set, so it is also the margin target), and the
-      //policy targets are just the moves played. Only the formats and shapes are meaningful, not the values.
-      if(!currHist.isGameFinished) {
-        currHist.isGameFinished = true;
-        currHist.winner = P_BLACK;
-        currHist.isNoResult = false;
-      }
+      //searched: every value target is the final result, and the policy targets are just the moves played. The final
+      //targets (u, s, draws) follow the rules like self-play's; only the formats, shapes and outcome targets are
+      //meaningful, not the policy and value values.
+      testAssert(currHist.isGameFinished && !currHist.isNoResult);
+      numGames++;
+      if(currHist.isDraw())
+        numDrawnGames++;
 
       vector<ValueTargets> whiteValueTargets(turnsPlayed + 1);
       for(size_t i = 0; i <= (size_t)turnsPlayed; i++) {
-        whiteValueTargets[i].win = (currHist.winner == P_WHITE) ? 1.0f : 0.0f;
-        whiteValueTargets[i].loss = (currHist.winner == P_BLACK) ? 1.0f : 0.0f;
+        whiteValueTargets[i].win = (float)ScoreValue::whiteWinsOfWinner(currHist.winner, 0.5);
+        whiteValueTargets[i].loss = 1.0f - whiteValueTargets[i].win;
         whiteValueTargets[i].noResult = 0.0f;
-        whiteValueTargets[i].score = (currHist.winner == P_WHITE) ? 5.0f : -5.0f;
-        whiteValueTargets[i].hasLead = true;
-        whiteValueTargets[i].lead = whiteValueTargets[i].score;
+        whiteValueTargets[i].score = (float)currHist.finalWhiteMinusBlackScore;
       }
+      //As in Play::runGame, only the final targets carry the game's lead.
+      whiteValueTargets[turnsPlayed].hasLead = true;
+      whiteValueTargets[turnsPlayed].lead = (float)currHist.finalWhiteLead;
       vector<QValueTargets> whiteQValueTargets(turnsPlayed + 1);
       NNRawStats nnRawStats;
       nnRawStats.whiteWinLoss = 0.0;
@@ -765,7 +777,8 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
         }
 
         Board bAtTurn = posHist[turn];
-        BoardHistory hAtTurn(bAtTurn, p, rules, turn, BoardHistoryModes(false, false));
+        const BoardHistory& hAtTurn = histBeforeTurn[turn];
+        testAssert(hAtTurn.presumedNextMovePla == p);
 
         buffers.addRow(
           bAtTurn, hAtTurn, p,
@@ -790,6 +803,7 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
     buffers.writeToZipFile(fileName);
     cout << "Wrote " << buffers.curRows << " rows to " << fileName << endl;
   }
+  cout << "Games: " << numGames << ", of which draws: " << numDrawnGames << endl;
 
   ScoreValue::freeTables();
   return 0;

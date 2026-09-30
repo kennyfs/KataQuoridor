@@ -1,16 +1,17 @@
 """NN parity harness (docs/KataQuoridor_Review_and_Roadmap.md §5 Phase 0 step 4).
 
 Pipeline, all driven from here:
-  1. `katago dumpnninputs` plays random games and writes the V1 input rows, the legal moves (in search space,
-     17x17+1 slots) and the raw board state to an .npz.
+  1. `katago dumpnninputs` plays random games (some with non-standard komi and maxPlies) and writes the input rows
+     of each Quoridor I/O version (v1 and v2), the legal moves (in search space, 17x17+1 slots) and the raw board
+     state and rules to an .npz.
   2. The features and legal moves are re-derived here, independently, from the raw board state and compared.
-  3. For a conv net and a transformer net (random init with fixed seeds, output heads scaled up so that the
-     policy is far from uniform), a PyTorch reference policy/value is computed at symmetries 0 and 1, and the
-     model is exported to .bin.gz with export_model_pytorch.py.
+  3. For a conv net and a transformer net of each I/O version (random init with fixed seeds, output heads scaled up
+     so that the policy is far from uniform), a PyTorch reference policy/value is computed at symmetries 0 and 1,
+     and the model is exported to .bin.gz with export_model_pytorch.py.
   4. `katago evalnnparity` evaluates the same positions through NNEvaluator (the path the search uses) on
      whatever backend the binary was built with, and the result is compared with the reference:
      final policy over legal moves and White's win/loss/no-result probabilities, within 1e-4 (FP32), and the
-     score-like outputs (margin mean/lead/stdev, variance time, shortterm errors) within 1e-4 * (1 + |ref|).
+     score-like outputs (score mean/lead/stdev, variance time, shortterm errors) within 1e-4 * (1 + |ref|).
 
 The binary is taken from $KATAGO_BIN, else the most recently built cpp/build*/katago or cpp/katago; the tests
 are skipped if none exists. Set $NN_PARITY_OUTDIR to keep the intermediate files, $NN_PARITY_CONFIG to pass a
@@ -52,7 +53,11 @@ SEARCH_LEN = 17
 POLICY_SIZE = SEARCH_LEN * SEARCH_LEN + 1
 FP32_TOL = float(os.environ.get("NN_PARITY_TOL", "1e-4"))
 # $NN_PARITY_MODELS (comma-separated) restricts the nets, e.g. conv only for CUDA NCHW, which rejects transformers.
-MODEL_CONFIGS = os.environ.get("NN_PARITY_MODELS", "b2c64_quoridor,tf2_b4c192_quoridor").split(",")
+MODEL_CONFIGS = os.environ.get(
+    "NN_PARITY_MODELS", "b2c64_quoridor,tf2_b4c192_quoridor,b2c64_quoridor_v2,tf2_b4c192_quoridor_v2").split(",")
+IO_VERSIONS = [1, 2]
+NUM_SPATIAL = {1: 17, 2: 19}
+NUM_GLOBAL = {1: 15, 2: 17}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -95,15 +100,19 @@ def _run(cmd):
 
 
 @pytest.fixture(scope="module")
-def rows(katago_bin, workdir):
-    path = os.path.join(workdir, "rows.npz")
-    _run([katago_bin, "dumpnninputs", "-n", str(NUM_ROWS), "-seed", SEED, "-output", path])
-    with np.load(path) as d:
-        return {k: d[k] for k in d}
+def rows_by_version(katago_bin, workdir):
+    out = {}
+    for io_version in IO_VERSIONS:
+        path = os.path.join(workdir, f"rows.v{io_version}.npz")
+        _run([katago_bin, "dumpnninputs", "-n", str(NUM_ROWS), "-seed", SEED, "-io-version", str(io_version),
+              "-output", path])
+        with np.load(path) as d:
+            out[io_version] = {k: d[k] for k in d}
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------
-# Independent re-derivation of the V1 features and legal moves from the raw board state
+# Independent re-derivation of the features and legal moves from the raw board state and rules
 
 def _position(rows, i):
     """Board state of row i as a rules.Pos (board coordinates)."""
@@ -147,9 +156,9 @@ def _dist_feature(d):
     return np.where(d < 0, 1.0, np.minimum(1.0, d / 32.0)).astype(np.float32)
 
 
-def python_features(pos):
+def python_features(pos, io_version, ply, max_plies, komi):
     me, opp, h, v = _canonical(pos)
-    spatial = np.zeros((17, 9, 9), dtype=np.float32)  # [channel][row][col], canonical rows
+    spatial = np.zeros((NUM_SPATIAL[io_version], 9, 9), dtype=np.float32)  # [channel][row][col], canonical rows
     spatial[0] = 1.0
     spatial[1, me[1], me[0]] = 1.0
     spatial[2, opp[1], opp[0]] = 1.0
@@ -177,8 +186,15 @@ def python_features(pos):
     for c, r in h:
         spatial[15, r, c] = 1.0
     spatial[16, :8, :8] = 1.0
+    if io_version >= 2:
+        # Legal wall placements for a player with a fence (whatever the fence counts), canonical anchor rows.
+        for c in range(8):
+            for r in range(8):
+                r_canon = 7 - r if pos.to_move == rules.WHITE else r
+                spatial[17, r_canon, c] = rules.wall_ok(pos, c, r, False)
+                spatial[18, r_canon, c] = rules.wall_ok(pos, c, r, True)
 
-    glob_ = np.zeros(15, dtype=np.float32)
+    glob_ = np.zeros(NUM_GLOBAL[io_version], dtype=np.float32)
     mine = pos.walls_left[pos.to_move]
     theirs = pos.walls_left[1 - pos.to_move]
     glob_[0] = 1.0 if pos.to_move == rules.WHITE else 0.0
@@ -193,6 +209,9 @@ def python_features(pos):
     glob_[12] = 1.0 if manhattan % 2 == 1 else -1.0
     glob_[13] = _dist_feature(np.array(my_short))
     glob_[14] = _dist_feature(np.array(opp_short))
+    if io_version >= 2:
+        glob_[15] = max(0, max_plies - ply) / 300.0
+        glob_[16] = (komi if pos.to_move == rules.WHITE else -komi) / 5.0
     return spatial, glob_
 
 
@@ -210,13 +229,19 @@ def python_legal_mask(pos):
     return mask
 
 
-def test_dumped_features_match_python(rows):
+@pytest.mark.parametrize("io_version", IO_VERSIONS)
+def test_dumped_features_match_python(rows_by_version, io_version):
+    rows = rows_by_version[io_version]
     n = rows["binaryInputNCHW"].shape[0]
-    assert rows["binaryInputNCHW"].shape == (n, 17, 9, 9)
-    assert rows["globalInputNC"].shape == (n, 15)
+    assert rows["binaryInputNCHW"].shape == (n, NUM_SPATIAL[io_version], 9, 9)
+    assert rows["globalInputNC"].shape == (n, NUM_GLOBAL[io_version])
+    # The positions include games with other rules and ones close to their ply limit.
+    assert (rows["komi"][:, 0] != -0.5).any() and (rows["plyInfo"][:, 1] != 300).any()
+    assert ((rows["plyInfo"][:, 1] - rows["plyInfo"][:, 0]) < 10).any()
     bad = []
     for i in range(n):
-        spatial, glob_ = python_features(_position(rows, i))
+        ply, max_plies = (int(x) for x in rows["plyInfo"][i])
+        spatial, glob_ = python_features(_position(rows, i), io_version, ply, max_plies, float(rows["komi"][i][0]))
         ds = np.abs(rows["binaryInputNCHW"][i] - spatial)
         dg = np.abs(rows["globalInputNC"][i] - glob_)
         if ds.max() > 1e-6 or dg.max() > 1e-6:
@@ -226,7 +251,8 @@ def test_dumped_features_match_python(rows):
     assert not bad, f"{len(bad)}/{n} rows differ:\n" + "\n".join(bad[:20])
 
 
-def test_dumped_legal_moves_match_python_rules(rows):
+def test_dumped_legal_moves_match_python_rules(rows_by_version):
+    rows = rows_by_version[IO_VERSIONS[-1]]
     n = rows["legalMask"].shape[0]
     bad = []
     for i in range(n):
@@ -280,8 +306,9 @@ def reference_outputs(model, rows, symmetry):
     planes = apply_symmetry_policy_quoridor(out[0][0][:, 0:3].contiguous(), symmetry).double().numpy()
     value_logits = out[0][1].double().numpy()  # [win, loss] for the side to move
     post = model.postprocess_output(out)[0]
-    # Side-to-move margin, margin stdev, variance time, shortterm squared errors (see Model.postprocess_output)
-    margin, vtime, stdev, st_v2, st_s2 = (post[i].double().numpy() for i in (4, 3, 5, 6, 7))
+    # Side-to-move utility score, its stdev, lead, variance time, shortterm squared errors (see
+    # Model.postprocess_output; a v1 net's lead is its score)
+    score, vtime, stdev, st_v2, st_s2, lead = (post[i].double().numpy() for i in (4, 3, 5, 6, 7, 10))
 
     n = planes.shape[0]
     policy = np.full((n, POLICY_SIZE), -1.0)
@@ -298,8 +325,8 @@ def reference_outputs(model, rows, symmetry):
         w = np.exp(value_logits[i] - value_logits[i].max())
         win, loss = w / w.sum()
         value[i] = [win, loss, 0.0] if white else [loss, win, 0.0]
-        white_margin = margin[i] if white else -margin[i]
-        misc[i] = [white_margin, white_margin, stdev[i], vtime[i], np.sqrt(st_v2[i]), np.sqrt(st_s2[i])]
+        sign = 1.0 if white else -1.0
+        misc[i] = [sign * score[i], sign * lead[i], stdev[i], vtime[i], np.sqrt(st_v2[i]), np.sqrt(st_s2[i])]
     return policy, value, misc
 
 
@@ -342,8 +369,9 @@ def compare(rows, ref_policy, ref_value, cpp_policy, cpp_value, ref_misc, cpp_mi
 
 
 @pytest.mark.parametrize("symmetry", [0, 1])
-def test_nn_parity(katago_bin, workdir, rows, exported, symmetry):
+def test_nn_parity(katago_bin, workdir, rows_by_version, exported, symmetry):
     name, model, bin_gz = exported
+    rows = rows_by_version[modelconfigs.get_quoridor_io_version(model.config)]
     ref_policy, ref_value, ref_misc = reference_outputs(model, rows, symmetry)
     out_path = os.path.join(workdir, f"{name}.sym{symmetry}.cpp.npz")
     np.savez(os.path.join(workdir, f"{name}.sym{symmetry}.ref.npz"), policy=ref_policy, value=ref_value)
