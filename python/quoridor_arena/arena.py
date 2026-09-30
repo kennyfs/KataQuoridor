@@ -13,6 +13,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -23,30 +24,43 @@ from .referee import Arbiter, Player, RefereeError, VerifyMismatch, play_game
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
-MAIN_REPO = "/home/kenny/sync/HW/Quoridor/KataQuoridor"
 
 
 # -- roster -------------------------------------------------------------------
+
+UNSET_ENV_MARK = "<unset environment variable "
+_ENV_RE = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+
 
 def _subst(s, variables):
     for _ in range(3):  # allow variables that reference other variables
         for k, v in variables.items():
             s = s.replace("{" + k + "}", str(v))
-    return s
+    # {env:NAME} is the environment variable NAME, for machine-specific paths. An unset one is only an
+    # error for the engines actually used (see check_env_resolved).
+    return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), UNSET_ENV_MARK + m.group(1) + ">"), s)
+
+
+def check_env_resolved(argvs):
+    for argv in argvs:
+        for a in argv:
+            if UNSET_ENV_MARK in a:
+                name = a.split(UNSET_ENV_MARK, 1)[1].split(">", 1)[0]
+                raise SystemExit("environment variable %s is not set but is needed by: %s" % (name, " ".join(argv)))
 
 
 def load_roster(path, out_dir):
     """Returns a list of engine specs: {name, argv, seed, ...}.
 
     Entry kinds:
-      {"name", "command", "args": [...], "seed"}         generic; "{seed}", "{out}", "{repo}" and the
-                                                          roster's "vars" are substituted in command/args
+      {"name", "command", "args": [...], "seed"}         generic; "{seed}", "{out}", "{repo}", the roster's
+                                                          "vars" and "{env:NAME}" are substituted in command/args
       {"name", "katago_model": "<dir name>", "visits": V} shorthand for a KataQuoridor engine built from
                                                           vars katago, models_dir, gtp_config, katago_overrides
     """
     with open(path) as f:
         data = json.load(f)
-    variables = {"repo": REPO, "main_repo": MAIN_REPO, "out": os.path.abspath(out_dir)}
+    variables = {"repo": REPO, "out": os.path.abspath(out_dir)}
     variables.update(data.get("vars", {}))
     specs = []
     names = set()
@@ -353,6 +367,8 @@ def main(argv=None):
         names = [s["name"] for s in specs]
     else:
         pairs = [(names[i], names[j]) for i in range(len(names)) for j in range(i + 1, len(names))]
+
+    check_env_resolved([s["argv"] for s in specs] + [arbiter_argv])
 
     schedule = make_schedule(names, pairs, args.games_per_pair)
     n_openings = (args.games_per_pair + 1) // 2

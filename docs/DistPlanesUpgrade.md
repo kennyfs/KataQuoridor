@@ -42,10 +42,10 @@ nearly all-zero, while inference in C++ fed the continuous values. On average th
 Set these once (adjust to your setup):
 
 ```bash
-REPO=~/桌面/KataQuoridor            # the repo the loop runs from (synchronous_loop.sh copies cpp/katago from it)
+REPO=/path/to/KataQuoridor         # the repo the loop runs from (synchronous_loop.sh copies cpp/katago from it)
 BASEDIR=/path/to/run/basedir       # contains selfplay/, shuffleddata/, train/, models/, ...
 TRAININGNAME=<name>                # the TRAININGNAME passed to synchronous_loop.sh (BASEDIR/train/<name>)
-PY=/home/kenny/ml_venv/bin/python
+PY=/path/to/venv/bin/python        # a Python with torch and numpy
 ```
 
 ### 1. Stop the loop

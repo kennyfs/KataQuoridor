@@ -1,4 +1,5 @@
 import collections
+import glob
 import os
 import random
 import sys
@@ -10,8 +11,18 @@ from quoridor_arena.qtp import QTPEngine
 from quoridor_arena.referee import Arbiter
 
 MOCK = os.path.join(os.path.dirname(__file__), "mock_engine.py")
-ARBITER_KATAGO = "/home/kenny/sync/HW/Quoridor/KataQuoridor/cpp/build/katago"
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+
+def _find_katago():
+    """$KATAGO_BIN, else the most recently built cpp/build*/katago (like python/tests/test_qtp_rules.py)."""
+    if os.environ.get("KATAGO_BIN"):
+        return os.environ["KATAGO_BIN"]
+    candidates = [c for c in glob.glob(os.path.join(REPO, "cpp", "build*", "katago")) if os.path.isfile(c)]
+    return max(candidates, key=os.path.getmtime) if candidates else ""
+
+
+ARBITER_KATAGO = _find_katago()
 
 
 class FakePosition:
@@ -86,7 +97,7 @@ def test_mock_arbiter(tmp_path):
     assert a == b
 
 
-@pytest.mark.skipif(not os.path.exists(ARBITER_KATAGO), reason="katago arbiter binary not built")
+@pytest.mark.skipif(not os.path.isfile(ARBITER_KATAGO), reason="katago binary not found (set KATAGO_BIN or build under cpp/build*/)")
 def test_katago_arbiter(tmp_path):
     argv = [ARBITER_KATAGO, "gtp", "-model", "/dev/null", "-config",
             os.path.join(REPO, "cpp", "configs", "gtp_quoridor.cfg"), "-override-config",

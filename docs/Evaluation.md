@@ -2,7 +2,10 @@
 
 `python/quoridor_arena/` is a match referee that plays any set of QTP engines against each other and
 fits a Bradley-Terry Elo ladder (see §6.5 of `KataQuoridor_Review_and_Roadmap.md`). It needs Python 3
-with numpy (e.g. `/home/kenny/ml_venv/bin/python`); everything else is stdlib.
+with numpy; everything else is stdlib. The default roster takes the machine-specific paths from the
+environment: `KATAQUORIDOR_MODELS_DIR` (the run's `models/` directory) and `SIMPLE_QUORIDOR` (the
+SimpleQuoridor `quoridor_agent` binary); the KataQuoridor binaries are `cpp/build-cuda/katago` (players)
+and `cpp/build/katago` (arbiter) in this checkout.
 
 ```bash
 cd python
@@ -109,7 +112,7 @@ opening in one pair), so the two colour-swapped games are resampled together.
 
 ```json
 {
-  "vars": {"katago": "{main_repo}/cpp/build-cuda/katago", "models_dir": "/home/kenny/q0_run/models", ...},
+  "vars": {"katago": "{repo}/cpp/build-cuda/katago", "models_dir": "{env:KATAQUORIDOR_MODELS_DIR}", ...},
   "engines": [
     {"name": "sq-greedy", "command": "{simple_quoridor}", "args": ["--qtp", "--player", "greedy", "--seed", "{seed}"], "seed": 2},
     {"name": "kq-s16141056-v256", "katago_model": "run1-s16141056-d2846694", "visits": 256}
@@ -118,8 +121,9 @@ opening in one pair), so the two colour-swapped games are resampled together.
 }
 ```
 
-`{seed}`, `{name}`, `{out}`, `{repo}` (this checkout), `{main_repo}` and every key of `vars` are
-substituted in `command` and `args`. A `katago_model` entry expands to
+`{seed}`, `{name}`, `{out}`, `{repo}` (this checkout), every key of `vars` and `{env:NAME}` (the environment
+variable `NAME`) are substituted in `command` and `args`. An unset environment variable is an error only if an
+engine that is actually played (or the arbiter) needs it. A `katago_model` entry expands to
 `{katago} gtp -model {models_dir}/<model>/model.bin.gz -config {gtp_config} -override-config
 maxVisits=<visits>,{katago_overrides}`. The default overrides are `numSearchThreads=1,
 allowResignation=false, ponderingEnabled=false`, logging off, and a smaller NN cache. Set

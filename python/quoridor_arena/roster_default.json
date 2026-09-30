@@ -1,11 +1,11 @@
 {
  "vars": {
-  "katago": "{main_repo}/cpp/build-cuda/katago",
-  "arbiter_katago": "{main_repo}/cpp/build/katago",
-  "models_dir": "/home/kenny/q0_run/models",
+  "katago": "{repo}/cpp/build-cuda/katago",
+  "arbiter_katago": "{repo}/cpp/build/katago",
+  "models_dir": "{env:KATAQUORIDOR_MODELS_DIR}",
   "gtp_config": "{repo}/cpp/configs/gtp_quoridor.cfg",
   "katago_overrides": "numSearchThreads=1,allowResignation=false,ponderingEnabled=false,logAllGTPCommunication=false,logSearchInfo=false,logDir={out}/gtp_logs,nnCacheSizePowerOfTwo=17",
-  "simple_quoridor": "/home/kenny/sync/HW/Quoridor/SimpleQuoridor/quoridor_agent"
+  "simple_quoridor": "{env:SIMPLE_QUORIDOR}"
  },
  "engines": [
   {
