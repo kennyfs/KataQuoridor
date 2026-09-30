@@ -12,12 +12,16 @@ using namespace std;
 int QuoridorNN::numSpatialFeatures(int ioVersion) {
   if(ioVersion == 1)
     return NUM_FEATURES_SPATIAL_V1;
+  if(ioVersion == 2)
+    return NUM_FEATURES_SPATIAL_V2;
   ASSERT_UNREACHABLE;
 }
 
 int QuoridorNN::numGlobalFeatures(int ioVersion) {
   if(ioVersion == 1)
     return NUM_FEATURES_GLOBAL_V1;
+  if(ioVersion == 2)
+    return NUM_FEATURES_GLOBAL_V2;
   ASSERT_UNREACHABLE;
 }
 
@@ -123,21 +127,20 @@ void QuoridorNN::fillRow(
   float* rowSpatial,
   float* rowGlobal
 ) {
-  (void)nnInputParams;
-  (void)boardHistory;
-  testAssert(ioVersion == 1);
+  testAssert(ioVersion == 1 || ioVersion == 2);
+  const int numSpatial = numSpatialFeatures(ioVersion);
   const int nnXLen = MODEL_LEN;
   const int nnYLen = MODEL_LEN;
   assert(nextPlayer == P_BLACK || nextPlayer == P_WHITE);
 
-  std::fill(rowSpatial, rowSpatial + NUM_FEATURES_SPATIAL_V1 * nnXLen * nnYLen, 0.0f);
-  std::fill(rowGlobal, rowGlobal + NUM_FEATURES_GLOBAL_V1, 0.0f);
+  std::fill(rowSpatial, rowSpatial + numSpatial * nnXLen * nnYLen, 0.0f);
+  std::fill(rowGlobal, rowGlobal + numGlobalFeatures(ioVersion), 0.0f);
 
   int featureStride;
   int posStride;
   if(useNHWC) {
     featureStride = 1;
-    posStride = NUM_FEATURES_SPATIAL_V1;
+    posStride = numSpatial;
   }
   else {
     featureStride = nnXLen * nnYLen;
@@ -278,6 +281,17 @@ void QuoridorNN::fillRow(
       if(c < 8 && rCanon < 8) {
         setRowBin(rowSpatial, pos, 16, 1.0f, posStride, featureStride);
       }
+
+      // v2 Ch 17 & 18: Geometrically legal wall placements (vertical, horizontal), independent of the
+      // fence counts (those are global inputs). Most anchors are decided by the overlap checks and the
+      // cached shortest paths; only walls cutting a cached path run a BFS.
+      if(ioVersion >= 2 && c < 8 && rCanon < 8) {
+        int rWallBoard = (nextPlayer == P_WHITE) ? (7 - rCanon) : rCanon;
+        if(board.isGeometricallyLegalWallPlacement(c, rWallBoard, true))
+          setRowBin(rowSpatial, pos, SPATIAL_LEGAL_VWALL_V2, 1.0f, posStride, featureStride);
+        if(board.isGeometricallyLegalWallPlacement(c, rWallBoard, false))
+          setRowBin(rowSpatial, pos, SPATIAL_LEGAL_HWALL_V2, 1.0f, posStride, featureStride);
+      }
     }
   }
 
@@ -332,17 +346,25 @@ void QuoridorNN::fillRow(
 
   // Index 14: Opponent shortest distance
   rowGlobal[14] = (shortestDistOpp < 0) ? 1.0f : std::min(1.0f, (float)shortestDistOpp / 32.0f);
+
+  if(ioVersion >= 2) {
+    // Index 15: Plies until the maxPlies draw, on an absolute scale.
+    rowGlobal[GLOBAL_PLIES_UNTIL_DRAW_V2] = (float)((double)boardHistory.pliesUntilDraw() / PLIES_UNTIL_DRAW_SCALE);
+    // Index 16: Komi from nextPlayer's view.
+    rowGlobal[GLOBAL_SELF_KOMI_V2] =
+      (float)(boardHistory.currentSelfKomi(nextPlayer, nnInputParams.drawEquivalentWinsForWhite) / SELF_KOMI_SCALE);
+  }
 }
 
 void QuoridorNN::applyInputSymmetry(float* rowSpatial, int ioVersion, bool useNHWC, int symmetry) {
-  testAssert(ioVersion == 1);
+  testAssert(ioVersion == 1 || ioVersion == 2);
   bool flipX = (symmetry % 2 != 0);
   if(!flipX)
     return;
 
   constexpr int H = MODEL_LEN;
   constexpr int W = MODEL_LEN;
-  constexpr int C = NUM_FEATURES_SPATIAL_V1;
+  const int C = numSpatialFeatures(ioVersion);
 
   auto getIdx = [&](int ch, int r, int c) {
     return useNHWC ? (r * W * C + c * C + ch) : (ch * H * W + r * W + c);
@@ -370,9 +392,14 @@ void QuoridorNN::applyInputSymmetry(float* rowSpatial, int ioVersion, bool useNH
     }
   }
 
-  // Wall channels (Ch 14: V-wall, Ch 15: H-wall). Active anchor range is [0..7]x[0..7], mirrored
-  // with (7 - c); row 8 and column 8 stay 0.
-  for(int ch : {14, 15}) {
+  // Wall channels (Ch 14: V-wall, Ch 15: H-wall; v2 Ch 17, 18: legal V-, H-walls). Active anchor range is
+  // [0..7]x[0..7], mirrored with (7 - c); row 8 and column 8 stay 0.
+  vector<int> wallChannels = {14, 15};
+  if(ioVersion >= 2) {
+    wallChannels.push_back(SPATIAL_LEGAL_VWALL_V2);
+    wallChannels.push_back(SPATIAL_LEGAL_HWALL_V2);
+  }
+  for(int ch : wallChannels) {
     for(int r = 0; r < 8; r++) {
       for(int c = 0; c < 8; c++) {
         rowSpatial[getIdx(ch, r, 7 - c)] = src[getIdx(ch, r, c)];

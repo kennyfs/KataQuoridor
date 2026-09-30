@@ -31,13 +31,15 @@ namespace QuoridorNN {
   // (komi -0.5, no time bonus) u = s = margin -/+ 0.5. The margin is consumed in three places:
   //  (a) Terminal nodes: Search reads finalWhiteMinusBlackScore as scoreMean and finalWhiteLead as lead
   //      (white perspective).
-  //  (b) Training target (I/O v1): TrainingWriteBuffers::addRow writes the margin of the *actual game's final
-  //      board* for every row, flipped to the row's nextPlayer perspective (global target column 21,
-  //      weight in column 29), or the row's lead if it has one. The Python game-margin head regresses this, so its
-  //      raw output is the side-to-move's expected final margin in moves. I/O v2 will train u and s instead.
-  //  (c) NN output: nneval multiplies the raw head output by the model's scoreMean/lead multipliers
+  //  (b) Training targets (I/O v2, TrainingWriteBuffers::addRow), from the row's nextPlayer perspective: the
+  //      game's final u (global target column 20, weight in column 27) and final s (column 21, weight in
+  //      column 29; 0 for a draw, which carries no tempo information). The Python heads regress them in moves.
+  //      (I/O v1 nets were trained on the final margin in column 21; v1 training data is no longer written.)
+  //  (c) NN output: nneval multiplies the raw head outputs by the model's scoreMean/lead multipliers
   //      (both 1.0 for Quoridor, in moves) and flips the sign when Black is to move, yielding
-  //      whiteScoreMean / whiteLead in the same white-perspective moves as (a).
+  //      whiteScoreMean / whiteLead in the same white-perspective moves as (a). I/O v2 nets have separate
+  //      heads for them (u and s); I/O v1 nets export their one margin head as both, so with a v1 net
+  //      scoreMean and lead are the margin and ignore komi and the time bonus.
   // The Go score-belief machinery (scoreDistrN etc.) is inert for Quoridor.
   // ---------------------------------------------------------------------------------------------
 
@@ -54,11 +56,26 @@ namespace QuoridorNN {
   constexpr int MODEL_LEN = Board::MAX_PAWN_LEN;
   // policy / optimistic-policy variants, each with {pawn, vertical wall, horizontal wall} planes.
   constexpr int NUM_POLICY_PLANES = 3;
-  constexpr int MAX_SUPPORTED_IO_VERSION = 1;
+  // I/O versions (model option D): 1 = KataQuoridor 0.1.0 nets, 2 = docs/QuoridorIOv2.md. Both are supported
+  // for inference; training data is only written for TRAINING_IO_VERSION.
+  constexpr int MAX_SUPPORTED_IO_VERSION = 2;
+  constexpr int TRAINING_IO_VERSION = 2;
 
   // Quoridor I/O v1 feature counts.
   constexpr int NUM_FEATURES_SPATIAL_V1 = 17;
   constexpr int NUM_FEATURES_GLOBAL_V1 = 15;
+  // Quoridor I/O v2 = v1 + these channels, appended (see fillRow).
+  constexpr int NUM_FEATURES_SPATIAL_V2 = 19;
+  constexpr int NUM_FEATURES_GLOBAL_V2 = 17;
+  constexpr int SPATIAL_LEGAL_VWALL_V2 = 17;
+  constexpr int SPATIAL_LEGAL_HWALL_V2 = 18;
+  constexpr int GLOBAL_PLIES_UNTIL_DRAW_V2 = 15;
+  constexpr int GLOBAL_SELF_KOMI_V2 = 16;
+  // Absolute scales (not relative to Rules::maxPlies / MAX_KOMI), so an input keeps its meaning across rules.
+  constexpr double PLIES_UNTIL_DRAW_SCALE = 300.0;
+  constexpr double SELF_KOMI_SCALE = 5.0;
+  constexpr int MAX_NUM_FEATURES_SPATIAL = NUM_FEATURES_SPATIAL_V2;
+  constexpr int MAX_NUM_FEATURES_GLOBAL = NUM_FEATURES_GLOBAL_V2;
 
   int numSpatialFeatures(int ioVersion);
   int numGlobalFeatures(int ioVersion);
@@ -77,9 +94,16 @@ namespace QuoridorNN {
   constexpr uint8_t DIST_UNREACHABLE_U8 = 255;
   void fillCanonicalDistancesU8(const Board& board, Player nextPlayer, uint8_t* out);
 
-  // Fills a single row of spatial and global model inputs for the given ioVersion, in the
+  // Fills a single row of spatial and global model inputs for the given ioVersion (1 or 2), in the
   // model's native 9x9 space, from the canonical (nextPlayer-relative, unmirrored) perspective.
   // Does not apply any input symmetry; call applyInputSymmetry afterwards for that.
+  // v2 adds, after the 17 v1 spatial / 15 v1 global features:
+  //   spatial 17 / 18: geometrically legal vertical / horizontal wall placements (Board::
+  //     isGeometricallyLegalWallPlacement: legal for a player with a fence left, whatever the fence counts), on
+  //     the 8x8 anchor grid in the 9x9 plane like the placed-wall channels 14 / 15 (row and column 8 zero);
+  //   global 15: BoardHistory::pliesUntilDraw() / PLIES_UNTIL_DRAW_SCALE;
+  //   global 16: BoardHistory::currentSelfKomi(nextPlayer, ...) / SELF_KOMI_SCALE (the standard komi -0.5
+  //     reads +0.1 for Black and -0.1 for White).
   void fillRow(
     const Board& board,
     const BoardHistory& boardHistory,
@@ -94,8 +118,8 @@ namespace QuoridorNN {
   // Physically mirrors a single already-filled spatial row along x (symmetry == 1), or leaves it
   // unchanged (symmetry == 0), in place. Quoridor only has two symmetries (no transpose, no
   // vertical flip: the row-flip for "which player is to move" is already baked into fillRow).
-  // Pawn-cell channels map column c -> 8-c; wall-anchor channels (whose domain is only the 8x8
-  // sub-grid of anchors) map c -> 7-c; and the two board-edge-blocked channels for East and West
+  // Pawn-cell channels map column c -> 8-c; wall-anchor channels (placed walls, the anchor domain mask
+  // and, in v2, the legal-wall planes, whose domain is only the 8x8 sub-grid of anchors) map c -> 7-c; and the two board-edge-blocked channels for East and West
   // swap identities as well as mirroring, since mirroring the board turns "east" into "west".
   // The backend should always be handed symmetry 0 after this is applied.
   void applyInputSymmetry(float* rowSpatial, int ioVersion, bool useNHWC, int symmetry);

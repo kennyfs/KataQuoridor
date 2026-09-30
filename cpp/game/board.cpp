@@ -828,6 +828,10 @@ bool Board::isLegalWallPlacement(int c, int r, bool isVertical, Player pla) cons
   int fencesLeft = (pla == P_BLACK) ? blackFences : whiteFences;
   if(fencesLeft <= 0)
     return false;
+  return isGeometricallyLegalWallPlacement(c, r, isVertical);
+}
+
+bool Board::isGeometricallyLegalWallPlacement(int c, int r, bool isVertical) const {
   if(c < 0 || c >= 8 || r < 0 || r >= 8)
     return false;
 

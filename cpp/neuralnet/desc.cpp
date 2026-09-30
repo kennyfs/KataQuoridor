@@ -2604,6 +2604,16 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
       throw StringError(
         name + ": model option D (quoridorIOVersion) unsupported, you may need a newer KataQuoridor version, value was: " +
         Global::intToString(quoridorIOVersion));
+    if(numInputChannels != QuoridorNN::numSpatialFeatures(quoridorIOVersion) ||
+       numInputGlobalChannels != QuoridorNN::numGlobalFeatures(quoridorIOVersion))
+      throw StringError(
+        name + Global::strprintf(
+                 ": Quoridor I/O version %d expects %d spatial and %d global input channels, model has %d and %d",
+                 quoridorIOVersion,
+                 QuoridorNN::numSpatialFeatures(quoridorIOVersion),
+                 QuoridorNN::numGlobalFeatures(quoridorIOVersion),
+                 numInputChannels,
+                 numInputGlobalChannels));
 
     int unused = 0;
     in >> unused;

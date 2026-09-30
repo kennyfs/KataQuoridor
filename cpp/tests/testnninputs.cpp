@@ -21,8 +21,8 @@ static void testInitialBoardSpatialFeatures() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float rowSpatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float rowGlobal[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float rowSpatial[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float rowGlobal[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
 
   QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, rowSpatial, rowGlobal);
 
@@ -175,16 +175,16 @@ static void testCanonicalYFlipInvariance() {
   BoardHistory histWhite(board, P_WHITE, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatialBlack[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float globalBlack[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
-  float spatialWhite[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float globalWhite[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float spatialBlack[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float globalBlack[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
+  float spatialWhite[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float globalWhite[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
 
   QuoridorNN::fillRow(board, histBlack, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatialBlack, globalBlack);
   QuoridorNN::fillRow(board, histWhite, P_WHITE, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatialWhite, globalWhite);
 
   // On an empty board, the canonical perspective makes Black to move and White to move completely symmetric!
-  for(int ch = 0; ch < QuoridorNN::NUM_FEATURES_SPATIAL_V1; ch++) {
+  for(int ch = 0; ch < QuoridorNN::numSpatialFeatures(QuoridorNN::MAX_SUPPORTED_IO_VERSION); ch++) {
     for(int pos = 0; pos < 81; pos++) {
       float bVal = spatialBlack[ch * 81 + pos];
       float wVal = spatialWhite[ch * 81 + pos];
@@ -205,8 +205,8 @@ static void testBFSDistanceFieldsAndOnPathMasks() {
   BoardHistory hist(board, P_WHITE, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float global[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float spatial[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float global[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
   QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
 
   auto getSpatial = [&](int c, int pos) -> float {
@@ -254,8 +254,8 @@ static void testActionParityInvariance() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float global[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float spatial[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float global[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
 
   // 1. Initial position: Black at (4, 8), White at (4, 0).
   // dist = |4 - 4| + |8 - 0| = 8 (even) -> Black (nextPlayer) does NOT have jump tempo -> -1.0f
@@ -305,8 +305,8 @@ static void testGlobalFeaturesValues() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float spatial[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float global[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float spatial[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float global[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
 
   QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, spatial, global);
 
@@ -423,24 +423,218 @@ static void testMemoryLayoutNHWCvsNCHW() {
   BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
   MiscNNInputParams params;
 
-  float rowNCHW[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float rowNHWC[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
-  float rowGlobalNCHW[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
-  float rowGlobalNHWC[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+  float rowNCHW[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float rowNHWC[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float rowGlobalNCHW[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
+  float rowGlobalNHWC[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
 
   QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, false, rowNCHW, rowGlobalNCHW);
   QuoridorNN::fillRow(board, hist, P_BLACK, params, QuoridorNN::MAX_SUPPORTED_IO_VERSION, true, rowNHWC, rowGlobalNHWC);
 
-  for(int ch = 0; ch < QuoridorNN::NUM_FEATURES_SPATIAL_V1; ch++) {
+  const int numSpatial = QuoridorNN::numSpatialFeatures(QuoridorNN::MAX_SUPPORTED_IO_VERSION);
+  for(int ch = 0; ch < numSpatial; ch++) {
     for(int pos = 0; pos < 81; pos++) {
       float nchwVal = rowNCHW[ch * 81 + pos];
-      float nhwcVal = rowNHWC[pos * QuoridorNN::NUM_FEATURES_SPATIAL_V1 + ch];
+      float nhwcVal = rowNHWC[pos * numSpatial + ch];
       testAssert(nchwVal == nhwcVal);
     }
   }
 
-  for(int g = 0; g < QuoridorNN::NUM_FEATURES_GLOBAL_V1; g++) {
+  for(int g = 0; g < QuoridorNN::numGlobalFeatures(QuoridorNN::MAX_SUPPORTED_IO_VERSION); g++) {
     testAssert(rowGlobalNCHW[g] == rowGlobalNHWC[g]);
+  }
+}
+
+//------------------------------------------------------------------------------------------------
+// Quoridor I/O v2 inputs
+
+// Random games (uniform over legal moves, or a pawn move half the time), with random rules.
+struct V2Position {
+  Board board;
+  BoardHistory hist;
+  Player pla;
+  vector<Loc> moves;  // from the empty board
+};
+
+static vector<V2Position> randomV2Positions(Rand& rand, int numPositions) {
+  vector<V2Position> out;
+  for(int game = 0; (int)out.size() < numPositions; game++) {
+    Rules rules = Rules::getQuoridorRules();
+    if(game % 2 == 1) {
+      rules.komi = (float)(rand.nextInt(-20, 19) + 0.5);
+      rules.maxPlies = rand.nextInt(1, 400);
+    }
+    Board board;
+    Player pla = P_BLACK;
+    BoardHistory hist(board, pla, rules, 0, BoardHistoryModes());
+    vector<Loc> moves;
+    while(!hist.isGameFinished && (int)out.size() < numPositions) {
+      if(rand.nextBool(0.3))
+        out.push_back(V2Position{board, hist, pla, moves});
+      vector<Loc> legal;
+      vector<Loc> pawn;
+      for(int y = 0; y < board.y_size; y++) {
+        for(int x = 0; x < board.x_size; x++) {
+          Loc loc = Location::getLoc(x, y, board.x_size);
+          if(hist.isLegal(board, loc, pla)) {
+            legal.push_back(loc);
+            if(Location::isPawnLoc(loc, board.x_size))
+              pawn.push_back(loc);
+          }
+        }
+      }
+      testAssert(!legal.empty());
+      Loc loc = rand.nextBool(0.5) ? pawn[rand.nextUInt((uint32_t)pawn.size())] : legal[rand.nextUInt((uint32_t)legal.size())];
+      hist.makeBoardMoveAssumeLegal(board, loc, pla, NULL);
+      moves.push_back(loc);
+      pla = getOpp(pla);
+    }
+  }
+  return out;
+}
+
+static Loc mirrorLoc(Loc loc) {
+  int x = Location::getX(loc, 17);
+  int y = Location::getY(loc, 17);
+  if(Location::isPawnLoc(loc, 17))
+    return Location::pawnLoc(8 - x / 2, y / 2, 17);
+  if(Location::isVWallLoc(loc, 17))
+    return Location::vWallLoc(7 - (x - 1) / 2, y / 2, 17);
+  testAssert(Location::isHWallLoc(loc, 17));
+  return Location::hWallLoc(7 - (x - 1) / 2, (y - 1) / 2, 17);
+}
+
+static void testLegalWallPlanesV2() {
+  cout << "Running testLegalWallPlanesV2..." << endl;
+  Rand rand("testLegalWallPlanesV2");
+  vector<V2Position> positions = randomV2Positions(rand, 400);
+  MiscNNInputParams params;
+  float spatial[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float global[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
+  int numLegal = 0;
+  int numIllegal = 0;
+  int numNoFences = 0;
+  for(const V2Position& p : positions) {
+    const Board& board = p.board;
+    int myFences = p.pla == P_BLACK ? board.blackFences : board.whiteFences;
+    numNoFences += myFences == 0 ? 1 : 0;
+    // The side to move with at least one fence: the planes are exactly its legal wall moves.
+    Board withFences = board;
+    withFences.blackFences = std::max(withFences.blackFences, 1);
+    withFences.whiteFences = std::max(withFences.whiteFences, 1);
+    QuoridorNN::fillRow(board, p.hist, p.pla, params, 2, false, spatial, global);
+    for(int rCanon = 0; rCanon < 9; rCanon++) {
+      for(int c = 0; c < 9; c++) {
+        float v = spatial[QuoridorNN::SPATIAL_LEGAL_VWALL_V2 * 81 + rCanon * 9 + c];
+        float h = spatial[QuoridorNN::SPATIAL_LEGAL_HWALL_V2 * 81 + rCanon * 9 + c];
+        if(c == 8 || rCanon == 8) {
+          testAssert(v == 0.0f && h == 0.0f);
+          continue;
+        }
+        int r = p.pla == P_WHITE ? 7 - rCanon : rCanon;
+        bool vLegal = withFences.isLegalWallPlacement(c, r, true, p.pla);
+        bool hLegal = withFences.isLegalWallPlacement(c, r, false, p.pla);
+        testAssert(v == (vLegal ? 1.0f : 0.0f));
+        testAssert(h == (hLegal ? 1.0f : 0.0f));
+        // Same as the search's own legality check when the side to move has fences.
+        if(myFences > 0) {
+          testAssert(vLegal == p.hist.isLegal(board, Location::vWallLoc(c, r, 17), p.pla));
+          testAssert(hLegal == p.hist.isLegal(board, Location::hWallLoc(c, r, 17), p.pla));
+        }
+        numLegal += (vLegal ? 1 : 0) + (hLegal ? 1 : 0);
+        numIllegal += (vLegal ? 0 : 1) + (hLegal ? 0 : 1);
+      }
+    }
+    // v1 rows are the first 17 / 15 features of v2 rows.
+    float spatialV1[QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81];
+    float globalV1[QuoridorNN::NUM_FEATURES_GLOBAL_V1];
+    QuoridorNN::fillRow(board, p.hist, p.pla, params, 1, false, spatialV1, globalV1);
+    for(int i = 0; i < QuoridorNN::NUM_FEATURES_SPATIAL_V1 * 81; i++)
+      testAssert(spatialV1[i] == spatial[i]);
+    for(int i = 0; i < QuoridorNN::NUM_FEATURES_GLOBAL_V1; i++)
+      testAssert(globalV1[i] == global[i]);
+  }
+  testAssert(numLegal > 0 && numIllegal > 0 && numNoFences > 0);
+  cout << "  " << positions.size() << " positions, " << numLegal << " legal and " << numIllegal
+       << " illegal anchors, " << numNoFences << " positions with no fences for the side to move" << endl;
+}
+
+static void testMirrorSymmetryV2() {
+  cout << "Running testMirrorSymmetryV2..." << endl;
+  Rand rand("testMirrorSymmetryV2");
+  vector<V2Position> positions = randomV2Positions(rand, 150);
+  MiscNNInputParams params;
+  for(int ioVersion = 1; ioVersion <= 2; ioVersion++) {
+    const int C = QuoridorNN::numSpatialFeatures(ioVersion);
+    const int G = QuoridorNN::numGlobalFeatures(ioVersion);
+    for(bool useNHWC : {false, true}) {
+      for(const V2Position& p : positions) {
+        // The same game with every move mirrored left-right.
+        Board mBoard;
+        BoardHistory mHist(mBoard, P_BLACK, p.hist.rules, 0, BoardHistoryModes());
+        Player pla = P_BLACK;
+        for(Loc loc : p.moves) {
+          Loc m = mirrorLoc(loc);
+          testAssert(mHist.isLegal(mBoard, m, pla));
+          mHist.makeBoardMoveAssumeLegal(mBoard, m, pla, NULL);
+          pla = getOpp(pla);
+        }
+        testAssert(pla == p.pla);
+
+        vector<float> spatial(C * 81), global(G), mSpatial(C * 81), mGlobal(G);
+        QuoridorNN::fillRow(p.board, p.hist, p.pla, params, ioVersion, useNHWC, spatial.data(), global.data());
+        QuoridorNN::fillRow(mBoard, mHist, pla, params, ioVersion, useNHWC, mSpatial.data(), mGlobal.data());
+        QuoridorNN::applyInputSymmetry(spatial.data(), ioVersion, useNHWC, 1);
+        for(int i = 0; i < C * 81; i++)
+          testAssert(spatial[i] == mSpatial[i]);
+        for(int i = 0; i < G; i++)
+          testAssert(global[i] == mGlobal[i]);
+      }
+    }
+  }
+}
+
+static void testGlobalFeaturesV2() {
+  cout << "Running testGlobalFeaturesV2..." << endl;
+  MiscNNInputParams params;
+  float spatial[QuoridorNN::MAX_NUM_FEATURES_SPATIAL * 81];
+  float global[QuoridorNN::MAX_NUM_FEATURES_GLOBAL];
+  {
+    // Standard game: 300 plies to go, komi -0.5 is +0.5 for Black and -0.5 for White.
+    Board board;
+    BoardHistory hist(board, P_BLACK, Rules::getQuoridorRules(), 0, BoardHistoryModes());
+    QuoridorNN::fillRow(board, hist, P_BLACK, params, 2, false, spatial, global);
+    testAssert(global[QuoridorNN::GLOBAL_PLIES_UNTIL_DRAW_V2] == 1.0f);
+    testAssert(global[QuoridorNN::GLOBAL_SELF_KOMI_V2] == 0.1f);
+    hist.makeBoardMoveAssumeLegal(board, Location::pawnLoc(4, 7, 17), P_BLACK, NULL);
+    QuoridorNN::fillRow(board, hist, P_WHITE, params, 2, false, spatial, global);
+    testAssert(global[QuoridorNN::GLOBAL_PLIES_UNTIL_DRAW_V2] == (float)(299.0 / 300.0));
+    testAssert(global[QuoridorNN::GLOBAL_SELF_KOMI_V2] == -0.1f);
+  }
+  {
+    // Other rules: the scales are absolute, not relative to maxPlies.
+    Rules rules = Rules::getQuoridorRules();
+    rules.maxPlies = 40;
+    rules.komi = 2.5f;
+    Board board;
+    BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
+    const Loc moves[] = {Location::pawnLoc(4, 7, 17), Location::pawnLoc(4, 1, 17), Location::hWallLoc(0, 0, 17)};
+    Player pla = P_BLACK;
+    for(Loc loc : moves) {
+      hist.makeBoardMoveAssumeLegal(board, loc, pla, NULL);
+      pla = getOpp(pla);
+    }
+    testAssert(pla == P_WHITE);
+    QuoridorNN::fillRow(board, hist, P_WHITE, params, 2, false, spatial, global);
+    testAssert(global[QuoridorNN::GLOBAL_PLIES_UNTIL_DRAW_V2] == (float)(37.0 / 300.0));
+    testAssert(global[QuoridorNN::GLOBAL_SELF_KOMI_V2] == 0.5f);
+    QuoridorNN::fillRow(board, hist, P_BLACK, params, 2, false, spatial, global);
+    testAssert(global[QuoridorNN::GLOBAL_SELF_KOMI_V2] == -0.5f);
+    // Past the ply limit (a start position beyond it): 0, not negative.
+    BoardHistory late(board, P_WHITE, rules, 0, BoardHistoryModes());
+    late.initialTurnNumber = 50;
+    QuoridorNN::fillRow(board, late, P_WHITE, params, 2, false, spatial, global);
+    testAssert(global[QuoridorNN::GLOBAL_PLIES_UNTIL_DRAW_V2] == 0.0f);
   }
 }
 
@@ -453,5 +647,8 @@ void Tests::runNNInputsTests() {
   testGlobalFeaturesValues();
   testPolicyScatterAndInverseMapping();
   testMemoryLayoutNHWCvsNCHW();
+  testLegalWallPlanesV2();
+  testMirrorSymmetryV2();
+  testGlobalFeaturesV2();
   cout << "All NNInputs tests passed successfully!" << endl;
 }

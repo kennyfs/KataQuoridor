@@ -253,6 +253,9 @@ struct Board {
   bool isLegalPawnMove(Loc loc, Player pla) const;
   std::vector<Loc> getLegalPawnDestinations(Player pla) const;
   bool isLegalWallPlacement(int c, int r, bool isVertical, Player pla) const;
+  // isLegalWallPlacement for a player who has at least one fence left: anchor in range, no overlap or crossing
+  // with a placed wall, and the no-full-block rule (lazy BFS).
+  bool isGeometricallyLegalWallPlacement(int c, int r, bool isVertical) const;
   bool checkNoFullBlockLazy(int c, int r, bool isVertical) const;
   bool bfsReachable(Loc start, int targetY, CompactPath* outPath = nullptr, Loc blockedArm1 = NULL_LOC, Loc blockedArm2 = NULL_LOC) const;
   bool bfsReachable(Loc start, int targetY, std::vector<Loc>* outPath) const;
