@@ -1,0 +1,139 @@
+{
+ "vars": {
+  "katago": "{main_repo}/cpp/build-cuda/katago",
+  "arbiter_katago": "{main_repo}/cpp/build/katago",
+  "models_dir": "/home/kenny/q0_run/models",
+  "gtp_config": "{repo}/cpp/configs/gtp_quoridor.cfg",
+  "katago_overrides": "numSearchThreads=1,allowResignation=false,ponderingEnabled=false,logAllGTPCommunication=false,logSearchInfo=false,logDir={out}/gtp_logs,nnCacheSizePowerOfTwo=17",
+  "simple_quoridor": "/home/kenny/sync/HW/Quoridor/SimpleQuoridor/quoridor_agent"
+ },
+ "engines": [
+  {
+   "name": "sq-random",
+   "command": "{simple_quoridor}",
+   "args": [
+    "--qtp",
+    "--player",
+    "random",
+    "--seed",
+    "{seed}"
+   ],
+   "seed": 1
+  },
+  {
+   "name": "sq-greedy",
+   "command": "{simple_quoridor}",
+   "args": [
+    "--qtp",
+    "--player",
+    "greedy",
+    "--seed",
+    "{seed}"
+   ],
+   "seed": 2
+  },
+  {
+   "name": "sq-search-d2",
+   "command": "{simple_quoridor}",
+   "args": [
+    "--qtp",
+    "--player",
+    "search",
+    "--depth",
+    "2",
+    "--seed",
+    "{seed}"
+   ],
+   "seed": 3
+  },
+  {
+   "name": "sq-search-d4",
+   "command": "{simple_quoridor}",
+   "args": [
+    "--qtp",
+    "--player",
+    "search",
+    "--depth",
+    "4",
+    "--seed",
+    "{seed}"
+   ],
+   "seed": 4
+  },
+  {
+   "name": "kq-s1220864-v1",
+   "katago_model": "run1-s1220864-d543465",
+   "visits": 1
+  },
+  {
+   "name": "kq-s3497984-v1",
+   "katago_model": "run1-s3497984-d1032212",
+   "visits": 1
+  },
+  {
+   "name": "kq-s6290688-v1",
+   "katago_model": "run1-s6290688-d1527957",
+   "visits": 1
+  },
+  {
+   "name": "kq-s9327872-v1",
+   "katago_model": "run1-s9327872-d1959082",
+   "visits": 1
+  },
+  {
+   "name": "kq-s12213504-v1",
+   "katago_model": "run1-s12213504-d2350417",
+   "visits": 1
+  },
+  {
+   "name": "kq-s16141056-v1",
+   "katago_model": "run1-s16141056-d2846694",
+   "visits": 1
+  },
+  {
+   "name": "kq-s1220864-v256",
+   "katago_model": "run1-s1220864-d543465",
+   "visits": 256
+  },
+  {
+   "name": "kq-s3497984-v256",
+   "katago_model": "run1-s3497984-d1032212",
+   "visits": 256
+  },
+  {
+   "name": "kq-s6290688-v256",
+   "katago_model": "run1-s6290688-d1527957",
+   "visits": 256
+  },
+  {
+   "name": "kq-s9327872-v256",
+   "katago_model": "run1-s9327872-d1959082",
+   "visits": 256
+  },
+  {
+   "name": "kq-s12213504-v256",
+   "katago_model": "run1-s12213504-d2350417",
+   "visits": 256
+  },
+  {
+   "name": "kq-s16141056-v256",
+   "katago_model": "run1-s16141056-d2846694",
+   "visits": 256
+  },
+  {
+   "name": "kq-s16141056-v16",
+   "katago_model": "run1-s16141056-d2846694",
+   "visits": 16
+  },
+  {
+   "name": "kq-s16141056-v64",
+   "katago_model": "run1-s16141056-d2846694",
+   "visits": 64
+  },
+  {
+   "name": "kq-s16141056-v800",
+   "katago_model": "run1-s16141056-d2846694",
+   "visits": 800
+  }
+ ]
+}
