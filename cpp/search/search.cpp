@@ -1228,7 +1228,8 @@ bool Search::playoutDescend(
       double noResultValue = 0.0;
       double scoreMean = ScoreValue::whiteScoreDrawAdjust(thread.history.finalWhiteMinusBlackScore,searchParams.drawEquivalentWinsForWhite,thread.history);
       double scoreMeanSq = ScoreValue::whiteScoreMeanSqOfScoreGridded(thread.history.finalWhiteMinusBlackScore,searchParams.drawEquivalentWinsForWhite);
-      double lead = scoreMean;
+      //KataQuoridor: the lead is the history's lead (tempo + komi), not the score, which may include a time bonus.
+      double lead = ScoreValue::whiteScoreDrawAdjust(thread.history.finalWhiteLead,searchParams.drawEquivalentWinsForWhite,thread.history);
       double weight = (searchParams.useUncertainty && nnEvaluator->supportsShorttermError()) ? searchParams.uncertaintyMaxWeight : 1.0;
       addLeafValue(node, winLossValue, noResultValue, scoreMean, scoreMeanSq, lead, weight, true, false);
       return true;

@@ -7,6 +7,7 @@
  *  - undo across a finished game (win and draw)
  *  - the fence handicap (initial walls), including self-play game setup
  *  - Rules parsing / serialization and the self-play config checks
+ *  - search: terminal nodes report the lead and the utility score separately, and see the draw
  */
 
 #include "../tests/tests.h"
@@ -15,6 +16,8 @@
 #include "../program/play.h"
 #include "../program/playutils.h"
 #include "../program/setup.h"
+#include "../search/search.h"
+#include "../tests/testsearchcommon.h"
 
 using namespace std;
 
@@ -489,6 +492,103 @@ static void testRulesSerializationAndConfig() {
   }
 }
 
+//------------------------------------------------------------------------------------------------
+
+//A board with the pawns moved to the given pawn cells, no walls placed and none left (a fence handicap of 0/0), so
+//that only pawn moves are legal and a small search with a random net surely tries them all.
+static Board boardWithPawns(const string& white, const string& black) {
+  Board start;
+  nlohmann::json j = Board::toJson(start);
+  vector<int> colors = j["colors"].get<vector<int>>();
+  colors[start.whitePawnLoc] = C_EMPTY;
+  colors[start.blackPawnLoc] = C_EMPTY;
+  Loc w = Location::ofString(white, start);
+  Loc b = Location::ofString(black, start);
+  colors[w] = C_WHITE;
+  colors[b] = C_BLACK;
+  j["colors"] = colors;
+  j["whitePawnLoc"] = w;
+  j["blackPawnLoc"] = b;
+  Board board = Board::ofJson(j);
+  board.setFencesLeft(0, 0);
+  return board;
+}
+
+//Search reports the lead s and the utility score u of a finished game separately at terminal nodes.
+static void testSearchTerminalValues() {
+  cout << "  Search terminal lead vs scoreMean" << endl;
+  Logger logger(nullptr, false, false, false);
+  //A random net, so the terminal values are all that the search knows about.
+  NNEvaluator* nnEval = TestSearchCommon::startNNEval(
+    "/dev/null", logger, "quoridorIOv2TerminalNN", NNPos::MAX_BOARD_LEN, NNPos::MAX_BOARD_LEN,
+    0, false, false, false, true, false
+  );
+  SearchParams params;
+  params.maxVisits = 400;
+  params.numThreads = 1;
+  //Random gaussian logits give a spiky policy; flatten it so the search tries the pawn moves.
+  params.nnPolicyTemperature = 8.0f;
+  params.staticScoreUtilityFactor = 0.10;
+  params.dynamicScoreUtilityFactor = 0.30;
+
+  Rules rules = Rules::getQuoridorRules();
+  rules.timeBonusPerPly = 0.05f;
+  rules.blackInitialFences = 0;
+  rules.whiteInitialFences = 0;
+
+  //White on e8, one step from its goal; Black on c5, 4 steps from its goal. At ply 101 White's e9 ends the game W+4:
+  //lead 4 - 0.5 = 3.5, score 3.5 + 0.05 * (300 - 101) = 13.45.
+  {
+    Board board = boardWithPawns("e8", "c5");
+    BoardHistory hist(board, P_WHITE, rules, 0, BoardHistoryModes());
+    hist.setInitialTurnNumber(100);
+    Search* search = new Search(params, nnEval, &logger, "quoridorIOv2TerminalSearch");
+    search->setPosition(P_WHITE, board, hist);
+    search->runWholeSearch(P_WHITE);
+    vector<AnalysisData> data;
+    search->getAnalysisData(data, 1, false, 2, false);
+    Loc win = Location::ofString("e9", board);
+    bool found = false;
+    for(const AnalysisData& d : data) {
+      if(d.move != win)
+        continue;
+      found = true;
+      testAssert(d.numVisits > 0);
+      testAssert(approxEqual(d.winLossValue, 1.0));
+      testAssert(approxEqual(d.lead, 3.5));
+      testAssert(approxEqual(d.scoreMean, 13.45));
+    }
+    testAssert(found);
+    testAssert(search->getChosenMoveLoc() == win);
+    delete search;
+  }
+
+  //At ply 299, every move but a goal move ends the game in a draw: lead, score and win/loss 0.
+  {
+    Board board = boardWithPawns("e7", "c5");
+    BoardHistory hist(board, P_WHITE, rules, 0, BoardHistoryModes());
+    hist.setInitialTurnNumber(299);
+    testAssert(hist.pliesUntilDraw() == 1);
+    Search* search = new Search(params, nnEval, &logger, "quoridorIOv2DrawSearch");
+    search->setPosition(P_WHITE, board, hist);
+    search->runWholeSearch(P_WHITE);
+    vector<AnalysisData> data;
+    search->getAnalysisData(data, 1, false, 2, false);
+    int numVisitedChildren = 0;
+    for(const AnalysisData& d : data) {
+      if(d.numVisits <= 0)
+        continue;
+      numVisitedChildren++;
+      testAssert(approxEqual(d.winLossValue, 0.0));
+      testAssert(approxEqual(d.lead, 0.0));
+      testAssert(approxEqual(d.scoreMean, 0.0));
+    }
+    testAssert(numVisitedChildren >= 3);
+    delete search;
+  }
+  delete nnEval;
+}
+
 }  // namespace
 
 void Tests::runQuoridorIOv2Tests() {
@@ -499,5 +599,6 @@ void Tests::runQuoridorIOv2Tests() {
   testUndoAcrossWin();
   testFenceHandicap();
   testRulesSerializationAndConfig();
+  testSearchTerminalValues();
   cout << "=== Quoridor I/O v2 rules and scoring tests passed ===" << endl;
 }
