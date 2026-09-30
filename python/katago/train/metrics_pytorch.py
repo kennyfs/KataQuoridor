@@ -1169,10 +1169,14 @@ class Metrics:
         # written with u = 0 (weighted) and no lead (weight 0).
         target_weight_outcome = target_global_nc[:, 27]
 
-        # Utility score u (KataGo's scoreMean): the game's final u, globalTargetsNC[20] (Huber delta=1.0)
+        # Loss scales follow upstream (loss_*_samplewise above), converted to Quoridor units: a tempo / move of margin
+        # is roughly 3 Go points of typical error, so Huber deltas are /3 and weights x9 (same gradient per unit of
+        # relative error in the L2 region); time-like targets use games ~4x shorter than 19x19 Go (weights x16).
+        # Utility score u (KataGo's scoreMean): the game's final u, globalTargetsNC[20].
+        # Upstream scoremean: 0.0015, delta 12 -> 0.0135, delta 4.
         target_utility_score = target_global_nc[:, 20]
-        utility_score_huber = huber_loss(pred_utility_score, target_utility_score, delta=1.0)
-        loss_utility_score = (0.04 * global_weight * target_weight_outcome * utility_score_huber).sum()
+        utility_score_huber = huber_loss(pred_utility_score, target_utility_score, delta=4.0)
+        loss_utility_score = (0.0135 * global_weight * target_weight_outcome * utility_score_huber).sum()
 
         # Utility-score stdev: modeled on upstream's scorestdev, but with no score belief head to take a stdev of,
         # it is trained so that stdev^2 regresses the squared error of the (detached) utility-score prediction.
@@ -1183,13 +1187,15 @@ class Metrics:
         # Tempo lead s (KataGo's lead): globalTargetsNC[21], weight [29] (Huber delta=1.0)
         target_lead = target_global_nc[:, 21]
         target_weight_lead = target_global_nc[:, 29]
-        lead_huber = huber_loss(pred_lead, target_lead, delta=1.0)
-        loss_lead = (0.04 * global_weight * target_weight_lead * lead_huber).sum()
+        # Upstream lead: 0.006, delta 8 -> 0.054, delta 3.
+        lead_huber = huber_loss(pred_lead, target_lead, delta=3.0)
+        loss_lead = (0.054 * global_weight * target_weight_lead * lead_huber).sum()
 
         # Remaining plies (training-only auxiliary target): plies until the game ends, globalTargetsNC[23], / 300.
         target_remaining_turns = target_global_nc[:, 23] / 300.0
         remaining_turns_huber = huber_loss(pred_remaining_turns, target_remaining_turns, delta=0.25)
-        loss_remaining_turns = (1.0 * global_weight * target_weight_outcome * remaining_turns_huber).sum()
+        # No upstream counterpart; weighted so a typical error (~0.15, i.e. ~45 plies) costs ~0.05, like vtime.
+        loss_remaining_turns = (5.0 * global_weight * target_weight_outcome * remaining_turns_huber).sum()
 
         # Shortterm winloss / score error: as upstream's loss_shortterm_{value,score}_error_samplewise,
         # against the short-term TD targets (horizon index 2: value = globalTargetsNC[12:14], score = [15], which
@@ -1203,10 +1209,11 @@ class Metrics:
             2.0 * global_weight * target_weight_td_value
             * huber_loss(pred_shortterm_value_error, shortterm_value_sqerror, delta=0.4)
         ).sum()
+        # Upstream: 0.00002, delta 100 on squared points -> squared units /9: 0.0016, delta 11.
         shortterm_score_sqerror = torch.square(pred_utility_score.detach() - target_global_nc[:, 15]) + 1.0e-4
         loss_shortterm_score_error = (
-            0.002 * global_weight * target_weight_td_value
-            * huber_loss(pred_shortterm_score_error, shortterm_score_sqerror, delta=25.0)
+            0.0016 * global_weight * target_weight_td_value
+            * huber_loss(pred_shortterm_score_error, shortterm_score_sqerror, delta=11.0)
         ).sum()
 
         # Trajectory loss (BCEWithLogits, 2 channels)
@@ -1223,10 +1230,10 @@ class Metrics:
         bce_wall_sample = torch.mean(bce_wall, dim=(1, 2, 3))
         loss_wall_graph = (0.02 * global_weight * target_weight_aux * bce_wall_sample).sum()
 
-        # Variance Time loss (Huber delta=5.0)
+        # Variance Time loss. Upstream: 0.0003, delta 50 turns -> games ~4x shorter: 0.005, delta 12.
         target_variance_time = target_global_nc[:, 22]
-        vtime_huber = huber_loss(pred_variance_time, target_variance_time, delta=5.0)
-        loss_variance_time = (0.01 * global_weight * target_weight_aux * vtime_huber).sum()
+        vtime_huber = huber_loss(pred_variance_time, target_variance_time, delta=12.0)
+        loss_variance_time = (0.005 * global_weight * target_weight_aux * vtime_huber).sum()
 
         # Total Loss sum
         loss_sum = (
