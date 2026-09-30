@@ -913,12 +913,13 @@ int MainCmds::analysis(const vector<string>& args) {
         double komi;
         static_assert(Rules::MIN_USER_KOMI == -400.0f, "");
         static_assert(Rules::MAX_USER_KOMI == 400.0f, "");
-        const char* msg = "Must be a integer or half-integer from -400.0 to 400.0";
+        //KataQuoridor: a Quoridor komi, see Rules::isValidKomi.
+        const char* msg = "Must be a half-integer (e.g. -0.5, 1.5) from -20.5 to 20.5";
         bool suc = parseDouble(input, "komi", komi, Rules::MIN_USER_KOMI, Rules::MAX_USER_KOMI, msg);
         if(!suc)
           continue;
         rules.komi = (float)komi;
-        if(!Rules::komiIsIntOrHalfInt(rules.komi)) {
+        if(!Rules::isValidKomi(rules.komi)) {
           reportErrorForId(rbase.id, "komi", msg);
           continue;
         }
