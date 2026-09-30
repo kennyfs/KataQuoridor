@@ -7,7 +7,7 @@
 #          (the CUDA backend rejects transformers in NCHW)
 #        - FP32, NHWC   (cudaUseFP16=false, cudaUseNHWC=true),  tolerance 1e-4
 #        - FP16         (cudaUseFP16=true),                      tolerance 2e-2
-#      Each covers a conv and a transformer net at symmetries 0 and 1.
+#      Each covers a conv and a transformer net of Quoridor I/O v1 and v2 at symmetries 0 and 1.
 #   3. Plays 60 plies of GTP genmove with numSearchThreads=4 (restarting the game if it ends early),
 #      using the conv net exported by the parity test.
 #   4. Prints a PASS/FAIL summary; exit status is 0 only if everything passed.
@@ -50,7 +50,7 @@ else
     printf 'cudaUseFP16 = %s\ncudaUseNHWC = %s\ncudaDeviceToUse = 0\n' "$2" "$3" > "$cfg"
     echo "==> NN parity $label (tolerance $4; log: $OUT/parity_$label.log)"
     if (cd "$REPO/python" && NN_PARITY_CONFIG="$cfg" NN_PARITY_TOL="$4" NN_PARITY_OUTDIR="$dir" \
-          NN_PARITY_MODELS="${5:-b2c64_quoridor,tf2_b4c192_quoridor}" \
+          NN_PARITY_MODELS="${5:-b2c64_quoridor,tf2_b4c192_quoridor,b2c64_quoridor_v2,tf2_b4c192_quoridor_v2}" \
           python -m pytest -q -rA tests/test_nn_parity.py) >"$OUT/parity_$label.log" 2>&1; then
       record "NN parity $label (tol $4)" PASS
     else
@@ -59,7 +59,7 @@ else
     fi
     grep -E "max_policy_diff|max_value_diff|max_misc_reldiff" "$OUT/parity_$label.log" | sort | tail -n 3 | sed 's/^/     worst /'
   }
-  run_parity fp32_nchw false false 1e-4 b2c64_quoridor
+  run_parity fp32_nchw false false 1e-4 b2c64_quoridor,b2c64_quoridor_v2
   run_parity fp32_nhwc false true 1e-4
   run_parity fp16 true auto 2e-2
 

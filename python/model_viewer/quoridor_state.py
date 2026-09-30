@@ -1,4 +1,5 @@
-"""Minimal Quoridor state + a Python replica of QuoridorNN::fillRow (I/O v1).
+"""Minimal Quoridor state + a Python replica of QuoridorNN::fillRow (I/O v1 only: no legal-wall planes, plies-until-draw
+or komi inputs of I/O v2, docs/QuoridorIOv2.md).
 
 Coordinates follow cpp/game/board.h: pawn cell (c, r) with c, r in 0..8 (SGF / 17x17 grid point
 (2c, 2r)); a vertical wall anchor (c, r) has its upper arm at (2c+1, 2r) and blocks the east edges of
