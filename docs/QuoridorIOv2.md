@@ -165,24 +165,144 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
 - In the standard game (komi −0.5) an equal race reads `scoreLead ≈ −0.5`, and a lead of +0.5 means "White wins by
   one tempo".
 
-## 4. Step 2: Quoridor I/O v2 neural net (plan)
+## 4. Step 2: Quoridor I/O v2 neural net
 
-- **New inputs:**
-  - legal-wall planes (2 × 8 × 8, from the lazy BFS; cheap);
-  - moves until draw, `(maxPlies − ply) / maxPlies` from `BoardHistory::pliesUntilDraw()`;
-  - komi, scaled (e.g. `komi / 10`, from the side to move's view: `BoardHistory::currentSelfKomi`).
-  The NN cache hash already folds in the rules (komi, `maxPlies`, λ) and the ply count
-  (`BoardHistory::getSituationRulesAndKoHash`), so these inputs need no hash change.
-- **Heads:** separate heads for the utility score (`scoreMean`, target `u`) and the tempo lead (`lead`, target
-  `s`). In v1 both come from one margin head.
-- **New auxiliary target** `remaining_turn_num`: plies until the game ends (draws included), next to the existing
-  `varTimeLeft`.
-- **Draw games are written to training data** with value 0.5 / 0.5 and score 0 (today they are discarded, see
-  §6.4). Rows of draw games need a sensible lead target (0) and weight.
-- **Exporter, loader, parity:** new I/O version 2 in `quoridornn`, the model header, `export_model_pytorch.py`,
-  the Python loader, and the parity test.
-- **v1 support policy:** decide whether v1 nets keep being supported (inputs switch on the header's I/O version,
-  as today) or are dropped after the retrain. Old v1 training data cannot be mixed with v2 (different targets).
+**Done**, see [§8](#8-step-2-where-things-live) for where each part lives. This section is the reference for the
+v2 tensor layout and targets.
+
+### 4.1 I/O versions
+
+The model header's option D is the **Quoridor I/O version**: 1 (the KataQuoridor 0.1.0 nets) or 2.
+`QuoridorNN::MAX_SUPPORTED_IO_VERSION = 2`; `QuoridorNN` fills the inputs of either version, chosen by the net.
+
+- **v1 nets stay supported for inference** (GTP, analysis, arena, match): v1 inputs, and their one margin head is
+  exported as both `scoreMean` and `lead`. With a v1 net `scoreMean` and `lead` are therefore the same number, and
+  they **ignore komi and the time bonus** (v1 nets have no komi input and were trained on the margin).
+- **Training data and training are v2 only** (`QuoridorNN::TRAINING_IO_VERSION = 2`,
+  `modelconfigs.QUORIDOR_TRAINING_IO_VERSION`). `TrainingWriteBuffers` / `TrainingDataWriter` throw for any other
+  version, the loss asserts on a v1 model, and the loader rejects data with the v1 channel counts. Old v1 training
+  data cannot be mixed in (other inputs and targets).
+
+### 4.2 Inputs
+
+v2 = the v1 features followed by the new ones; the channel indices of v1 are unchanged. All from the side to move's
+canonical view (its goal row on row 0), before the mirror symmetry.
+
+| Spatial | Feature | Symmetry (x-mirror) |
+|---:|---|---|
+| 0 | on-board mask (all ones) | c → 8 − c |
+| 1, 2 | my pawn, opponent's pawn | c → 8 − c |
+| 3, 4 | blocked towards my goal (north), away from it (south) | c → 8 − c |
+| 5, 6 | blocked east, west | c → 8 − c, and 5 ↔ 6 |
+| 7 | my goal row | c → 8 − c |
+| 8–11 | BFS distances / 32: to my goal, to the opponent's goal, from my pawn, from the opponent's pawn (continuous; in training data stored raw in `spatialDistNCHW`) | c → 8 − c |
+| 12, 13 | my / the opponent's shortest-path cells | c → 8 − c |
+| 14, 15 | placed vertical / horizontal walls (anchor grid) | c → 7 − c |
+| 16 | wall-anchor domain (8×8) | c → 7 − c |
+| **17, 18** | **v2: geometrically legal vertical / horizontal wall placements** (anchor grid) | c → 7 − c |
+
+Channels 14–18 live on the 8×8 anchor grid in the top-left of the 9×9 plane (row and column 8 are 0); anchor rows
+flip as `7 − r` when White is to move. "Geometrically legal" is `Board::isGeometricallyLegalWallPlacement`: legal for
+a player with at least one fence (no overlap or crossing with a placed wall, no full block), whatever the fence
+counts, which are global inputs. It uses the lazy BFS: the overlap checks and the cached shortest paths decide most
+anchors, and only a wall that cuts a cached path runs a BFS.
+
+| Global | Feature |
+|---:|---|
+| 0 | White to move |
+| 1, 2 | my / the opponent's fences / 10 |
+| 3–6 | my fences, `exp(−(n − 1) / s)` for s = 1, 2, 4, 8 (0 if none) |
+| 7 | the opponent has a fence |
+| 8–11 | the opponent's fences, as 3–6 |
+| 12 | jump parity (±1) |
+| 13, 14 | my / the opponent's shortest distance / 32 |
+| **15** | **v2: plies until the draw**, `BoardHistory::pliesUntilDraw() / 300` |
+| **16** | **v2: komi from the side to move's view**, `BoardHistory::currentSelfKomi(pla, …) / 5` |
+
+- Global 15 is on an **absolute scale** (`/ 300`, not `/ maxPlies`), so the input keeps meaning "plies left" when
+  `maxPlies` changes. It is 1.0 at the start of a standard game and 0 at or past the limit.
+- Global 16: the standard komi −0.5 reads **+0.1 for Black and −0.1 for White** (negative komi favours Black).
+- The NN cache hash already includes the rules and the ply count (§6.2), so no hash change was needed.
+- The mirror symmetry is applied by `QuoridorNN::applyInputSymmetry` (C++) and `apply_symmetry_quoridor` (Python
+  loader) with the same channel lists; the C++ test compares a mirrored game's rows channel by channel.
+
+### 4.3 Training targets
+
+Global targets (`globalTargetsNC`, `cpp/dataio/trainingwrite.h`), from the side to move's view, as written by
+`TrainingWriteBuffers::addRow`:
+
+| Column | Target | Weight |
+|---:|---|---|
+| C0–C1 | final value (win, loss); a draw is 0.5 / 0.5 | `1 − C35` |
+| C4–C19 | TD value targets; C15 is the short-term TD **score**, the searches' utility score `u` | `1 − C24` |
+| **C20** | **the game's final utility score `u`** (`finalWhiteMinusBlackScore`); 0 for a draw | C27 |
+| **C21** | **the game's final tempo lead `s`** (`finalWhiteLead`); a search's lead estimate for the position if there is one (`estimateLeadProb`, 0 in the Quoridor configs) | C29 |
+| C22 | expected arrival time of the win/loss variance (`varTimeLeft`, unchanged) | C27 |
+| **C23** | **plies from this row to the end of the game** (`endHist` ply − row ply), draws included (a draw ends at `maxPlies`) | C27 |
+| C27 | outcome weight: the value weight on main rows of a game with a result, draws included; 0 on side positions and on reanalyzed rows without outcome targets | |
+| C29 | lead weight: as C27, but **0 for a draw** (a draw carries no tempo information); set by a lead estimate | |
+| C47 | komi from the side to move's view (unchanged) | |
+| C52, C62 | hit the turn limit (0 for a draw), game finished and not a side position (1 for a draw) | |
+
+C23 is unused in upstream KataGo and was unused before. The trajectory and final-wall targets (`valueTargetsNCHW`)
+are weighted by C27, so draws train them with normal weight.
+
+### 4.4 Heads and losses
+
+`QuoridorValueHead` (`python/katago/train/model_pytorch.py`); metric keys as in `metrics_train.json`:
+
+| Head | Module | Target | Loss (weight) | Metric |
+|---|---|---|---|---|
+| value | `linear_value` | C0–C1 | cross-entropy × 1.5 | `vloss` |
+| TD value | `linear_td_value` | C4–C19 | cross-entropy | `tdvloss*` |
+| utility score (`scoreMean`) | `linear_utility_score` | `u`, C20 | Huber δ = 1, × 0.04 (C27) | `smloss` |
+| its stdev | `linear_misc[0]` | squared error of the utility score | Huber δ = 10, × 0.004 (C27) | `sdregloss` |
+| lead | `linear_lead` (v2) | `s`, C21 | Huber δ = 1, × 0.04 (C29) | `leadloss` |
+| remaining plies | `linear_remaining_turns` (v2, training only) | C23 / 300 | Huber δ = 0.25, × 1.0 (C27) | `rtloss` |
+| short-term win/loss error | `linear_misc[1]` | squared error of the short-term TD value | Huber δ = 0.4, × 2 | `evstloss` |
+| short-term score error | `linear_misc[2]` | squared error of the utility score vs C15 | Huber δ = 25, × 0.002 | `esstloss` |
+| variance time | `linear_variance_time` | C22 | Huber δ = 5, × 0.01 (C27) | `vtimeloss` |
+| trajectory, final walls | `conv_trajectory`, `conv_wall_graph` | `valueTargetsNCHW` | BCE × 0.02 (C27) | `trajloss`, `wallloss` |
+
+"Margin" now only means the terminal distance of §2.1. In v1 checkpoints the score head is named
+`linear_game_margin`; `load_model.load_model_state_dict` renames it on load. The postprocessed Quoridor outputs are
+`(policy, value, td_value, variance_time, utility_score, utility_score_stdev, shortterm_value_error,
+shortterm_score_error, trajectory, wall_graph, lead, remaining_turns)`; for a v1 model `lead` is the utility score
+and `remaining_turns` is 0.
+
+### 4.5 Export mapping
+
+The exporter writes option D from the config's `quoridor_io_version`. The v17 value head's `scoreValue` channels:
+
+| Channel | v2 | v1 |
+|---:|---|---|
+| 0 | utility score `u` mean | margin |
+| 1 | utility score stdev (pre-softplus) | margin stdev |
+| 2 | lead `s` | margin (the same head as 0) |
+| 3 | varTimeLeft | varTimeLeft |
+| 4 | short-term win/loss error | same |
+| 5 | short-term score error | short-term margin error |
+
+Post-process multipliers: `scoreMean` and `lead` 1 (moves), score stdev 2, varTimeLeft 1, short-term value error
+0.25, short-term score error 4 (unchanged from v1). The remaining-plies head is not exported. `nneval.cpp` needed
+no change: it already reads channel 2 as the lead. The value channels stay (win, loss, noResult) with noResult forced
+off; a draw is trained as win 0.5 / loss 0.5, not as a no-result.
+
+### 4.6 Draw games in self-play
+
+`Play::runGame` no longer marks a `maxPlies` draw as `hitTurnLimit` (`Play::DISCARD_MAX_PLIES_DRAWS` is gone). A
+draw is a normal finished game: its rows are written (value 0.5 / 0.5, `u` = 0 with weight, no lead, remaining
+plies to `maxPlies`, trajectory and final walls), side positions are searched and reanalysis runs as for any game.
+Side-position rows of any game have no outcome targets (C27 = C29 = 0 unless a search estimated a lead). Forks work
+on draws as on other games (`maybeForkGame` scores a finished candidate draw 0 and replays with the ply count kept).
+The self-play log line `Game stats for ...` reports `finished normally N (draws D, draw rate r)`; "hit cutoff" now
+counts only games stopped by `maxMovesPerGame` before their end, which can't happen while it equals `maxPlies`.
+
+### 4.7 Model presets
+
+`b2c64_quoridor_v2` and `tf2_b4c192_quoridor_v2` = the v1 presets plus `"quoridor_io_version": 2`
+(`modelconfigs.get_quoridor_io_version`, default 1). `is_quoridor()` stays keyed on `"game": "quoridor"`, and the
+presets without `_v2` stay v1 (for existing nets). **The retrain must use a `_v2` preset** (`-model-kind`).
 
 ## 5. Step 3: self-play (plan)
 
@@ -302,3 +422,36 @@ their score head doesn't include a time bonus, so only terminal nodes would see 
 - **Draw rows (step 2).** `hitTurnLimit` also feeds training-row global targets (a "game ended normally" flag). When
   `Play::DISCARD_MAX_PLIES_DRAWS` is turned off, draws become normal finished games (`hitTurnLimit` false), so
   their rows get value 0.5 / 0.5 through `whiteWinsOfWinner`; check the lead / score weights of those rows.
+
+## 8. Step 2: where things live
+
+| Part | Where |
+|---|---|
+| I/O versions, input layout, v2 channel constants, symmetry | `cpp/neuralnet/quoridornn.{h,cpp}` (`fillRow`, `applyInputSymmetry`, `TRAINING_IO_VERSION`, `SPATIAL_LEGAL_*_V2`, `GLOBAL_*_V2`) |
+| Geometric wall legality | `Board::isGeometricallyLegalWallPlacement` (`cpp/game/board.{h,cpp}`); `isLegalWallPlacement` = fences left + it |
+| Model loading | `cpp/neuralnet/desc.cpp`: option D in 1..2 and the input channel counts must match it; `nneval.cpp` picks the inputs by the net's version (unchanged) |
+| Training rows, targets, draw rows | `TrainingWriteBuffers::addRow` and `fillQuoridorInputRow` (`cpp/dataio/trainingwrite.{h,cpp}`; the Go target paths were removed) |
+| Draws in self-play, stats | `Play::runGame` (`cpp/program/play.cpp`), `SelfplayManager` (`gamesDrawnCount`, `gameStatsSummary`) |
+| Tools | `writesampletrainquoridor` (`cpp/command/misc.cpp`), `dumpnninputs -io-version`, `evalnnparity` (`cpp/command/nnparity.cpp`), `scripts/cuda_parity.sh` |
+| C++ tests | `runtests nninputs` (legal-wall planes, mirror symmetry, globals), `quoridorscore` (outcome targets of won games and a draw), `trainingwrite` |
+| Presets, channel counts | `python/katago/train/modelconfigs.py` (`get_quoridor_io_version`, `QUORIDOR_NUM_*_INPUT_FEATURES`, `*_quoridor_v2`) |
+| Heads, postprocessing | `QuoridorValueHead`, `Model.postprocess_single_heads_output` (`python/katago/train/model_pytorch.py`) |
+| Losses, metric keys | `Metrics.metrics_dict_batchwise_single_heads_output_quoridor` (`python/katago/train/metrics_pytorch.py`) |
+| Loader, symmetry | `python/katago/train/data_processing_pytorch.py` (`QUORIDOR_WALL_ANCHOR_CHANNELS`, channel-count check); v1 key rename in `load_model.py` |
+| Exporter | `python/export_model_pytorch.py` (option D, scoreValue mapping, ONNX channel counts) |
+| Python tests | `tests/test_quoridor_model.py` (shapes, gradients, draw rows, symmetries), `tests/test_nn_parity.py` (v1 and v2 features and parity), `tests/test_end_to_end_training.py` |
+| v1 only | `python/model_viewer` (refuses v2 nets) |
+
+This supersedes §6.4's "draw games are still discarded" and the two step-2 items of §7 ("the v1 training writer",
+"draw rows").
+
+Open points after step 2:
+
+- **Loss weights** of the new terms (lead as the old margin, remaining plies × 1.0 with δ = 0.25 in units of 300
+  plies) are first guesses; check the `smloss` / `leadloss` / `rtloss` scales in the first retrain.
+- **Short-term score error multiplier** (4, from v1) assumes `|u|` of a few moves; with λ > 0 the short-term score
+  error is larger, so the predicted error saturates higher. Revisit with the λ experiments of step 3.
+- **Draw share.** A fresh net draws most games (a random net drew 98% at `maxPlies = 40` in the smoke run); at 300
+  plies expect many draws early in the retrain. Draw rows have no lead target, so the lead head learns from
+  decisive games only.
+- **CUDA parity for v2** was not run in step 2 (Eigen FP32 only); `scripts/cuda_parity.sh` covers v1 and v2.

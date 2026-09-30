@@ -90,3 +90,25 @@ were not trained with a time bonus.
   [QuoridorIOv2.md](../QuoridorIOv2.md) §6.3). In particular, terminal score variance is no longer "gridded" the Go
   way.
 - New `runtests quoridorv2` test group; `python/tests/test_qtp_rules.py` covers the new QTP behaviour.
+
+## Neural net I/O v2 (Quoridor I/O v2, step 2)
+
+Nets now declare a **Quoridor I/O version** (model option D). Version 2 is the net for the upcoming retrain; the
+details are in [QuoridorIOv2.md](../QuoridorIOv2.md) §4.
+
+- **New inputs (I/O v2):** two planes of the legal wall placements (vertical, horizontal), the plies left until the
+  300-ply draw, and the komi from the side to move's view. v2 nets therefore see komi and the ply limit.
+- **Separate score and lead:** a v2 net's `scoreMean` predicts the utility score (with the time bonus) and its
+  `scoreLead` the tempo lead, from two heads. A new training-only head predicts how many plies the game has left.
+- **I/O v1 nets (0.1.0) still work** in GTP, analysis, match and the arena, with their v1 inputs. For them
+  `scoreLead` and `scoreMean` are the same number, the margin, and don't react to komi or a time bonus.
+- **Training is v2 only.** Self-play writes I/O v2 training data (`inputsVersion` 2; other values are refused), the
+  trainer refuses v1 models, and v1 training data can't be mixed in. Use the new presets `b2c64_quoridor_v2` or
+  `tf2_b4c192_quoridor_v2` (`-model-kind`); the presets without `_v2` remain for exporting and inspecting v1 nets.
+- **Draws are training data.** Games drawn at 300 plies are written like any other game (value 0.5 / 0.5, score 0,
+  no lead target), with side positions and reanalysis; this replaces the "drawn games are still discarded" note
+  above. The self-play log reports them as draws, with a draw rate, instead of "hit cutoff".
+- Training metrics: `smloss` (utility score), `leadloss` (lead) and the new `rtloss` (remaining plies) replace
+  `gmloss`.
+- Tools: `dumpnninputs -io-version`, `writesampletrainquoridor` (now with draws and komi), and the NN parity test
+  cover both I/O versions. `python/model_viewer` is v1-only for now.
