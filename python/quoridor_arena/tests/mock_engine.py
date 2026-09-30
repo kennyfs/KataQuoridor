@@ -175,8 +175,6 @@ def main():
                 reply(False, "illegal move")
             elif g.winner():
                 reply(False, "game is over")
-            elif c != g.to_move:
-                reply(False, "illegal move: not %s's turn" % c)
             else:
                 ok = g.play(c, rest[1].lower())
                 reply(ok, "" if ok else "illegal move")
