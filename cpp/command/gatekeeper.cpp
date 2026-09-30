@@ -59,7 +59,7 @@ namespace {
     double noResultUtilityForWhite;
 
     int numGamesTallied;
-    // Quoridor has no draws by rule, so a game without a winner is one that hit maxMovesPerGame.
+    // A game without a winner is a draw by Rules::maxPlies (or one cut off early by a stop request).
     int numDecisiveGames;
     int numDrawsByCutoff;
     int64_t totalMovesInGames;
@@ -171,7 +171,7 @@ namespace {
             whitePoints = 0.5 * noResultUtilityForWhite + 0.5;
             blackPoints = 1.0 - whitePoints;
             numDrawsByCutoff++;
-            logger.write("Game " + Global::intToString(numGamesTallied) + ": draw (hit move cutoff) " + oresult.str());
+            logger.write("Game " + Global::intToString(numGamesTallied) + ": draw (hit maxPlies) " + oresult.str());
           }
         }
 

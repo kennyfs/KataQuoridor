@@ -225,8 +225,13 @@ struct Board {
   bool isOnBoardPawn(Loc loc) const;
   bool isOnBoardFence(Loc loc) const;
   bool isEmpty() const;
+  // Upstream callers use this as a lower bound on the number of turns played to reach a setup position, so for
+  // Quoridor it is the number of walls on the board (each took a ply), not the two pawns.
   int numStonesOnBoard() const;
   int numPlaStonesOnBoard(Player pla) const;
+
+  // Sets the walls left of both players, e.g. to Rules' initial walls on a new board (fence handicap).
+  void setFencesLeft(int black, int white);
 
   bool setStone(Loc loc, Color color);
   bool setStones(const std::vector<Move>& placements);
@@ -253,9 +258,9 @@ struct Board {
   bool bfsReachable(Loc start, int targetY, std::vector<Loc>* outPath) const;
   int getShortestPathDistance(Player pla) const;
   // The Quoridor margin (see QuoridorNN in neuralnet/quoridornn.h for the definition) of a game that
-  // this board is the final position of, won by `winner`, from White's perspective:
-  // +d if White won, -d if Black won, where d = max(1, the loser's shortest-path distance to goal).
-  // Returns 0 if winner is not a player.
+  // this board is the final position of, where `winner`'s pawn reached its goal, from White's perspective:
+  // +d if White's pawn arrived, -d if Black's, where d = max(1, the other player's shortest-path distance to goal).
+  // Returns 0 if winner is not a player. (Since I/O v2, komi decides who won; see Rules.)
   float whiteMarginWhenWonBy(Player winner) const;
   std::vector<Loc> findShortestPath(Player pla) const;
   // Computes shortest distance from every pawn cell (c, r) (0 <= c, r < 9) to pla's goal row.

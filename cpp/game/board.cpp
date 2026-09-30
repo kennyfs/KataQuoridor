@@ -494,14 +494,24 @@ bool Board::isEmpty() const {
 
 int Board::numStonesOnBoard() const {
   int count = 0;
-  for(int y = 0; y < y_size; y++) {
-    for(int x = 0; x < x_size; x++) {
-      Loc loc = Location::getLoc(x, y, x_size);
-      if(colors[loc] == C_BLACK || colors[loc] == C_WHITE)
-        count++;
+  for(int c = 0; c < 8; c++) {
+    for(int r = 0; r < 8; r++) {
+      if(hWalls[c][r]) count++;
+      if(vWalls[c][r]) count++;
     }
   }
   return count;
+}
+
+void Board::setFencesLeft(int black, int white) {
+  assert(black >= 0 && black <= MAX_FENCE_NUM);
+  assert(white >= 0 && white <= MAX_FENCE_NUM);
+  pos_hash ^= ZOBRIST_FENCENUM_HASH[blackFences][0];
+  pos_hash ^= ZOBRIST_FENCENUM_HASH[whiteFences][1];
+  blackFences = black;
+  whiteFences = white;
+  pos_hash ^= ZOBRIST_FENCENUM_HASH[blackFences][0];
+  pos_hash ^= ZOBRIST_FENCENUM_HASH[whiteFences][1];
 }
 
 int Board::numPlaStonesOnBoard(Player pla) const {
@@ -1181,7 +1191,8 @@ void Board::checkConsistency() const {
   assert(colors[whitePawnLoc] == C_WHITE);
 
   // The explicit wall arrays must agree with `colors`: every placed wall's three cells must
-  // be C_FENCE, and the number of placed walls must match the number of fences spent.
+  // be C_FENCE, and the placed walls must have come out of the players' walls. With a fence handicap
+  // (Rules::blackInitialFences/whiteInitialFences) the players started with fewer than MAX_FENCE_NUM.
   int numWalls = 0;
   for(int c = 0; c < 8; c++) {
     for(int r = 0; r < 8; r++) {
@@ -1201,7 +1212,7 @@ void Board::checkConsistency() const {
       }
     }
   }
-  assert(numWalls == (2 * MAX_FENCE_NUM - blackFences - whiteFences));
+  assert(numWalls <= (2 * MAX_FENCE_NUM - blackFences - whiteFences));
 }
 
 bool Board::isEqualForTesting(const Board& other, bool checkNumCaptures, bool checkSimpleKo) const {

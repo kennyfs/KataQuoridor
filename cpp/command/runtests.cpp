@@ -58,6 +58,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("quoridorscore"))
     Tests::runQuoridorScoreTests();
 
+  if(shouldRun("quoridorv2"))
+    Tests::runQuoridorIOv2Tests();
+
   if(shouldRun("nninputs"))
     Tests::runNNInputsTests();
 

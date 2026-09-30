@@ -187,11 +187,20 @@ void GameInitializer::initShared(ConfigParser& cfg, Logger& logger) {
       throw IOError("bSizeRelProbs must sum to a positive value");
   }
 
-  // KataQuoridor: komi does not exist, so neither komiMean nor komiAuto is required (komiMean then defaults to 0).
+  baseRules = Rules::getQuoridorRules();
+  Setup::loadQuoridorRuleKeys(cfg, baseRules);
+
+  // KataQuoridor: neither komiMean nor komiAuto is required; komiMean defaults to the standard komi.
   if(cfg.contains("komiMean") && (cfg.contains("komiAuto") && cfg.getBool("komiAuto")))
     throw IOError("Must specify only one of komiMean=<komi value> or komiAuto=True in config");
 
-  komiMean = cfg.contains("komiMean") ? cfg.getFloat("komiMean",Rules::MIN_USER_KOMI,Rules::MAX_USER_KOMI) : 0.0f;
+  komiMean = cfg.contains("komiMean") ? cfg.getFloat("komiMean",Rules::MIN_USER_KOMI,Rules::MAX_USER_KOMI) : Rules::DEFAULT_KOMI;
+  if(!Rules::isValidKomi(komiMean))
+    throw IOError(
+      "komiMean must be a Quoridor komi (a half-integer with |komi| <= " + Global::floatToString(Rules::MAX_KOMI) +
+      "; the standard game is " + Global::floatToString(Rules::DEFAULT_KOMI) + ", see docs/QuoridorIOv2.md), got " +
+      Global::floatToString(komiMean) + " in " + cfg.getFileName()
+    );
   komiStdev = cfg.contains("komiStdev") ? cfg.getFloat("komiStdev",0.0f,60.0f) : 0.0f;
   handicapProb = cfg.contains("handicapProb") ? cfg.getDouble("handicapProb",0.0,1.0) : 0.0;
   handicapCompensateKomiProb = cfg.contains("handicapCompensateKomiProb") ? cfg.getDouble("handicapCompensateKomiProb",0.0,1.0) : 0.0;
@@ -468,7 +477,7 @@ Rules GameInitializer::createRules() {
 }
 
 Rules GameInitializer::createRulesUnsynchronized() {
-  Rules rules;
+  Rules rules = baseRules;
   rules.koRule = allowedKoRules[rand.nextUInt((uint32_t)allowedKoRules.size())];
   rules.scoringRule = allowedScoringRules[rand.nextUInt((uint32_t)allowedScoringRules.size())];
   rules.taxRule = allowedTaxRules[rand.nextUInt((uint32_t)allowedTaxRules.size())];
@@ -597,6 +606,7 @@ void GameInitializer::createGameSharedUnsynchronized(
     int xSize = allowedBSizes[bSizeIdx].first;
     int ySize = allowedBSizes[bSizeIdx].second;
     board = Board(xSize,ySize);
+    board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
     pla = P_BLACK;
     hist.clear(board,pla,rules,0);
 
@@ -1569,6 +1579,7 @@ FinishedGameData* Play::runGame(
 
   if(extraBlackAndKomi.makeGameFairForEmptyBoard) {
     Board b(startBoard.x_size,startBoard.y_size);
+    b.setFencesLeft(startHist.rules.blackInitialFences, startHist.rules.whiteInitialFences);
     Player makeFairPla = P_BLACK;
     if(playSettings.flipKomiProbWhenNoCompensate != 0.0 && gameRand.nextBool(playSettings.flipKomiProbWhenNoCompensate))
       makeFairPla = P_WHITE;
@@ -1943,7 +1954,7 @@ FinishedGameData* Play::runGame(
   }
 
   if(hist.isGameFinished) {
-    gameData->hitTurnLimit = false;
+    gameData->hitTurnLimit = Play::DISCARD_MAX_PLIES_DRAWS && hist.isDraw();
   }
   else {
     gameData->hitTurnLimit = true;
@@ -2006,7 +2017,7 @@ FinishedGameData* Play::runGame(
       finalValueTargets.noResult = 0.0f;
       finalValueTargets.score = (float)ScoreValue::whiteScoreDrawAdjust(hist.finalWhiteMinusBlackScore,gameData->drawEquivalentWinsForWhite,hist);
       finalValueTargets.hasLead = true;
-      finalValueTargets.lead = finalValueTargets.score;
+      finalValueTargets.lead = (float)ScoreValue::whiteScoreDrawAdjust(hist.finalWhiteLead,gameData->drawEquivalentWinsForWhite,hist);
 
       //Fill full and seki areas
       {
@@ -2659,6 +2670,26 @@ void Play::maybeHintForkGame(
 }
 
 
+int Play::loadMaxMovesPerGame(ConfigParser& cfg) {
+  Rules rules = Rules::getQuoridorRules();
+  Setup::loadQuoridorRuleKeys(cfg, rules);
+  for(const string& key : {string("maxMovesPerGame"), string("cutoffMoves")}) {
+    if(cfg.contains(key)) {
+      int value = cfg.getInt(key, 0, 1 << 30);
+      //0 plays no moves at all (misc.cpp's sampleinitializations uses it to only sample game initializations).
+      if(value == 0)
+        return 0;
+      if(value != rules.maxPlies)
+        throw IOError(
+          key + " = " + Global::intToString(value) + " disagrees with maxPlies = " + Global::intToString(rules.maxPlies) +
+          " in " + cfg.getFileName() + ". Games end in a draw at maxPlies (a game rule, default 300); set maxPlies instead" +
+          " and remove " + key + ", or make them equal."
+        );
+    }
+  }
+  return rules.maxPlies;
+}
+
 GameRunner::GameRunner(ConfigParser& cfg, const PlaySettings& pSettings, Logger& logger)
   :logSearchInfo(),logMoves(),maxMovesPerGame(),clearBotBeforeSearch(),
    playSettings(pSettings),
@@ -2666,12 +2697,7 @@ GameRunner::GameRunner(ConfigParser& cfg, const PlaySettings& pSettings, Logger&
 {
   logSearchInfo = cfg.getBool("logSearchInfo");
   logMoves = cfg.getBool("logMoves");
-  if(cfg.contains("maxMovesPerGame"))
-    maxMovesPerGame = cfg.getInt("maxMovesPerGame", 0, 1 << 30);
-  else if(cfg.contains("cutoffMoves"))
-    maxMovesPerGame = cfg.getInt("cutoffMoves", 0, 1 << 30);
-  else
-    maxMovesPerGame = 300;
+  maxMovesPerGame = Play::loadMaxMovesPerGame(cfg);
   clearBotBeforeSearch = cfg.contains("clearBotBeforeSearch") ? cfg.getBool("clearBotBeforeSearch") : false;
 
   //Initialize object for randomizing game settings
@@ -2684,12 +2710,7 @@ GameRunner::GameRunner(ConfigParser& cfg, const string& gameInitRandSeed, const 
 {
   logSearchInfo = cfg.getBool("logSearchInfo");
   logMoves = cfg.getBool("logMoves");
-  if(cfg.contains("maxMovesPerGame"))
-    maxMovesPerGame = cfg.getInt("maxMovesPerGame", 0, 1 << 30);
-  else if(cfg.contains("cutoffMoves"))
-    maxMovesPerGame = cfg.getInt("cutoffMoves", 0, 1 << 30);
-  else
-    maxMovesPerGame = 300;
+  maxMovesPerGame = Play::loadMaxMovesPerGame(cfg);
   clearBotBeforeSearch = cfg.contains("clearBotBeforeSearch") ? cfg.getBool("clearBotBeforeSearch") : false;
 
   //Initialize object for randomizing game settings

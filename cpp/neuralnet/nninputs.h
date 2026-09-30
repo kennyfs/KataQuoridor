@@ -244,6 +244,7 @@ namespace ScoreValue {
   //Compute what the scoreMeanSq should be for a final game result
   //It is NOT simply the same as finalWhiteMinusBlackScore^2 because for integer komi we model it as a distribution where with the appropriate probability
   //you gain or lose 0.5 point to achieve the desired drawEquivalentWinsForWhite, so it actually has some variance.
+  //KataQuoridor: terminal scores are exact, so this is finalWhiteMinusBlackScore^2 (see nninputs.cpp).
   double whiteScoreMeanSqOfScoreGridded(double finalWhiteMinusBlackScore, double drawEquivalentWinsForWhite);
 
   //The expected unscaled utility of the final score difference, given the mean and stdev of the distribution of that difference,

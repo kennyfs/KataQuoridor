@@ -478,7 +478,10 @@ static void testFuzz() {
     Board board;
     RefWalls walls;
     Player pla = P_BLACK;
-    BoardHistory hist(board, pla, Rules::getQuoridorRules(), 0, BoardHistoryModes());
+    // The fuzz plays past the standard 300-ply draw, to exercise long wall-heavy games.
+    Rules rules = Rules::getQuoridorRules();
+    rules.maxPlies = maxPlies + 1;
+    BoardHistory hist(board, pla, rules, 0, BoardHistoryModes());
     vector<Board::MoveRecord> records;
     vector<Board> snapshots;
 

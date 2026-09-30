@@ -113,9 +113,13 @@ static ScriptedGame playScripted(const string& blackScript, const string& whiteS
 //White wins on ply 16; Black made 8 moves, only 3 of them forward, so Black is still 8-3 = 5 away.
 static ScriptedGame whiteWinsGame() { return playScripted("LFFFLRLR", "FFFFFFFF"); }
 static const float WHITE_WINS_MARGIN = 5.0f;
+//The score (lead = tempo + komi; no time bonus by default) of that game: tempo 5, standard komi -0.5.
+static const float WHITE_WINS_SCORE = 4.5f;
 //Black wins on ply 15; White made 7 moves, only 2 of them forward, so White is still 8-2 = 6 away.
 static ScriptedGame blackWinsGame() { return playScripted("FFFFFFFF", "LFFLRLR"); }
 static const float BLACK_WINS_MARGIN = -6.0f;
+//Tempo -6 + 1 = -5, plus komi -0.5.
+static const float BLACK_WINS_SCORE = -5.5f;
 
 //------------------------------------------------------------------------------------------------
 
@@ -126,7 +130,9 @@ static void testTerminalScore() {
     testAssert(g.hist.isGameFinished && !g.hist.isNoResult);
     testAssert(g.hist.winner == P_WHITE);
     testAssert(g.hist.isScored);
-    testAssert(g.hist.finalWhiteMinusBlackScore == WHITE_WINS_MARGIN);
+    testAssert(g.hist.finalWhiteMinusBlackScore == WHITE_WINS_SCORE);
+    testAssert(g.hist.finalWhiteLead == WHITE_WINS_SCORE);
+    testAssert(g.board.whiteMarginWhenWonBy(P_WHITE) == WHITE_WINS_MARGIN);
     testAssert(g.board.getShortestPathDistance(P_BLACK) == 5);
     //Search turns it into a white-perspective score value that favors White.
     testAssert(ScoreValue::whiteScoreValueOfScoreSmoothNoDrawAdjust(g.hist.finalWhiteMinusBlackScore, 0.0, 2.0, g.board.sqrtBoardArea()) > 0.0);
@@ -136,7 +142,9 @@ static void testTerminalScore() {
     testAssert(g.hist.isGameFinished && !g.hist.isNoResult);
     testAssert(g.hist.winner == P_BLACK);
     testAssert(g.hist.isScored);
-    testAssert(g.hist.finalWhiteMinusBlackScore == BLACK_WINS_MARGIN);
+    testAssert(g.hist.finalWhiteMinusBlackScore == BLACK_WINS_SCORE);
+    testAssert(g.hist.finalWhiteLead == BLACK_WINS_SCORE);
+    testAssert(g.board.whiteMarginWhenWonBy(P_BLACK) == BLACK_WINS_MARGIN);
     testAssert(g.board.getShortestPathDistance(P_WHITE) == 6);
     testAssert(ScoreValue::whiteScoreValueOfScoreSmoothNoDrawAdjust(g.hist.finalWhiteMinusBlackScore, 0.0, 2.0, g.board.sqrtBoardArea()) < 0.0);
   }
@@ -176,9 +184,9 @@ static pair<float, float> marginTargetOfRow(
     t.loss = 1.0f - t.win;
     t.noResult = 0.0f;
     t.score = endHist.finalWhiteMinusBlackScore;
-    //The value targets of a finished game carry the final margin as lead (Play::runGame's finalValueTargets).
+    //The value targets of a finished game carry the final lead (Play::runGame's finalValueTargets).
     t.hasLead = rowHasLead;
-    t.lead = endHist.finalWhiteMinusBlackScore;
+    t.lead = endHist.finalWhiteLead;
   }
   vector<QValueTargets> whiteQValueTargets(g.boards.size());
   vector<PolicyTargetMove> policyTarget;
@@ -213,16 +221,21 @@ static void testMarginTarget() {
   ScriptedGame whiteWon = whiteWinsGame();
   ScriptedGame blackWon = blackWinsGame();
   //Row 0: Black to move. Row 1: White to move. Target is from the row's nextPlayer perspective.
+  //Rows without a lead (the self-play default, estimateLeadProb = 0) get the game's margin, as in 0.1.0; rows with
+  //a lead get that lead, which is now tempo + komi (margin -/+ 0.5). The I/O v2 writer (step 2 of
+  //docs/QuoridorIOv2.md) will define these targets anew.
   for(bool rowHasLead : {false, true}) {
+    float whiteWonTarget = rowHasLead ? WHITE_WINS_SCORE : WHITE_WINS_MARGIN;
+    float blackWonTarget = rowHasLead ? BLACK_WINS_SCORE : BLACK_WINS_MARGIN;
     pair<float, float> r;
     r = marginTargetOfRow(whiteWon, 0, rowHasLead, true, false);
-    testAssert(r.first == -WHITE_WINS_MARGIN && r.second == 1.0f);  //Black to move, White won by 5
+    testAssert(r.first == -whiteWonTarget && r.second == 1.0f);  //Black to move, White won by 5
     r = marginTargetOfRow(whiteWon, 1, rowHasLead, true, false);
-    testAssert(r.first == WHITE_WINS_MARGIN && r.second == 1.0f);   //White to move, White won by 5
+    testAssert(r.first == whiteWonTarget && r.second == 1.0f);   //White to move, White won by 5
     r = marginTargetOfRow(blackWon, 0, rowHasLead, true, false);
-    testAssert(r.first == -BLACK_WINS_MARGIN && r.second == 1.0f);  //Black to move, Black won by 6
+    testAssert(r.first == -blackWonTarget && r.second == 1.0f);  //Black to move, Black won by 6
     r = marginTargetOfRow(blackWon, 1, rowHasLead, true, false);
-    testAssert(r.first == BLACK_WINS_MARGIN && r.second == 1.0f);   //White to move, Black won by 6
+    testAssert(r.first == blackWonTarget && r.second == 1.0f);   //White to move, Black won by 6
   }
   //Side positions have no future boards and no lead: the final margin of the actual game is unknown, weight 0.
   {

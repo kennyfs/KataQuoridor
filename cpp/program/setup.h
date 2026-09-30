@@ -150,11 +150,15 @@ namespace Setup {
     ConfigParser& cfg, Player defaultPerspective
   );
 
-  //Komi is just set to 7.5 and is not read in from cfg
+  //KataQuoridor: the Quoridor rules from the config keys maxPlies, timeBonusPerPly, blackInitialWalls,
+  //whiteInitialWalls (or a single 'rules' string), all optional. Komi defaults to Rules::DEFAULT_KOMI and is read
+  //from the optional 'komi' key only if loadKomi. The Go rule keys are optional and ignored.
   Rules loadSingleRules(
     ConfigParser& cfg,
     bool loadKomi
   );
+  //Reads the optional Quoridor rule keys above (not komi) into rules, and validates the result.
+  void loadQuoridorRuleKeys(ConfigParser& cfg, Rules& rules);
 
   //Returns true if the user's config specified the size, false if it did not. If false, does not set defaultBoardXSizeRet or defaultBoardYSizeRet.
   bool loadDefaultBoardXYSize(

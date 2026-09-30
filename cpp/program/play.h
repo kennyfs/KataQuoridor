@@ -45,7 +45,7 @@ struct ForkData {
 
 struct ExtraBlackAndKomi {
   int extraBlack = 0;
-  float komiMean = 7.5f;
+  float komiMean = Rules::DEFAULT_KOMI;
   float komiStdev = 7.5f;
   bool makeGameFair = false;
   bool makeGameFairForEmptyBoard = false;
@@ -150,6 +150,9 @@ class GameInitializer {
   std::vector<std::pair<int,int>> allowedBSizes;
   std::vector<double> allowedBSizeRelProbs;
 
+  //The Quoridor rules every game starts from (maxPlies, timeBonusPerPly, initial walls); komi is set per game.
+  Rules baseRules;
+
   float komiMean;
   float komiStdev;
   double komiAllowIntegerProb;
@@ -240,6 +243,15 @@ class MatchPairer {
 
 //Functions to run a single game or other things
 namespace Play {
+
+  //Quoridor I/O v2 step 1 (docs/QuoridorIOv2.md): a game drawn by Rules::maxPlies is treated like a game cut off at
+  //maxMovesPerGame in 0.1.0: runGame marks it hitTurnLimit, so self-play discards it from training data (and skips
+  //its side positions and reanalysis). Step 2 decides whether and how draws are written; this is the one switch.
+  constexpr bool DISCARD_MAX_PLIES_DRAWS = true;
+
+  //The number of moves a game runs for at most: Rules::maxPlies from the config (key maxPlies, default 300).
+  //maxMovesPerGame (or its alias cutoffMoves) may still be given, but must equal maxPlies (or be 0: no moves).
+  int loadMaxMovesPerGame(ConfigParser& cfg);
 
   //In the case where checkForNewNNEval is provided, will MODIFY the provided botSpecs with any new nneval!
   FinishedGameData* runGame(

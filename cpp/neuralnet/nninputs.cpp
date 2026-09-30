@@ -80,18 +80,13 @@ double ScoreValue::approxWhiteScoreOfScoreValueSmooth(double scoreValue, double 
   return scoreUnscaled * (scale * sqrtBoardArea) + center;
 }
 
+//KataQuoridor: no gridding. Upstream spreads an integer (i.e. drawable) Go score over [score-0.5, score+0.5], so that a
+//tie is a jittered score whose win share is drawEquivalentWinsForWhite. A Quoridor terminal score is exact: the
+//utility score is not on the 0.5 grid once the time bonus is on, and a draw (score 0) comes from the ply limit, not
+//from a tie of the score. So the terminal score's variance is 0, including at a draw.
 double ScoreValue::whiteScoreMeanSqOfScoreGridded(double finalWhiteMinusBlackScore, double drawEquivalentWinsForWhite) {
-  testAssert((int)(finalWhiteMinusBlackScore * 2) == finalWhiteMinusBlackScore * 2);
-  bool finalScoreIsInteger = ((int)finalWhiteMinusBlackScore == finalWhiteMinusBlackScore);
-  if(!finalScoreIsInteger)
-    return finalWhiteMinusBlackScore * finalWhiteMinusBlackScore;
-
-  double lower = finalWhiteMinusBlackScore - 0.5;
-  double upper = finalWhiteMinusBlackScore + 0.5;
-  double lowerSq = lower * lower;
-  double upperSq = upper * upper;
-
-  return lowerSq + (upperSq - lowerSq) * drawEquivalentWinsForWhite;
+  (void)drawEquivalentWinsForWhite;
+  return finalWhiteMinusBlackScore * finalWhiteMinusBlackScore;
 }
 
 

@@ -1079,6 +1079,7 @@ add_executable(katago
   tests/testrules.cpp
   tests/testquoridorperft.cpp
   tests/testquoridorscore.cpp
+  tests/testquoridoriov2.cpp
   tests/testscore.cpp
   tests/testsgf.cpp
   tests/testsymmetries.cpp

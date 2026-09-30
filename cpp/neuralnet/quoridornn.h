@@ -17,20 +17,24 @@
 
 namespace QuoridorNN {
   // ---------------------------------------------------------------------------------------------
-  // THE QUORIDOR MARGIN (KataGo's "score"). This is the single definition; everything below uses it.
+  // THE QUORIDOR MARGIN AND KataGo's "SCORE".
   //
   //   At game end, the winner's margin = the loser's shortest-path distance to the loser's goal row
   //   (walls only, pawns ignored; always >= 1 since the loser has not reached the goal).
-  //   The margin is reported from White's perspective: positive if White won, negative if Black won,
-  //   and 0 for a draw (e.g. a game cut off at maxMovesPerGame).
+  //   The margin is reported from White's perspective: positive if White's pawn arrived, negative if Black's.
+  //   Implemented by Board::whiteMarginWhenWonBy.
   //
-  // Implemented by Board::whiteMarginWhenWonBy. It is consumed in three places, all of which must agree:
-  //  (a) Terminal nodes: BoardHistory sets isScored and finalWhiteMinusBlackScore when a pawn reaches
-  //      its goal; Search reads that at terminal nodes as scoreMean/lead (white perspective).
-  //  (b) Training target: TrainingWriteBuffers::addRow writes the margin of the *actual game's final
+  // Since Quoridor I/O v2 (docs/QuoridorIOv2.md; definitions in rules.h), KataGo's score is not the margin but
+  // derived from it: tempo t (the margin, +1 if Black arrived), lead s = t + komi (the winner is the sign of s),
+  // and the utility score u = s + sign(s) * timeBonusPerPly * (maxPlies - T). BoardHistory stores
+  // finalWhiteMinusBlackScore = u and finalWhiteLead = s (both 0 for a draw at maxPlies). With the default rules
+  // (komi -0.5, no time bonus) u = s = margin -/+ 0.5. The margin is consumed in three places:
+  //  (a) Terminal nodes: Search reads finalWhiteMinusBlackScore as scoreMean and finalWhiteLead as lead
+  //      (white perspective).
+  //  (b) Training target (I/O v1): TrainingWriteBuffers::addRow writes the margin of the *actual game's final
   //      board* for every row, flipped to the row's nextPlayer perspective (global target column 21,
-  //      weight in column 29). The Python game-margin head regresses this, so its raw output is the
-  //      side-to-move's expected final margin in moves.
+  //      weight in column 29), or the row's lead if it has one. The Python game-margin head regresses this, so its
+  //      raw output is the side-to-move's expected final margin in moves. I/O v2 will train u and s instead.
   //  (c) NN output: nneval multiplies the raw head output by the model's scoreMean/lead multipliers
   //      (both 1.0 for Quoridor, in moves) and flips the sign when Black is to move, yielding
   //      whiteScoreMean / whiteLead in the same white-perspective moves as (a).

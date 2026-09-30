@@ -327,8 +327,8 @@ static void testInitialBoardState() {
   testAssert(b.colors[Location::getLoc(17, 0, 17)] == C_WALL);
   testAssert(b.colors[Location::getLoc(0, 17, 17)] == C_WALL);
 
-  // numStonesOnBoard: 2 pawns initially
-  testAssert(b.numStonesOnBoard() == 2);
+  // numStonesOnBoard counts walls (a lower bound on the plies played), so 0 initially
+  testAssert(b.numStonesOnBoard() == 0);
   testAssert(b.numPlaStonesOnBoard(P_BLACK) == 1);
   testAssert(b.numPlaStonesOnBoard(P_WHITE) == 1);
   cout << "    -> Passed (Initial board state 100% verified)!" << endl;
@@ -432,12 +432,14 @@ static void testWhiteWinCondition() {
   cout << "    -> Passed (White reaches y=16 and triggers winner == P_WHITE)!" << endl;
 }
 
-// Step 6 - Test 3: Pure rules (no draw condition, 300+ moves) & Transposition Merging
-static void testPureRulesNoDrawAndTransposition() {
-  cout << "  [Step 6.3] Pure Rules (No Draw Condition & Transposition Merging across 300 moves)..." << endl;
+// Step 6 - Test 3: Draw at Rules::maxPlies (300) & transposition hashes across plies
+static void testDrawAtMaxPliesAndTransposition() {
+  cout << "  [Step 6.3] Draw at maxPlies & transposition hashes across plies..." << endl;
 
   Board bInitial;
   BoardHistory histInitial(bInitial, P_BLACK);
+  testAssert(histInitial.rules.maxPlies == 300);
+  testAssert(histInitial.pliesUntilDraw() == 300);
 
   Board b;
   BoardHistory hist(b, P_BLACK);
@@ -448,51 +450,56 @@ static void testPureRulesNoDrawAndTransposition() {
   Loc bPosB = Location::pawnLoc(4, 7, 17);
   Loc wPosA = Location::pawnLoc(4, 0, 17);
   Loc wPosB = Location::pawnLoc(4, 1, 17);
+  const Loc cycle[4] = {bPosB, wPosB, bPosA, wPosA};
 
-  // 75 cycles of 4 moves = 300 moves total
-  for(int cycle = 0; cycle < 75; cycle++) {
-    // Move 1: Black to B
-    hist.makeBoardMoveAssumeLegal(b, bPosB, P_BLACK, NULL);
-    testAssert(hist.isGameFinished == false);
-    testAssert(hist.winner == C_EMPTY);
-    testAssert(hist.isNoResult == false);
-
-    // Move 2: White to B
-    hist.makeBoardMoveAssumeLegal(b, wPosB, P_WHITE, NULL);
-    testAssert(hist.isGameFinished == false);
-    testAssert(hist.winner == C_EMPTY);
-    testAssert(hist.isNoResult == false);
-
-    // Move 3: Black to A
-    hist.makeBoardMoveAssumeLegal(b, bPosA, P_BLACK, NULL);
-    testAssert(hist.isGameFinished == false);
-    testAssert(hist.winner == C_EMPTY);
-    testAssert(hist.isNoResult == false);
-
-    // Move 4: White to A
-    hist.makeBoardMoveAssumeLegal(b, wPosA, P_WHITE, NULL);
+  // 74 cycles of 4 moves = 296 plies, back at the initial position
+  for(int ply = 0; ply < 296; ply++) {
+    hist.makeBoardMoveAssumeLegal(b, cycle[ply % 4], ply % 2 == 0 ? P_BLACK : P_WHITE, NULL);
     testAssert(hist.isGameFinished == false);
     testAssert(hist.winner == C_EMPTY);
     testAssert(hist.isNoResult == false);
   }
+  testAssert(hist.getCurrentTurnNumber() == 296);
+  testAssert(hist.pliesUntilDraw() == 4);
 
-  // Exactly at move 300:
-  testAssert((int)hist.moveHistory.size() == 300);
-  testAssert(hist.isGameFinished == false); // NO DRAW in pure Quoridor rules!
-  testAssert(hist.isNoResult == false);
-  testAssert(hist.winner == C_EMPTY);
-
-  // Pure Markov Transposition Merging Verification:
-  // At move 300, pawns are at initial locations and 0 walls placed.
-  // Board pos_hash, sitHash, situationRulesAndKoHash, and GraphHash::getStateHash MUST match initial!
+  // Same board and side to move as the initial position, but 296 plies later: the board hashes match, the
+  // situation hash (which the graph search and the NN cache use) doesn't, since the ply count changes the value.
   testAssert(b.pos_hash == bInitial.pos_hash);
   testAssert(b.getSitHash(P_BLACK) == bInitial.getSitHash(P_BLACK));
-  testAssert(BoardHistory::getSituationRulesAndKoHash(b, hist, P_BLACK, 0.5) ==
+  testAssert(BoardHistory::getSituationRulesAndKoHash(b, hist, P_BLACK, 0.5) !=
              BoardHistory::getSituationRulesAndKoHash(bInitial, histInitial, P_BLACK, 0.5));
-  testAssert(GraphHash::getStateHash(hist, P_BLACK, 0.5) ==
-             GraphHash::getStateHash(histInitial, P_BLACK, 0.5));
+  testAssert(GraphHash::getStateHash(hist, P_BLACK, 0.5) != GraphHash::getStateHash(histInitial, P_BLACK, 0.5));
+  // At the same ply count they match again.
+  {
+    BoardHistory histAt296(bInitial, P_BLACK);
+    histAt296.setInitialTurnNumber(296);
+    testAssert(BoardHistory::getSituationRulesAndKoHash(b, hist, P_BLACK, 0.5) ==
+               BoardHistory::getSituationRulesAndKoHash(bInitial, histAt296, P_BLACK, 0.5));
+    testAssert(GraphHash::getStateHash(hist, P_BLACK, 0.5) == GraphHash::getStateHash(histAt296, P_BLACK, 0.5));
+    // Other rules (here komi) change the hash too.
+    BoardHistory histOtherKomi(histAt296);
+    histOtherKomi.setKomi(0.5f);
+    testAssert(BoardHistory::getSituationRulesAndKoHash(b, hist, P_BLACK, 0.5) !=
+               BoardHistory::getSituationRulesAndKoHash(bInitial, histOtherKomi, P_BLACK, 0.5));
+  }
 
-  cout << "    -> Passed (Pure rules: 300 moves without draw, Markov state & transposition hash verified)!" << endl;
+  // Plies 297..299: still going. Ply 300: a draw by the ply limit.
+  for(int ply = 296; ply < 300; ply++) {
+    testAssert(hist.isGameFinished == false);
+    hist.makeBoardMoveAssumeLegal(b, cycle[ply % 4], ply % 2 == 0 ? P_BLACK : P_WHITE, NULL);
+  }
+  testAssert(hist.getCurrentTurnNumber() == 300);
+  testAssert(hist.isGameFinished);
+  testAssert(hist.winner == C_EMPTY);
+  testAssert(hist.isNoResult == false);
+  testAssert(hist.isScored);
+  testAssert(hist.isDraw());
+  testAssert(hist.finalWhiteMinusBlackScore == 0.0f);
+  testAssert(hist.finalWhiteLead == 0.0f);
+  testAssert(hist.pliesUntilDraw() == 0);
+  testAssert(!hist.isLegal(b, bPosB, P_BLACK));
+
+  cout << "    -> Passed (Draw exactly at ply 300, situation hashes include the ply count)!" << endl;
 }
 
 // Step 6 - Test 4: Resignation & RecentBoards Ring Buffer
@@ -570,7 +577,11 @@ static void testRulesParsingValidation() {
 
   // Valid JSON rules
   testAssert(Rules::tryParseRules("{}", r));
-  testAssert(Rules::tryParseRules("{\"rules\": \"quoridor\"}", r));
+  testAssert(Rules::tryParseRules("{\"maxPlies\": 400}", r));
+  testAssert(r.maxPlies == 400);
+  // Unknown keys are rejected; the Go rule keys are accepted and ignored
+  testAssert(!Rules::tryParseRules("{\"rules\": \"quoridor\"}", r));
+  testAssert(Rules::tryParseRules("{\"ko\": \"POSITIONAL\", \"scoring\": \"AREA\"}", r));
 
   // Invalid inputs
   testAssert(!Rules::tryParseRules("invalid_rules", r));
@@ -734,7 +745,7 @@ void Tests::runRulesTests() {
   testInitialBoardState();
   testBlackWinCondition();
   testWhiteWinCondition();
-  testPureRulesNoDrawAndTransposition();
+  testDrawAtMaxPliesAndTransposition();
   testResignationAndRecentBoards();
   testBoardHistoryIsLegalStrictAndTolerant();
   testRulesParsingValidation();

@@ -958,13 +958,29 @@ Player Setup::parseReportAnalysisWinrates(
   throw StringError("Could not parse config value for reportAnalysisWinratesAs: " + sOrig);
 }
 
+void Setup::loadQuoridorRuleKeys(ConfigParser& cfg, Rules& rules) {
+  if(cfg.contains("maxPlies"))
+    rules.maxPlies = cfg.getInt("maxPlies", 1, Rules::MAX_MAX_PLIES);
+  if(cfg.contains("timeBonusPerPly"))
+    rules.timeBonusPerPly = cfg.getFloat("timeBonusPerPly", 0.0f, Rules::MAX_TIME_BONUS_PER_PLY);
+  if(cfg.contains("blackInitialWalls"))
+    rules.blackInitialFences = cfg.getInt("blackInitialWalls", 0, Board::MAX_FENCE_NUM);
+  if(cfg.contains("whiteInitialWalls"))
+    rules.whiteInitialFences = cfg.getInt("whiteInitialWalls", 0, Board::MAX_FENCE_NUM);
+  rules.validateOrThrow("Config " + cfg.getFileName());
+}
+
 Rules Setup::loadSingleRules(
   ConfigParser& cfg,
   bool loadKomi
 ) {
-  Rules rules;
+  Rules rules = Rules::getQuoridorRules();
 
   if(cfg.contains("rules")) {
+    for(const string& key : Rules::quoridorRuleKeys()) {
+      if(cfg.contains(key))
+        throw StringError("Cannot both specify 'rules' and individual rules like " + key);
+    }
     if(cfg.contains("koRule")) throw StringError("Cannot both specify 'rules' and individual rules like koRule");
     if(cfg.contains("scoringRule")) throw StringError("Cannot both specify 'rules' and individual rules like scoringRule");
     if(cfg.contains("multiStoneSuicideLegal")) throw StringError("Cannot both specify 'rules' and individual rules like multiStoneSuicideLegal");
@@ -982,13 +998,11 @@ Rules Setup::loadSingleRules(
     string scoringRule = cfg.contains("scoringRule") ? cfg.getString("scoringRule", Rules::scoringRuleStrings()) : "AREA";
     bool multiStoneSuicideLegal = cfg.contains("multiStoneSuicideLegal") ? cfg.getBool("multiStoneSuicideLegal") : false;
     bool hasButton = cfg.contains("hasButton") ? cfg.getBool("hasButton") : false;
-    float komi = 7.5f;
 
     rules.koRule = Rules::parseKoRule(koRule);
     rules.scoringRule = Rules::parseScoringRule(scoringRule);
     rules.multiStoneSuicideLegal = multiStoneSuicideLegal;
     rules.hasButton = hasButton;
-    rules.komi = komi;
 
     if(cfg.contains("taxRule")) {
       string taxRule = cfg.getString("taxRule", Rules::taxRuleStrings());
@@ -1020,16 +1034,13 @@ Rules Setup::loadSingleRules(
       rules.friendlyPassOk = cfg.getBool("friendlyPassOk");
     }
 
-    //Drop default komi to 6.5 for territory rules, and to 7.0 for button
-    if(rules.scoringRule == Rules::SCORING_TERRITORY)
-      rules.komi = 6.5f;
-    else if(rules.hasButton)
-      rules.komi = 7.0f;
+    loadQuoridorRuleKeys(cfg, rules);
   }
 
-  if(loadKomi) {
-    rules.komi = cfg.getFloat("komi",Rules::MIN_USER_KOMI,Rules::MAX_USER_KOMI);
+  if(loadKomi && cfg.contains("komi")) {
+    rules.komi = cfg.getFloat("komi",-Rules::MAX_KOMI,Rules::MAX_KOMI);
   }
+  rules.validateOrThrow("Config " + cfg.getFileName());
 
   return rules;
 }

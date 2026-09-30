@@ -67,9 +67,9 @@ ExtraBlackAndKomi PlayUtils::chooseExtraBlackAndKomi(
 
 
 static float roundKomiWithLinearProb(float komi, Rand& rand) {
-  //Discretize komi
-  float lower = floor(komi*2.0f) / 2.0f;
-  float upper = ceil(komi*2.0f) / 2.0f;
+  //Discretize komi. KataQuoridor: onto the Quoridor komi grid (n + 0.5), see Rules::isValidKomi.
+  float lower = floor(komi - 0.5f) + 0.5f;
+  float upper = ceil(komi - 0.5f) + 0.5f;
 
   if(lower == upper)
     komi = lower;
@@ -364,14 +364,10 @@ double PlayUtils::getHackedLCBForWinrate(const Search* search, const AnalysisDat
   return lcb;
 }
 
+//KataQuoridor: the nearest valid Quoridor komi (n + 0.5, |komi| <= Rules::MAX_KOMI), see Rules::roundKomi.
 float PlayUtils::roundAndClipKomi(double unrounded, const Board& board) {
-  //Just in case, make sure komi is reasonable
-  float range = NNPos::KOMI_CLIP_RADIUS + board.pawnArea();
-  if(unrounded < -range)
-    unrounded = -range;
-  if(unrounded > range)
-    unrounded = range;
-  return (float)(0.5 * round(2.0 * unrounded));
+  (void)board;
+  return Rules::roundKomi(unrounded);
 }
 
 static SearchParams getNoiselessParams(const SearchParams& oldParams, int64_t numVisits) {
@@ -557,7 +553,9 @@ static double getNaiveEvenKomiHelper(
     }
   }
 
-  while(upperDelta - lowerDelta > 0.50001) {
+  //KataQuoridor: komi deltas are integers, since valid komis are one apart (n + 0.5). The window above starts at
+  //integers with a power-of-two width, so all midpoints are integers too.
+  while(upperDelta - lowerDelta > 1.00001) {
     double midDelta = 0.5 * (lowerDelta + upperDelta);
     double midWinLoss = evalWinLoss(midDelta);
     if(midWinLoss < 0) {
@@ -569,8 +567,8 @@ static double getNaiveEvenKomiHelper(
       upperWinLoss = midWinLoss;
     }
   }
-  //Floating point math should be exact to multiples of 0.5 so this should hold *exactly*.
-  testAssert(upperDelta - lowerDelta == 0.5);
+  //Floating point math should be exact to integers so this should hold *exactly*.
+  testAssert(upperDelta - lowerDelta == 1.0);
 
   double finalDelta;
   //If the winLoss are crossed, potentially due to noise, then just pick the average
@@ -604,8 +602,9 @@ void PlayUtils::adjustKomiToEven(
 ) {
   map<float,std::pair<double,double>> scoreWLCache;
   double newKomi = getNaiveEvenKomiHelper(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps);
-  double lower = floor(newKomi * 2.0) * 0.5;
-  double upper = lower + 0.5;
+  //KataQuoridor: randomly round to one of the two neighbouring valid komis (n + 0.5).
+  double lower = floor(newKomi - 0.5) + 0.5;
+  double upper = lower + 1.0;
   if(rand.nextBool((newKomi - lower) / (upper - lower)))
     newKomi = upper;
   else
@@ -626,7 +625,8 @@ float PlayUtils::computeLead(
   float oldKomi = hist.rules.komi;
   double naiveKomi = getNaiveEvenKomiHelper(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps);
 
-  bool granularityIsCoarse = hist.rules.scoringRule == Rules::SCORING_AREA && !hist.rules.hasButton;
+  //KataQuoridor: no area-scoring parity to smooth over; the lead moves in steps of one tempo like komi.
+  bool granularityIsCoarse = false;
   if(!granularityIsCoarse) {
     testAssert(hist.rules.komi == oldKomi);
     return (float)(oldKomi - naiveKomi);

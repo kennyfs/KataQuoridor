@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <cstring>
 #include "../core/test.h"
 
 using namespace std;
@@ -51,6 +53,7 @@ BoardHistory::BoardHistory()
     isPastNormalPhaseEnd(false),
     isScored(false),
     finalWhiteMinusBlackScore(0.0f),
+    finalWhiteLead(0.0f),
     whiteBonusScore(0.0f),
     whiteHandicapBonusScore(0.0f),
     hasButton(false),
@@ -102,6 +105,7 @@ BoardHistory::BoardHistory(const Board& board, Player pla, const Rules& r, int e
     isPastNormalPhaseEnd(false),
     isScored(false),
     finalWhiteMinusBlackScore(0.0f),
+    finalWhiteLead(0.0f),
     whiteBonusScore(0.0f),
     whiteHandicapBonusScore(0.0f),
     hasButton(false),
@@ -158,6 +162,7 @@ void BoardHistory::clear(const Board& board, Player pla, const Rules& r, int enc
   isPastNormalPhaseEnd = false;
   isScored = false;
   finalWhiteMinusBlackScore = 0.0f;
+  finalWhiteLead = 0.0f;
   whiteBonusScore = 0.0f;
   whiteHandicapBonusScore = 0.0f;
   hasButton = false;
@@ -174,8 +179,30 @@ void BoardHistory::clear(const Board& board, Player pla, const Rules& r, int enc
   std::fill(secondEncoreStartColors, secondEncoreStartColors + Board::MAX_ARR_SIZE, C_EMPTY);
 }
 
+//Which pawn is on its goal row, if any.
+static Player pawnOnGoal(const Board& board) {
+  if(Location::getY(board.blackPawnLoc, board.x_size) == 0)
+    return P_BLACK;
+  if(Location::getY(board.whitePawnLoc, board.x_size) == board.y_size - 1)
+    return P_WHITE;
+  return C_EMPTY;
+}
+
 void BoardHistory::setKomi(float newKomi) {
-  (void)newKomi;
+  if(!Rules::isValidKomi(newKomi))
+    throw StringError(
+      "Invalid komi " + Global::floatToString(newKomi) + ": must be a half-integer (n + 0.5) with |komi| <= " +
+      Global::floatToString(Rules::MAX_KOMI)
+    );
+  rules.komi = newKomi;
+
+  //Recompute the result of a game that ended at a goal, since the winner depends on komi.
+  if(isGameFinished && isScored && !isResignation && !isNoResult) {
+    const Board& board = getRecentBoard(0);
+    Player arrived = pawnOnGoal(board);
+    if(arrived != C_EMPTY)
+      scoreGameEndedAtGoal(board, arrived);
+  }
 }
 
 void BoardHistory::setInitialTurnNumber(int64_t n) {
@@ -206,15 +233,24 @@ BoardHistory BoardHistory::copyToInitial() const {
   return hist;
 }
 
+//As upstream. For Quoridor this is always 0: the score never decides a draw (gameResultWillBeInteger() is false),
+//so a draw's utility goes only through ScoreValue::whiteWinsOfWinner.
 float BoardHistory::whiteKomiAdjustmentForDraws(double drawEquivalentWinsForWhite) const {
-  (void)drawEquivalentWinsForWhite;
-  return 0.0f;
+  float drawAdjustment = rules.gameResultWillBeInteger() ? (float)(drawEquivalentWinsForWhite - 0.5) : 0.0f;
+  return drawAdjustment;
 }
 
+//As upstream: komi from pla's perspective.
 float BoardHistory::currentSelfKomi(Player pla, double drawEquivalentWinsForWhite) const {
-  (void)pla;
-  (void)drawEquivalentWinsForWhite;
-  return 0.0f;
+  float whiteKomiAdjusted = whiteBonusScore + whiteHandicapBonusScore + rules.komi + whiteKomiAdjustmentForDraws(drawEquivalentWinsForWhite);
+
+  if(pla == P_WHITE)
+    return whiteKomiAdjusted;
+  else if(pla == P_BLACK)
+    return -whiteKomiAdjusted;
+  else {
+    ASSERT_UNREACHABLE;
+  }
 }
 
 const Board& BoardHistory::getRecentBoard(int numMovesAgo) const {
@@ -255,6 +291,31 @@ int64_t BoardHistory::getCurrentTurnNumber() const {
   return initialTurnNumber + (int64_t)moveHistory.size();
 }
 
+int64_t BoardHistory::pliesUntilDraw() const {
+  return std::max((int64_t)0, (int64_t)rules.maxPlies - getCurrentTurnNumber());
+}
+
+bool BoardHistory::isDraw() const {
+  return isGameFinished && !isNoResult && !isResignation && winner == C_EMPTY;
+}
+
+void BoardHistory::scoreGameEndedAtGoal(const Board& board, Player arrived) {
+  assert(arrived == P_BLACK || arrived == P_WHITE);
+  double whiteMargin = board.whiteMarginWhenWonBy(arrived);
+  double tempo = arrived == P_WHITE ? whiteMargin : whiteMargin + 1.0;
+  double lead = tempo + rules.komi;
+  //Komi is a half-integer, so the lead is never 0.
+  assert(lead != 0.0);
+  double bonus = (double)rules.timeBonusPerPly * (double)std::max((int64_t)0, (int64_t)rules.maxPlies - getCurrentTurnNumber());
+  isGameFinished = true;
+  isNoResult = false;
+  isResignation = false;
+  isScored = true;
+  winner = lead > 0 ? P_WHITE : P_BLACK;
+  finalWhiteLead = (float)lead;
+  finalWhiteMinusBlackScore = (float)(lead > 0 ? lead + bonus : lead - bonus);
+}
+
 void BoardHistory::makeBoardMoveAssumeLegal(
     Board& board, Loc moveLoc, Player movePla,
     const KoHashTable* rootKoHashTable, bool preventEncore) {
@@ -265,6 +326,9 @@ void BoardHistory::makeBoardMoveAssumeLegal(
   winner = C_EMPTY;
   isNoResult = false;
   isResignation = false;
+  isScored = false;
+  finalWhiteMinusBlackScore = 0.0f;
+  finalWhiteLead = 0.0f;
 
   // 1. Execute the move
   board.playMoveAssumeLegal(moveLoc, movePla);
@@ -284,23 +348,20 @@ void BoardHistory::makeBoardMoveAssumeLegal(
   if(movePla == P_WHITE)
     whiteHasMoved = true;
 
-  // 4. Terminal condition: victory check
-  int blackY = Location::getY(board.blackPawnLoc, board.x_size);
-  int whiteY = Location::getY(board.whitePawnLoc, board.x_size);
-  if(blackY == 0) {
-    isGameFinished = true;
-    winner = P_BLACK;
-    isNoResult = false;
-    isScored = true;
-    finalWhiteMinusBlackScore = board.whiteMarginWhenWonBy(P_BLACK);
+  // 4. Terminal conditions. A pawn on its goal ends the game (komi decides the winner, see Rules), even on the
+  // last ply before the draw. Otherwise reaching rules.maxPlies plies is a draw.
+  Player arrived = pawnOnGoal(board);
+  if(arrived != C_EMPTY) {
+    scoreGameEndedAtGoal(board, arrived);
     return;
   }
-  if(whiteY == board.y_size - 1) {
+  if(getCurrentTurnNumber() >= rules.maxPlies) {
     isGameFinished = true;
-    winner = P_WHITE;
+    winner = C_EMPTY;
     isNoResult = false;
     isScored = true;
-    finalWhiteMinusBlackScore = board.whiteMarginWhenWonBy(P_WHITE);
+    finalWhiteMinusBlackScore = 0.0f;
+    finalWhiteLead = 0.0f;
     return;
   }
 }
@@ -331,6 +392,7 @@ void BoardHistory::endAndScoreGameNow(const Board&) {
     isResignation = false;
     isScored = true;
     finalWhiteMinusBlackScore = 0.0f;
+    finalWhiteLead = 0.0f;
   }
 }
 void BoardHistory::endAndScoreGameNow(const Board& board, Color area[Board::MAX_ARR_SIZE]) {
@@ -352,14 +414,27 @@ void BoardHistory::setWinnerByResignation(Player pla) {
 void BoardHistory::printBasicInfo(ostream& out, const Board& board) const {
   Board::printBoard(out, board, Board::NULL_LOC, &moveHistory);
   out << "Next player: " << PlayerIO::playerToString(presumedNextMovePla) << endl;
+  out << "Ply: " << getCurrentTurnNumber() << " (draw at " << rules.maxPlies << ", " << pliesUntilDraw() << " left)" << endl;
+  if(rules.komi != Rules::DEFAULT_KOMI)
+    out << "Komi: " << rules.komi << endl;
+  if(rules.timeBonusPerPly != 0.0f)
+    out << "Time bonus per ply: " << rules.timeBonusPerPly << endl;
   if(isGameFinished) {
-    // A Quoridor game only ends without a winner when the move cap is hit (endAndScoreGameNow).
-    if(winner == C_EMPTY)
-      out << "Game finished: Draw (move cutoff)" << (isNoResult ? " (NoResult)" : "") << endl;
-    else
+    if(winner == C_EMPTY) {
+      // Either the maxPlies draw rule, or a game cut off by a controller (endAndScoreGameNow).
+      if(getCurrentTurnNumber() >= rules.maxPlies)
+        out << "Game finished: Draw (" << rules.maxPlies << "-ply limit)" << (isNoResult ? " (NoResult)" : "") << endl;
+      else
+        out << "Game finished: Draw (move cutoff)" << (isNoResult ? " (NoResult)" : "") << endl;
+    }
+    else {
       out << "Game finished: winner = " << PlayerIO::playerToString(winner)
           << (isNoResult ? " (Draw/NoResult)" : "")
-          << (isResignation ? " (Resignation)" : "") << endl;
+          << (isResignation ? " (Resignation)" : "");
+      if(isScored && !isResignation && !isNoResult)
+        out << " (" << (winner == P_WHITE ? "W+" : "B+") << std::fabs(finalWhiteLead) << ")";
+      out << endl;
+    }
   }
 }
 
@@ -401,16 +476,33 @@ Hash128 BoardHistory::getSituationAndSimpleKoAndPrevPosHash(const Board& board, 
   return board.getSitHash(nextPlayer);
 }
 
+static uint64_t floatBits(float x) {
+  uint32_t bits;
+  std::memcpy(&bits, &x, sizeof(bits));
+  return bits;
+}
+
+//Besides the board and the side to move, the value of a Quoridor position depends on the rules that score it
+//(komi, maxPlies, the time bonus) and on the ply count (the maxPlies draw and the time bonus). Pawn moves are
+//reversible, so the same board recurs at different plies, and those must not share search nodes or (for nets
+//that see the ply count or komi) NN evaluations. Both the graph search hash and the NN cache use this.
 Hash128 BoardHistory::getSituationRulesAndKoHash(
-    const Board& board, const BoardHistory&,
+    const Board& board, const BoardHistory& hist,
     Player nextPlayer, double) {
-  return board.getSitHash(nextPlayer);
+  Hash128 hash = board.getSitHash(nextPlayer);
+  uint64_t h = Hash::splitMix64((uint64_t)hist.getCurrentTurnNumber());
+  h = Hash::splitMix64(h ^ (uint64_t)(uint32_t)hist.rules.maxPlies);
+  h = Hash::splitMix64(h ^ floatBits(hist.rules.komi));
+  h = Hash::splitMix64(h ^ floatBits(hist.rules.timeBonusPerPly));
+  hash.hash0 ^= h;
+  hash.hash1 ^= Hash::nasam(h);
+  return hash;
 }
 
 Hash128 BoardHistory::getSituationRulesAndKoHash(
-    const Board& board, const BoardHistory&,
-    Player nextPlayer, double, const BoardHistoryModes&) {
-  return board.getSitHash(nextPlayer);
+    const Board& board, const BoardHistory& hist,
+    Player nextPlayer, double drawEquivalentWinsForWhite, const BoardHistoryModes&) {
+  return getSituationRulesAndKoHash(board, hist, nextPlayer, drawEquivalentWinsForWhite);
 }
 
 // ------------------------------------------------------------------------

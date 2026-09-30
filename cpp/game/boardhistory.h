@@ -57,7 +57,11 @@ struct BoardHistory {
   int consecutiveEndingPasses;
   bool isPastNormalPhaseEnd;
   bool isScored;
+  //The final scores of a finished, scored game (see Rules for the definitions), from White's perspective:
+  //the utility score u (KataGo's score: search and training use it) and the lead s (the tempo lead, what
+  //search reports as lead and SGF RE shows). Both are 0 for a draw; they differ only by the time bonus.
   float finalWhiteMinusBlackScore;
+  float finalWhiteLead;
   float whiteBonusScore;
   float whiteHandicapBonusScore;
   bool hasButton;
@@ -114,7 +118,12 @@ struct BoardHistory {
   bool isFinalPhase() const;
   bool isPassForKo(const Board& board, Loc moveLoc, Player movePla) const;
 
+  //Plies played since the real game start: initialTurnNumber + moves in this history.
   int64_t getCurrentTurnNumber() const;
+  //Plies left until the game is drawn by rules.maxPlies (0 once it is reached).
+  int64_t pliesUntilDraw() const;
+  //Whether the game ended in a draw (by rules.maxPlies, or adjudicated by endAndScoreGameNow).
+  bool isDraw() const;
 
   // Core Quoridor move execution and terminal check
   void makeBoardMoveAssumeLegal(Board& board, Loc moveLoc, Player movePla, const KoHashTable* rootKoHashTable, bool preventEncore = false);
@@ -128,6 +137,11 @@ struct BoardHistory {
   void getAreaNow(const Board& board, Color area[Board::MAX_ARR_SIZE]) const;
 
   void setWinnerByResignation(Player pla);
+
+private:
+  //Ends and scores the game after `arrived`'s pawn reached its goal on `board`.
+  void scoreGameEndedAtGoal(const Board& board, Player arrived);
+public:
 
   void printBasicInfo(std::ostream& out, const Board& board) const;
   void printDebugInfo(std::ostream& out, const Board& board) const;
