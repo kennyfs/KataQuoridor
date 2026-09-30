@@ -22,6 +22,10 @@ What it computes
   * value calibration against game outcomes;
   * C++ search (GTP kata-search_analyze) on positions sampled from selfplay .sgfs: raw net vs search, with a
     position browser, per-position attributions and attention maps.
+
+Quoridor I/O v1 nets only (17 spatial / 15 global inputs, one margin head, the 0.1.0 training data targets): the
+feature names, the Python fillRow replica (quoridor_state.py) and the margin analyses do not know the I/O v2 inputs
+and heads (docs/QuoridorIOv2.md), so load_net refuses a v2 net.
 """
 import argparse
 import base64
@@ -48,6 +52,7 @@ sys.path.insert(0, HERE)
 
 from katago.train.load_model import load_model  # noqa: E402
 from katago.train import model_pytorch  # noqa: E402
+from katago.train import modelconfigs  # noqa: E402
 from katago.train.data_processing_pytorch import decode_binary_input  # noqa: E402
 import quoridor_state as qs  # noqa: E402
 
@@ -107,6 +112,9 @@ def load_net(ckpt, device):
     train_state = sd.get("train_state", {})
     del sd
     model, swa, other = load_model(ckpt, use_swa=has_swa, device=device)
+    io_version = modelconfigs.get_quoridor_io_version(model.config)
+    if io_version != 1:
+        raise SystemExit(f"{ckpt}: Quoridor I/O v{io_version} net; the model viewer supports I/O v1 nets only")
     net = swa if swa is not None else model
     net.eval()
     for p in net.parameters():
@@ -263,7 +271,7 @@ def build_arch(net, shapes):
                 {"id": "vh_outs", "kind": "row", "children": [
                     node("value_head.linear_value", "output", "Win / loss", "2 logits", prefix="value_head.linear_value"),
                     node("value_head.linear_td_value", "output", "TD value", "4 horizons x 2", prefix="value_head.linear_td_value"),
-                    node("value_head.linear_game_margin", "output", "Game margin", "moves", prefix="value_head.linear_game_margin"),
+                    node("value_head.linear_utility_score", "output", "Game margin", "moves", prefix="value_head.linear_utility_score"),
                     node("value_head.linear_misc", "output", "Uncertainty", "stdev, st errors", prefix="value_head.linear_misc"),
                     node("value_head.linear_variance_time", "output", "Variance time", "1", prefix="value_head.linear_variance_time"),
                 ]},

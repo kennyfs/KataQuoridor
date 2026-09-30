@@ -51,9 +51,22 @@ def is_quoridor(config: ModelConfig) -> bool:
     # config is an old/test Go config, not necessarily Quoridor.
     return config.get("game") == "quoridor"
 
+# Quoridor I/O versions (docs/QuoridorIOv2.md; QuoridorNN in cpp/neuralnet/quoridornn.h): 1 = KataQuoridor 0.1.0
+# nets, 2 = I/O v2 (legal-wall planes, plies-until-draw and komi inputs; utility-score, lead and remaining-plies heads).
+# Written by the exporter as model option D. Training data only exists for QUORIDOR_TRAINING_IO_VERSION.
+QUORIDOR_TRAINING_IO_VERSION = 2
+QUORIDOR_NUM_BIN_INPUT_FEATURES = {1: 17, 2: 19}
+QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17}
+
+def get_quoridor_io_version(config: ModelConfig) -> int:
+    assert is_quoridor(config)
+    io_version = config.get("quoridor_io_version", 1)
+    assert io_version in QUORIDOR_NUM_BIN_INPUT_FEATURES, f"unknown quoridor_io_version {io_version}"
+    return io_version
+
 def get_num_bin_input_features(config: ModelConfig):
     if is_quoridor(config):
-        return 17
+        return QUORIDOR_NUM_BIN_INPUT_FEATURES[get_quoridor_io_version(config)]
     version = get_version(config)
     if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16 or version == 17:
         return 22
@@ -62,7 +75,7 @@ def get_num_bin_input_features(config: ModelConfig):
 
 def get_num_global_input_features(config: ModelConfig):
     if is_quoridor(config):
-        return 15
+        return QUORIDOR_NUM_GLOBAL_INPUT_FEATURES[get_quoridor_io_version(config)]
     version = get_version(config)
     if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16 or version == 17:
         return 19
@@ -1889,9 +1902,17 @@ b2c64_quoridor = {
     "pos_len": 9,
 }
 
+# Quoridor I/O v2 presets: the same architectures with the v2 inputs and heads. The presets without "_v2" stay I/O v1
+# (KataQuoridor 0.1.0 nets); only v2 nets can be trained.
+tf2_b4c192_quoridor_v2 = dict(tf2_b4c192_quoridor, quoridor_io_version=2)
+b2c64_quoridor_v2 = dict(b2c64_quoridor, quoridor_io_version=2)
+
 
 base_config_of_name = {
     # QUORIDOR MODELS =============================================================
+    "tf2_b4c192_quoridor_v2": tf2_b4c192_quoridor_v2,
+    "b2c64_quoridor_v2": b2c64_quoridor_v2,
+    # I/O v1 (inference and export of existing nets only).
     "tf2_b4c192_quoridor": tf2_b4c192_quoridor,
     # Deprecated alias of tf2_b4c192_quoridor (same config), kept so existing run commands keep working.
     "tf3_b4c192_quoridor": tf2_b4c192_quoridor,

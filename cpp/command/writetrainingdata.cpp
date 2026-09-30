@@ -691,9 +691,9 @@ int MainCmds::writetrainingdata(const vector<string>& args) {
   if(dataBoardLen > Board::MAX_LEN)
     throw StringError("dataBoardLen > maximum board len, must recompile to increase");
 
-  const int inputsVersion = QuoridorNN::MAX_SUPPORTED_IO_VERSION;
-  const int numBinaryChannels = QuoridorNN::NUM_FEATURES_SPATIAL_V1;
-  const int numGlobalChannels = QuoridorNN::NUM_FEATURES_GLOBAL_V1;
+  const int inputsVersion = QuoridorNN::TRAINING_IO_VERSION;
+  const int numBinaryChannels = QuoridorNN::numSpatialFeatures(inputsVersion);
+  const int numGlobalChannels = QuoridorNN::numGlobalFeatures(inputsVersion);
 
   const std::set<string> noTrainUsers = loadStrippedTxtFileLines(noTrainUsersFile);
   const std::set<string> onlyTrainUsers =

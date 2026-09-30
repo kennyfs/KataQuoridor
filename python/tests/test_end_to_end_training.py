@@ -49,10 +49,10 @@ def test_end_to_end_training():
         # Verify raw npz shapes and contents
         sample_npz = np.load(raw_files[0])
         print(f"[E2E] Verifying raw npz shapes: {list(sample_npz.keys())}")
-        assert sample_npz["binaryInputNCHWPacked"].shape == (rows_per_file, 17, 11)
+        assert sample_npz["binaryInputNCHWPacked"].shape == (rows_per_file, 19, 11)
         assert sample_npz["spatialDistNCHW"].shape == (rows_per_file, 4, 9, 9)
         assert sample_npz["spatialDistNCHW"].dtype == np.uint8
-        assert sample_npz["globalInputNC"].shape == (rows_per_file, 15)
+        assert sample_npz["globalInputNC"].shape == (rows_per_file, 17)
         assert sample_npz["policyTargetsNCMove"].shape == (rows_per_file, 2, 243)
         assert sample_npz["globalTargetsNC"].shape == (rows_per_file, 80)
         assert sample_npz["scoreDistrN"].shape == (rows_per_file, 282)
@@ -80,7 +80,7 @@ def test_end_to_end_training():
         print(f"[E2E] Successfully generated {len(shuffled_files)} shuffled files.")
 
         # 3. Setup Model, Optimizer, and Metrics
-        cfg = modelconfigs.base_config_of_name["b2c64_quoridor"]
+        cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v2"]
         model = Model(cfg, pos_len=9)
         model.train()
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)

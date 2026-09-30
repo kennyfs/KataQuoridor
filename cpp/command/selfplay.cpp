@@ -115,7 +115,7 @@ int MainCmds::selfplay(const vector<string>& args) {
   const int inputsVersion =
     cfg.contains("inputsVersion") ?
     cfg.getInt("inputsVersion",0,10000) :
-    QuoridorNN::MAX_SUPPORTED_IO_VERSION;
+    QuoridorNN::TRAINING_IO_VERSION;
   //Width and height of the board to use when writing data: the model's 9x9 tensor space, not the
   //17x17 search space.
   const int dataBoardLen =

@@ -93,6 +93,8 @@ class SelfplayManager {
     // Counted at game-finish in the data write loop (lock-free), read cross-thread for logging.
     std::atomic<int64_t> gamesFinishedCount;
     std::atomic<int64_t> movesPlayedCount;
+    // Of the finished games above, those drawn by Rules::maxPlies (written to training data like the others).
+    std::atomic<int64_t> gamesDrawnCount;
     // Games that hit the move cutoff, and the moves in them. These games are not written or counted above.
     std::atomic<int64_t> gamesCutoffCount;
     std::atomic<int64_t> movesPlayedCutoffCount;
@@ -133,7 +135,8 @@ class SelfplayManager {
   void releaseAlreadyLocked(SelfplayManager::ModelData* foundData);
   void maybeAutoCleanupAlreadyLocked();
   void runDataWriteLoopImpl(ModelData* modelData);
-  //One summary line: games started / finished normally / hit cutoff, cutoff rate, average game length.
+  //One summary line: games started / finished normally / of which draws, draw rate / hit cutoff, cutoff rate, average
+  //game length.
   static std::string gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount);
 
  public:

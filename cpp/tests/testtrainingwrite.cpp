@@ -65,12 +65,12 @@ static NNEvaluator* startNNEval(
 static void runReanalysisRowChannelsTest() {
   cout << "Running reanalysis row channels test" << endl;
 
-  int inputsVersion = 1;
+  int inputsVersion = QuoridorNN::TRAINING_IO_VERSION;
   int maxRows = 4;
   int nnXLen = 9;
   int nnYLen = 9;
   TrainingWriteBuffers buffers(
-    inputsVersion, maxRows, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+    inputsVersion, maxRows, QuoridorNN::numSpatialFeatures(inputsVersion), QuoridorNN::numGlobalFeatures(inputsVersion), nnXLen, nnYLen, false
   );
 
   Board board(17,17);
@@ -161,12 +161,12 @@ static void runReanalysisRowChannelsTest() {
 static void runQuoridorTrainingWriteTest() {
   cout << "Running Quoridor training write and canonical target test" << endl;
 
-  int inputsVersion = 1;
+  int inputsVersion = QuoridorNN::TRAINING_IO_VERSION;
   int maxRows = 8;
   int nnXLen = 9;
   int nnYLen = 9;
   TrainingWriteBuffers buffers(
-    inputsVersion, maxRows, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, nnXLen, nnYLen, false
+    inputsVersion, maxRows, QuoridorNN::numSpatialFeatures(inputsVersion), QuoridorNN::numGlobalFeatures(inputsVersion), nnXLen, nnYLen, false
   );
 
   // 1. Verify buffer shapes
@@ -217,7 +217,8 @@ static void runQuoridorTrainingWriteTest() {
   finalBoard.playMoveAssumeLegal(Location::pawnLoc(4, 0, 17), P_BLACK);
   posHistForFutureBoards.push_back(finalBoard);
 
-  BoardHistory endHist(finalBoard, P_WHITE, rules, 5, BoardHistoryModes(false, false));
+  BoardHistory endHist(finalBoard, P_WHITE, rules, 0, BoardHistoryModes(false, false));
+  endHist.initialTurnNumber = 5; // the 5 plies above
   endHist.isGameFinished = true;
   endHist.winner = P_BLACK;
   endHist.isNoResult = false;
@@ -227,9 +228,12 @@ static void runQuoridorTrainingWriteTest() {
     whiteValueTargets[i].win = 0.0f;
     whiteValueTargets[i].loss = 1.0f; // Black won
     whiteValueTargets[i].noResult = 0.0f;
-    whiteValueTargets[i].score = -5.0f;
+    whiteValueTargets[i].score = -7.0f;
     whiteValueTargets[i].hasLead = false;
   }
+  // As in Play::runGame, the final targets carry the game's lead
+  whiteValueTargets.back().hasLead = true;
+  whiteValueTargets.back().lead = -5.5f;
   vector<QValueTargets> whiteQValueTargets(posHistForFutureBoards.size());
   NNRawStats nnRawStats;
   nnRawStats.whiteWinLoss = 0.0;
@@ -295,9 +299,11 @@ static void runQuoridorTrainingWriteTest() {
   testAssert(gt[26] == 1.0f); // policy player weight
   testAssert(gt[27] == 1.0f); // aux weight
   testAssert(gt[28] == 1.0f); // policy opp weight
-  testAssert(gt[29] == 1.0f); // margin weight
-  // Black won, so nextPlayer (Black) lead is positive
-  testAssert(gt[21] > 0.0f);
+  testAssert(gt[29] == 1.0f); // lead weight
+  // Black won, so nextPlayer (Black) score and lead are positive
+  testAssert(gt[20] == 7.0f);
+  testAssert(gt[21] == 5.5f);
+  testAssert(gt[23] == 5.0f); // plies until the game ended
 
   // Add Row 1: White to move from b1
   // White to move: canonical Y-flip applied!
@@ -338,9 +344,10 @@ static void runQuoridorTrainingWriteTest() {
   // Terminal H-wall at (5, 1): White rCanon = 7 - 1 = 6. slot = 3 * 81 + 6 * 9 + 5 = 297 + 5 = 302.
   testAssert(vtWhite[3 * 81 + 6 * 9 + 5] == 1);
 
-  // Global targets for White (who lost, so margin is negative)
+  // Global targets for White (who lost, so score and lead are negative)
   const float* gtWhite = buffers.globalTargetsNC.data + 1 * 80;
-  testAssert(gtWhite[21] < 0.0f);
+  testAssert(gtWhite[20] == -7.0f);
+  testAssert(gtWhite[21] == -5.5f);
 
   // Write buffers to a temporary zip file and test file writing
   string tmpZip = "test_quoridor_training_write_tmp.npz";

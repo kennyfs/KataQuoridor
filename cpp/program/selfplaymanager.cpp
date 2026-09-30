@@ -15,6 +15,7 @@ SelfplayManager::ModelData::ModelData(
   gameStartedCount(0),
   gamesFinishedCount(0),
   movesPlayedCount(0),
+  gamesDrawnCount(0),
   gamesCutoffCount(0),
   movesPlayedCutoffCount(0),
   lastReleaseTime(initialTime),
@@ -325,15 +326,18 @@ void SelfplayManager::countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMove
 
 string SelfplayManager::gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount) {
   int64_t finished = modelData->gamesFinishedCount.load(std::memory_order_relaxed);
+  int64_t drawn = modelData->gamesDrawnCount.load(std::memory_order_relaxed);
   int64_t cutoff = modelData->gamesCutoffCount.load(std::memory_order_relaxed);
   int64_t moves = modelData->movesPlayedCount.load(std::memory_order_relaxed) + modelData->movesPlayedCutoffCount.load(std::memory_order_relaxed);
   int64_t completed = finished + cutoff;
   double cutoffRate = completed > 0 ? (double)cutoff / (double)completed : 0.0;
+  double drawRate = finished > 0 ? (double)drawn / (double)finished : 0.0;
   double avgLength = completed > 0 ? (double)moves / (double)completed : 0.0;
   return
     "Game stats for " + modelData->modelName +
     ": started " + Global::int64ToString(gameStartedCount) +
     ", finished normally " + Global::int64ToString(finished) +
+    " (draws " + Global::int64ToString(drawn) + ", draw rate " + Global::doubleToString(drawRate) + ")" +
     ", hit cutoff " + Global::int64ToString(cutoff) +
     ", cutoff rate " + Global::doubleToString(cutoffRate) +
     ", avg game length " + Global::doubleToString(avgLength);
@@ -400,6 +404,8 @@ void SelfplayManager::runDataWriteLoopImpl(ModelData* modelData) {
     modelData->tdataWriter->writeGame(*gameData);
 
     modelData->gamesFinishedCount.fetch_add(1, std::memory_order_relaxed);
+    if(gameData->endHist.isDraw())
+      modelData->gamesDrawnCount.fetch_add(1, std::memory_order_relaxed);
     // Moves actually played by search this game (excludes any pre-placed opening/start-position moves).
     testAssert(gameData->startHist.moveHistory.size() <= gameData->endHist.moveHistory.size());
     modelData->movesPlayedCount.fetch_add(

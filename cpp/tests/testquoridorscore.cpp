@@ -3,8 +3,9 @@
  * Phase 2 tests for the Quoridor margin (see QuoridorNN in neuralnet/quoridornn.h):
  *  - terminal-score test: scripted games won by each color end with finalWhiteMinusBlackScore equal to the loser's
  *    distance, positive iff White won; a cutoff draw scores 0
- *  - margin-target test: the training writer's game-margin target (global column 21, weight column 29) has that
- *    margin, from the row's nextPlayer perspective
+ *  - outcome-target test: the training writer's I/O v2 outcome targets (docs/QuoridorIOv2.md §4): the final
+ *    utility score u (global column 20), the final lead s (column 21, weight column 29), the plies left (column 23)
+ *    and the value, for won games and a maxPlies draw, from the row's nextPlayer perspective
  *  - anti-dithering search test: with an untrained net (so all guidance comes from terminal scores), the engine
  *    converts a won race quickly when score utility is on. The same test with score utility off is reported.
  */
@@ -78,9 +79,9 @@ struct ScriptedGame {
   Player winner() const { return hist.winner; }
 };
 
-static ScriptedGame playScripted(const string& blackScript, const string& whiteScript) {
+static ScriptedGame playScripted(const string& blackScript, const string& whiteScript, const Rules& rules = Rules::getTrompTaylorish()) {
   Board board;
-  BoardHistory hist(board, P_BLACK, Rules::getTrompTaylorish(), 0, BoardHistoryModes(false, false));
+  BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes(false, false));
   ScriptedGame g{{}, {}, {}, board, hist};
   Player pla = P_BLACK;
   size_t bi = 0, wi = 0;
@@ -164,38 +165,49 @@ static void testTerminalScore() {
 
 //------------------------------------------------------------------------------------------------
 
-//Adds the row for the position before ply plyIdx of the scripted game, and returns the (target, weight) of the
-//game-margin column.
-static pair<float, float> marginTargetOfRow(
-  const ScriptedGame& g, int plyIdx, bool rowHasLead, bool useFutureBoards, bool asDraw
-) {
+//The global targets and value target of the row for the position before ply plyIdx of the scripted game, with
+//value targets as Play::runGame makes them: every turn's (here: the final result, as if searched perfectly), and
+//the game's final entry, which alone carries the final lead. mainRow: a row of the game itself (with the game's
+//continuation); else a side position. leadEstimate: this row's targets carry a search's lead estimate.
+struct OutcomeRow {
+  vector<float> gt;  //the 80 global targets
+};
+static OutcomeRow outcomeRowOf(const ScriptedGame& g, int plyIdx, bool mainRow, bool leadEstimate = false) {
+  const int inputsVersion = QuoridorNN::TRAINING_IO_VERSION;
   TrainingWriteBuffers buffers(
-    1, 2, QuoridorNN::NUM_FEATURES_SPATIAL_V1, QuoridorNN::NUM_FEATURES_GLOBAL_V1, QuoridorNN::MODEL_LEN, QuoridorNN::MODEL_LEN, false
+    inputsVersion, 2, QuoridorNN::numSpatialFeatures(inputsVersion), QuoridorNN::numGlobalFeatures(inputsVersion),
+    QuoridorNN::MODEL_LEN, QuoridorNN::MODEL_LEN, false
   );
-  BoardHistory endHist = g.hist;
-  if(asDraw) {
-    endHist = g.hists[plyIdx];
-    endHist.endAndScoreGameNow(g.boards[plyIdx]);
-  }
+  const BoardHistory& endHist = g.hist;
+  testAssert(endHist.isGameFinished && !endHist.isNoResult);
   Player nextPla = (plyIdx % 2 == 0) ? P_BLACK : P_WHITE;
-  vector<ValueTargets> whiteValueTargets(g.boards.size());
-  for(ValueTargets& t : whiteValueTargets) {
-    t.win = endHist.winner == P_WHITE ? 1.0f : 0.0f;
-    t.loss = 1.0f - t.win;
-    t.noResult = 0.0f;
-    t.score = endHist.finalWhiteMinusBlackScore;
-    //The value targets of a finished game carry the final lead (Play::runGame's finalValueTargets).
-    t.hasLead = rowHasLead;
-    t.lead = endHist.finalWhiteLead;
+  ValueTargets resultTargets;
+  resultTargets.win = (float)ScoreValue::whiteWinsOfWinner(endHist.winner, 0.5);
+  resultTargets.loss = 1.0f - resultTargets.win;
+  resultTargets.noResult = 0.0f;
+  resultTargets.score = endHist.finalWhiteMinusBlackScore;
+  vector<ValueTargets> whiteValueTargets;
+  if(mainRow) {
+    whiteValueTargets.assign(g.boards.size(), resultTargets);
+    whiteValueTargets.back().hasLead = true;
+    whiteValueTargets.back().lead = endHist.finalWhiteLead;
   }
-  vector<QValueTargets> whiteQValueTargets(g.boards.size());
+  else {
+    whiteValueTargets.assign(1, resultTargets);
+  }
+  int idx = mainRow ? plyIdx : 0;
+  if(leadEstimate) {
+    whiteValueTargets[idx].hasLead = true;
+    whiteValueTargets[idx].lead = 1.5f;
+  }
+  vector<QValueTargets> whiteQValueTargets(whiteValueTargets.size());
   vector<PolicyTargetMove> policyTarget;
   policyTarget.push_back(PolicyTargetMove(g.moves[plyIdx], 100));
   NNRawStats nnRawStats;
   nnRawStats.whiteWinLoss = 0.0;
   nnRawStats.whiteScoreMean = 0.0;
   nnRawStats.policyEntropy = 0.0;
-  Rand rand("quoridorMarginTargetTest");
+  Rand rand("quoridorOutcomeTargetTest");
   buffers.addRow(
     g.boards[plyIdx], g.hists[plyIdx], nextPla,
     g.hists[0], endHist,
@@ -203,51 +215,91 @@ static pair<float, float> marginTargetOfRow(
     &policyTarget, NULL,
     0.1, 1.0, 1.0,
     whiteValueTargets, whiteQValueTargets,
-    plyIdx, 1.0f, 1.0f, 1.0f,
+    idx, 1.0f, 1.0f, 1.0f,
     nnRawStats,
-    &g.boards.back(), NULL, NULL, NULL,
-    useFutureBoards ? &g.boards : NULL,
-    !useFutureBoards, 0, 0.5, C_EMPTY, 0.0,
+    NULL, NULL, NULL, NULL,
+    mainRow ? &g.boards : NULL,
+    !mainRow, 0, 0.5, C_EMPTY, 0.0,
     Hash128(), vector<ChangedNeuralNet*>(),
-    asDraw, 0, FinishedGameData::MODE_NORMAL,
+    false, 0, FinishedGameData::MODE_NORMAL,
     NULL, rand, ReanalysisData()
   );
-  const float* gt = buffers.globalTargetsNC.data;
-  return make_pair(gt[21], gt[29]);
+  OutcomeRow row;
+  row.gt.assign(buffers.globalTargetsNC.data, buffers.globalTargetsNC.data + 80);
+  return row;
 }
 
-static void testMarginTarget() {
-  cout << "Running Quoridor margin target test" << endl;
+static bool approxEqual(float a, float b) {
+  return std::fabs(a - b) < 1e-4f;
+}
+
+static void testOutcomeTargets() {
+  cout << "Running Quoridor outcome target test" << endl;
   ScriptedGame whiteWon = whiteWinsGame();
   ScriptedGame blackWon = blackWinsGame();
-  //Row 0: Black to move. Row 1: White to move. Target is from the row's nextPlayer perspective.
-  //Rows without a lead (the self-play default, estimateLeadProb = 0) get the game's margin, as in 0.1.0; rows with
-  //a lead get that lead, which is now tempo + komi (margin -/+ 0.5). The I/O v2 writer (step 2 of
-  //docs/QuoridorIOv2.md) will define these targets anew.
-  for(bool rowHasLead : {false, true}) {
-    float whiteWonTarget = rowHasLead ? WHITE_WINS_SCORE : WHITE_WINS_MARGIN;
-    float blackWonTarget = rowHasLead ? BLACK_WINS_SCORE : BLACK_WINS_MARGIN;
-    pair<float, float> r;
-    r = marginTargetOfRow(whiteWon, 0, rowHasLead, true, false);
-    testAssert(r.first == -whiteWonTarget && r.second == 1.0f);  //Black to move, White won by 5
-    r = marginTargetOfRow(whiteWon, 1, rowHasLead, true, false);
-    testAssert(r.first == whiteWonTarget && r.second == 1.0f);   //White to move, White won by 5
-    r = marginTargetOfRow(blackWon, 0, rowHasLead, true, false);
-    testAssert(r.first == -blackWonTarget && r.second == 1.0f);  //Black to move, Black won by 6
-    r = marginTargetOfRow(blackWon, 1, rowHasLead, true, false);
-    testAssert(r.first == blackWonTarget && r.second == 1.0f);   //White to move, Black won by 6
-  }
-  //Side positions have no future boards and no lead: the final margin of the actual game is unknown, weight 0.
+  //Row 0: Black to move. Row 1: White to move. Targets are from the row's nextPlayer perspective.
+  //Standard rules: u = s = tempo + komi.
   {
-    pair<float, float> r = marginTargetOfRow(whiteWon, 0, false, false, false);
-    testAssert(r.second == 0.0f);
+    OutcomeRow r = outcomeRowOf(whiteWon, 0, true);  //Black to move, White won W+5 on ply 16
+    testAssert(r.gt[0] == 0.0f && r.gt[1] == 1.0f);
+    testAssert(r.gt[20] == -WHITE_WINS_SCORE && r.gt[27] == 1.0f);
+    testAssert(r.gt[21] == -WHITE_WINS_SCORE && r.gt[29] == 1.0f);
+    testAssert(r.gt[23] == 16.0f);
+    testAssert(r.gt[52] == 0.0f && r.gt[62] == 1.0f);
+    r = outcomeRowOf(whiteWon, 1, true);  //White to move
+    testAssert(r.gt[0] == 1.0f && r.gt[1] == 0.0f);
+    testAssert(r.gt[20] == WHITE_WINS_SCORE && r.gt[21] == WHITE_WINS_SCORE && r.gt[23] == 15.0f);
+    r = outcomeRowOf(blackWon, 0, true);  //Black to move, Black won B+6 on ply 15
+    testAssert(r.gt[20] == -BLACK_WINS_SCORE && r.gt[21] == -BLACK_WINS_SCORE && r.gt[23] == 15.0f);
+    r = outcomeRowOf(blackWon, 13, true);  //White to move, two plies before the end
+    testAssert(r.gt[20] == BLACK_WINS_SCORE && r.gt[21] == BLACK_WINS_SCORE && r.gt[23] == 2.0f);
   }
-  //A game cut off as a draw has no margin to learn from.
+  //Komi and time bonus: u and s differ.
   {
-    pair<float, float> r = marginTargetOfRow(whiteWon, 1, false, true, true);
-    testAssert(r.second == 0.0f && r.first == 0.0f);
+    Rules rules = Rules::getTrompTaylorish();
+    rules.komi = 1.5f;
+    rules.timeBonusPerPly = 0.125f;
+    ScriptedGame g = playScripted("LFFFLRLR", "FFFFFFFF", rules);
+    testAssert(g.hist.winner == P_WHITE && g.hist.getCurrentTurnNumber() == 16);
+    //t = 5, s = 6.5, u = 6.5 + 0.125 * (300 - 16) = 42
+    OutcomeRow r = outcomeRowOf(g, 3, true);
+    testAssert(approxEqual(r.gt[20], 42.0f) && r.gt[21] == 6.5f && r.gt[29] == 1.0f && r.gt[23] == 13.0f);
+    //Black's view, and komi as a target-side input: C47 is the side to move's komi.
+    r = outcomeRowOf(g, 4, true);
+    testAssert(approxEqual(r.gt[20], -42.0f) && r.gt[21] == -6.5f && r.gt[47] == -1.5f);
   }
-  cout << "Quoridor margin target test passed" << endl;
+  //A draw at maxPlies: value 0.5 / 0.5, u = 0 with its weight, no lead, plies left to the draw, a normal finished game.
+  {
+    Rules rules = Rules::getTrompTaylorish();
+    rules.maxPlies = 10;
+    ScriptedGame g = playScripted("LRLRLRLR", "LRLRLRLR", rules);
+    testAssert(g.hist.isDraw() && g.hist.getCurrentTurnNumber() == 10);
+    for(int ply : {0, 1, 9}) {
+      OutcomeRow r = outcomeRowOf(g, ply, true);
+      testAssert(r.gt[0] == 0.5f && r.gt[1] == 0.5f);
+      testAssert(r.gt[20] == 0.0f && r.gt[27] == 1.0f);
+      testAssert(r.gt[21] == 0.0f && r.gt[29] == 0.0f);
+      testAssert(r.gt[23] == (float)(10 - ply));
+      testAssert(r.gt[52] == 0.0f && r.gt[62] == 1.0f);
+    }
+    //A lead estimate from a search still counts in a drawn game (White's +1.5, Black to move).
+    OutcomeRow r = outcomeRowOf(g, 2, true, true);
+    testAssert(r.gt[21] == -1.5f && r.gt[29] == 1.0f);
+  }
+  //Side positions: the actual game's outcome is not theirs, so no outcome targets, unless a search estimated a lead.
+  {
+    OutcomeRow r = outcomeRowOf(whiteWon, 0, false);
+    testAssert(r.gt[20] == 0.0f && r.gt[27] == 0.0f && r.gt[23] == 0.0f);
+    testAssert(r.gt[21] == 0.0f && r.gt[29] == 0.0f);
+    r = outcomeRowOf(whiteWon, 1, false, true);
+    testAssert(r.gt[21] == 1.5f && r.gt[29] == 1.0f && r.gt[27] == 0.0f);
+  }
+  //A main row with a lead estimate uses it instead of the final lead.
+  {
+    OutcomeRow r = outcomeRowOf(whiteWon, 1, true, true);
+    testAssert(r.gt[21] == 1.5f && r.gt[29] == 1.0f && r.gt[20] == WHITE_WINS_SCORE);
+  }
+  cout << "Quoridor outcome target test passed" << endl;
 }
 
 //------------------------------------------------------------------------------------------------
@@ -351,7 +403,7 @@ static void testAntiDithering() {
 void Tests::runQuoridorScoreTests() {
   cout << "=== Running Quoridor margin / score utility tests ===" << endl;
   testTerminalScore();
-  testMarginTarget();
+  testOutcomeTargets();
   testAntiDithering();
   cout << "=== Quoridor margin / score utility tests passed ===" << endl;
 }
