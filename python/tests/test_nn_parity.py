@@ -52,7 +52,7 @@ SEARCH_LEN = 17
 POLICY_SIZE = SEARCH_LEN * SEARCH_LEN + 1
 FP32_TOL = float(os.environ.get("NN_PARITY_TOL", "1e-4"))
 # $NN_PARITY_MODELS (comma-separated) restricts the nets, e.g. conv only for CUDA NCHW, which rejects transformers.
-MODEL_CONFIGS = os.environ.get("NN_PARITY_MODELS", "b2c64_quoridor,tf3_b4c192_quoridor").split(",")
+MODEL_CONFIGS = os.environ.get("NN_PARITY_MODELS", "b2c64_quoridor,tf2_b4c192_quoridor").split(",")
 
 
 # ---------------------------------------------------------------------------------------------------------

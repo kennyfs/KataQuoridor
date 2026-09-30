@@ -50,7 +50,7 @@ else
     printf 'cudaUseFP16 = %s\ncudaUseNHWC = %s\ncudaDeviceToUse = 0\n' "$2" "$3" > "$cfg"
     echo "==> NN parity $label (tolerance $4; log: $OUT/parity_$label.log)"
     if (cd "$REPO/python" && NN_PARITY_CONFIG="$cfg" NN_PARITY_TOL="$4" NN_PARITY_OUTDIR="$dir" \
-          NN_PARITY_MODELS="${5:-b2c64_quoridor,tf3_b4c192_quoridor}" \
+          NN_PARITY_MODELS="${5:-b2c64_quoridor,tf2_b4c192_quoridor}" \
           python -m pytest -q -rA tests/test_nn_parity.py) >"$OUT/parity_$label.log" 2>&1; then
       record "NN parity $label (tol $4)" PASS
     else

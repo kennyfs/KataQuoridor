@@ -2,6 +2,10 @@
 
 *Review of `main` at `63aa91c` against upstream KataGo `v1.18.2` (`fd0723f`), written 2026-09-28.*
 
+*Naming note (2026-09-30): the Quoridor transformer config was originally called `tf3_b4c192_quoridor`, but it
+uses `bottlenest2transformerropesg` blocks, so by KataGo's naming it is `tf2_b4c192_quoridor`. This document uses
+the new name; the old one remains as a deprecated alias in `modelconfigs.py`.*
+
 This document answers the questions in the project brief: 17x17 search board vs. 9x9 network, model/input
 versioning, whether to delete KataGo's Go input code, CUDA/Eigen vs. ONNX, and which of the three proposed directions
 to take. It then lays out a concrete, staged plan sized for Claude Code sessions.
@@ -33,7 +37,7 @@ to take. It then lays out a concrete, staged plan sized for Claude Code sessions
    optional (the upstream ONNX backend can build its graph from `.bin.gz`). Disable OpenCL/TensorRT/Metal with a
    clear error instead of maintaining them.
 6. **The backends are closer to working than they look.** I built the Eigen backend and exported random
-   `b2c64_quoridor` and `tf3_b4c192_quoridor` models. In a `Release` build (asserts off), the Eigen output matches
+   `b2c64_quoridor` and `tf2_b4c192_quoridor` models. In a `Release` build (asserts off), the Eigen output matches
    ONNX Runtime to every printed digit, at both symmetries. In the default `RelWithDebInfo` build (asserts on), it
    stops at `assert(output->nnXLen == nnXLen)`: 17 (search) vs. 9 (net). With that bypassed, it next stops in the
    Go anti-mirror code in `searchmirror.cpp`. That is the whole story of "blocked by assertions" (§2.3).
@@ -52,7 +56,7 @@ to take. It then lays out a concrete, staged plan sized for Claude Code sessions
   `cpp/dataio`, `cpp/program`, and `python/katago/train`. Note that **`cpp/search/` is untouched**, which is good.
 - Built the Eigen backend twice: `CMAKE_BUILD_TYPE=Release` (`-DNDEBUG`) and the project default `RelWithDebInfo`
   (asserts on).
-- Exported random-initialized `b2c64_quoridor`, `tf3_b4c192_quoridor`, and an ad-hoc `b6c96`-shaped Quoridor conv
+- Exported random-initialized `b2c64_quoridor`, `tf2_b4c192_quoridor`, and an ad-hoc `b6c96`-shaped Quoridor conv
   net with `export_model_pytorch.py`. Each export writes both `.bin.gz` and `.onnx`.
 - Hand-built the V1 input tensor for the initial position in Python. I ran the exported `.onnx` in ONNX Runtime
   and compared it to `kata-raw-nn` from the Eigen build at symmetries 0 and 1.
@@ -96,7 +100,7 @@ if(modelVersion >= 11 || modelVersion <= 1) {   // "<= 1" means Quoridor here
 ```
 
 It also means every header field added since v13 is silently skipped when a Quoridor `.bin` is parsed. Today this
-works only because `tf3_b4c192_quoridor` uses `norm_kind: fixup`. An upstream-style transformer config with an
+works only because `tf2_b4c192_quoridor` uses `norm_kind: fixup`. An upstream-style transformer config with an
 RMSNorm trunk tip cannot be expressed at version 1 at all: `trunkNormKind` is parsed only for version ≥ 15, and
 the exporter itself auto-upgrades such configs to 17.
 
@@ -120,7 +124,7 @@ sync, and the input half runs inside the backends while the output half runs in 
 
 ### 2.3 Concrete findings (with evidence)
 
-1. **Eigen `Release` build: numerically correct.** For the initial position with the random tf3 model:
+1. **Eigen `Release` build: numerically correct.** For the initial position with the random tf2 model:
 
    | Quantity | ONNX Runtime | Eigen `kata-raw-nn` |
    |---|---|---|
@@ -175,9 +179,9 @@ sync, and the input half runs inside the backends while the output half runs in 
     |---|---|---|---|
     | `b2c64_quoridor` (nbt) | 0.10 M | 15 M | ~3,200 |
     | `b6c96`-shaped conv | 0.99 M | 156 M | ~600 |
-    | `tf3_b4c192_quoridor` | 1.39 M | 223 M | ~260 |
+    | `tf2_b4c192_quoridor` | 1.39 M | 223 M | ~260 |
 
-    The absolute numbers mean little on this machine. The ratio does mean something: **on Eigen, tf3-b4c192 has
+    The absolute numbers mean little on this machine. The ratio does mean something: **on Eigen, tf2-b4c192 has
     1.4x the FLOPs of b6c96 but runs 2.3x slower**. It is also not "about the size of b6c96"; it is closer to
     1.5x in compute. Benchmark on the actual Xeon 8352V before committing to CPU self-play with a transformer
     (§6.4).
@@ -498,7 +502,7 @@ Make each of these a hard config error for Quoridor (not a warning), next to the
 ### Phase 3: Performance and hardware decision (1 session plus measurement)
 
 1. **Add a Quoridor benchmark mode.** Upstream `benchmark` is Go-oriented. Measure NN rows/s and visits/s at several
-   `numSearchThreads`/`nnMaxBatchSize` settings for b6c96-conv, b10c128-conv/nbt, and tf3-b4c192:
+   `numSearchThreads`/`nnMaxBatchSize` settings for b6c96-conv, b10c128-conv/nbt, and tf2-b4c192:
    - Eigen on the 8352V (try `numNNServerThreadsPerModel` from 1 to 4 × Eigen threads),
    - CUDA FP16 on the 3070,
    - optionally ONNX Runtime CPU on the 8352V.
@@ -604,9 +608,9 @@ The V1 set is good. Candidates to A/B test later, each behind a new I/O version:
   - Fewest moving parts while the new model contract is proven.
   - Best CPU/Eigen efficiency (§2.3 #10).
   - KataGo itself bootstrapped this way.
-- Switch to tf3 once the loop is stable. Training data is architecture-independent, so you can train the
+- Switch to the transformer once the loop is stable. Training data is architecture-independent, so you can train the
   transformer on the accumulated conv self-play data (as you planned) and let it take over gatekeeping.
-- `tf3_b4c192` has 1.4x the FLOPs of b6c96, not the same. If the transformer is the goal on CPU, consider a
+- `tf2_b4c192` has 1.4x the FLOPs of b6c96, not the same. If the transformer is the goal on CPU, consider a
   narrower variant (c128, 3–4 blocks) and compare at equal wall-clock time, not equal visits.
 
 ### 6.4 Hardware plan

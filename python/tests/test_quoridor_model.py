@@ -18,7 +18,7 @@ from export_model_pytorch import export_quoridor_onnx, QuoridorOnnxExportWrapper
 
 
 def test_quoridor_config_properties():
-    for name in ["b2c64_quoridor", "tf3_b4c192_quoridor"]:
+    for name in ["b2c64_quoridor", "tf2_b4c192_quoridor"]:
         assert name in modelconfigs.config_of_name
         cfg = modelconfigs.config_of_name[name]
         assert modelconfigs.is_quoridor(cfg)
@@ -66,35 +66,35 @@ def test_quoridor_forward_shapes():
     assert trajectory.shape == (B, 2, 9, 9)
     assert wall_graph.shape == (B, 2, 9, 9)
 
-    # 2. Test tf3_b4c192_quoridor
-    cfg_tf3 = modelconfigs.base_config_of_name["tf3_b4c192_quoridor"]
-    model_tf3 = Model(cfg_tf3, pos_len=9)
-    model_tf3.eval()
+    # 2. Test tf2_b4c192_quoridor
+    cfg_tf2 = modelconfigs.base_config_of_name["tf2_b4c192_quoridor"]
+    model_tf2 = Model(cfg_tf2, pos_len=9)
+    model_tf2.eval()
     with torch.inference_mode():
-        out_byheads_tf3 = model_tf3(spatial, glob)
-        post_tf3 = model_tf3.postprocess_output(out_byheads_tf3)
+        out_byheads_tf2 = model_tf2(spatial, glob)
+        post_tf2 = model_tf2.postprocess_output(out_byheads_tf2)
 
-    assert len(post_tf3) == 1
+    assert len(post_tf2) == 1
     (
-        p_tf3,
-        v_tf3,
-        td_tf3,
-        vt_tf3,
-        gm_tf3,
-        _sd_tf3,
-        _ev_tf3,
-        _es_tf3,
-        tr_tf3,
-        wg_tf3,
-    ) = post_tf3[0]
+        p_tf2,
+        v_tf2,
+        td_tf2,
+        vt_tf2,
+        gm_tf2,
+        _sd_tf2,
+        _ev_tf2,
+        _es_tf2,
+        tr_tf2,
+        wg_tf2,
+    ) = post_tf2[0]
 
-    assert p_tf3.shape == (B, 18, 9, 9)
-    assert v_tf3.shape == (B, 2)
-    assert td_tf3.shape == (B, 4, 2)
-    assert vt_tf3.shape == (B,)
-    assert gm_tf3.shape == (B,)
-    assert tr_tf3.shape == (B, 2, 9, 9)
-    assert wg_tf3.shape == (B, 2, 9, 9)
+    assert p_tf2.shape == (B, 18, 9, 9)
+    assert v_tf2.shape == (B, 2)
+    assert td_tf2.shape == (B, 4, 2)
+    assert vt_tf2.shape == (B,)
+    assert gm_tf2.shape == (B,)
+    assert tr_tf2.shape == (B, 2, 9, 9)
+    assert wg_tf2.shape == (B, 2, 9, 9)
 
 
 def test_quoridor_backward_and_gradients():
@@ -251,7 +251,7 @@ if __name__ == "__main__":
     test_quoridor_config_properties()
     print("  -> Passed!")
 
-    print("Testing Quoridor forward shapes (b2c64 & tf3_b4c192)...")
+    print("Testing Quoridor forward shapes (b2c64 & tf2_b4c192)...")
     test_quoridor_forward_shapes()
     print("  -> Passed!")
 

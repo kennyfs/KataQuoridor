@@ -1837,7 +1837,9 @@ b5c384h6nbttflrtab2cheaps = {
 }
 
 
-tf3_b4c192_quoridor = {
+# Named "tf2" after its block kind: bottlenest2transformerropesg is the nested-bottleneck-2 transformer block
+# (upstream's "tf3" nets use bottlenest3transformerropesg). Formerly misnamed tf3_b4c192_quoridor.
+tf2_b4c192_quoridor = {
     "game": "quoridor",
     "version": 17,
     "norm_kind": "fixup",
@@ -1890,7 +1892,9 @@ b2c64_quoridor = {
 
 base_config_of_name = {
     # QUORIDOR MODELS =============================================================
-    "tf3_b4c192_quoridor": tf3_b4c192_quoridor,
+    "tf2_b4c192_quoridor": tf2_b4c192_quoridor,
+    # Deprecated alias of tf2_b4c192_quoridor (same config), kept so existing run commands keep working.
+    "tf3_b4c192_quoridor": tf2_b4c192_quoridor,
     "b2c64_quoridor": b2c64_quoridor,
 
     # CONVNETS ====================================================================
