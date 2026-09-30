@@ -620,8 +620,16 @@ void PlayUtils::adjustKomiToEven(
 ) {
   map<float,std::pair<double,double>> scoreWLCache;
   double newKomi = getNaiveEvenKomiHelper(scoreWLCache,botB,botW,board,hist,pla,numVisits,otherGameProps);
-  //KataQuoridor: randomly round to one of the two neighbouring valid komis (n + 0.5).
-  hist.setKomi(PlayUtils::roundKomiRandomly(newKomi,rand));
+  //KataQuoridor: randomly round to one of the two neighbouring valid komis (n + 0.5), unless the fair komi is
+  //implausibly far from the standard one (then keep the komi, see MAX_COMPENSATED_KOMI_DELTA).
+  hist.setKomi(PlayUtils::compensatedKomiOrKeep(newKomi,hist.rules.komi,rand));
+}
+
+float PlayUtils::compensatedKomiOrKeep(double newKomi, float oldKomi, Rand& rand) {
+  const double standardKomi = Rules::getQuoridorRules().komi;
+  if(!(std::fabs(newKomi - standardKomi) <= MAX_COMPENSATED_KOMI_DELTA))
+    return oldKomi;
+  return roundKomiRandomly(newKomi,rand);
 }
 
 //KataQuoridor: no area-scoring parity to smooth over; the lead moves in steps of one tempo like komi (upstream's

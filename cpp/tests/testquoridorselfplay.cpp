@@ -213,6 +213,18 @@ static void testFindEvenKomi() {
     testAssert(PlayUtils::roundKomiRandomly(fair, rand) == Rules::MAX_KOMI);
   }
 
+  //Compensation keeps the komi when the fair komi is implausibly far from the standard -0.5 (an untrained lead
+  //head); otherwise it rounds randomly to a neighbouring valid komi.
+  {
+    Rand rand("testquoridorselfplay compensated window");
+    testAssert(PlayUtils::compensatedKomiOrKeep(20.5, -0.5f, rand) == -0.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(-6.0, 1.5f, rand) == 1.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(4.5, -0.5f, rand) == 4.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(-5.5, 2.5f, rand) == -5.5f);
+    float k = PlayUtils::compensatedKomiOrKeep(1.2, -0.5f, rand);
+    testAssert(k == 0.5f || k == 1.5f);
+  }
+
   //Random rounding to the neighbouring valid komis, the nearer one more likely.
   {
     Rand rand("testquoridorselfplay rounding");

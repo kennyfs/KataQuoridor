@@ -350,6 +350,12 @@ A fair komi comes from `PlayUtils::adjustKomiToEven`: a few steps along the lead
 winrate over the Quoridor komi grid (steps of 1), interpolated between the two neighbouring komis and randomly
 rounded to one of them (`PlayUtils::findEvenKomi`, `roundKomiRandomly`).
 
+**Compensation window.** If the fair komi is more than 5 tempi from the standard −0.5 (outside [−5.5, 4.5],
+`PlayUtils::MAX_COMPENSATED_KOMI_DELTA`), the game keeps its komi (`PlayUtils::compensatedKomiOrKeep`). An
+untrained lead head doesn't track komi, and the search then runs to the edge of the komi range: in a smoke run
+with a random-init v2 net, every compensated game got komi +20.5, where Black can practically only play for the
+`maxPlies` draw, which is the stalling this design is meant to remove.
+
 **Only with nets that see komi.** `Play::runGame` compensates only if both nets have Quoridor I/O version ≥ 2
 (`PlayUtils::nnEvalSeesKomi`, from the model header). With an **I/O v1 net it is a no-op**, logged once
 ("WARNING: skipping komi compensation …"): the game keeps the komi `GameInitializer` gave it. v1 nets see komi only

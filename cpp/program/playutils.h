@@ -84,6 +84,12 @@ namespace PlayUtils {
   double findEvenKomi(const std::function<std::pair<double,double>(float)>& leadAndWinLossOfKomi, float startKomi);
   //Rounds to one of the two neighbouring valid komis, the nearer one more likely (linearly), clipped to the valid range.
   float roundKomiRandomly(double komi, Rand& rand);
+  //Compensation (adjustKomiToEven) never moves the komi further than this from the standard komi (-0.5). A "fair"
+  //komi outside that window comes from a net whose lead doesn't track komi yet (e.g. early in training): with it,
+  //one side could practically only play for the maxPlies draw, so the game keeps its komi instead.
+  constexpr double MAX_COMPENSATED_KOMI_DELTA = 5.0;
+  //The komi a compensated game gets: newKomi randomly rounded, or oldKomi if newKomi is outside the window above.
+  float compensatedKomiOrKeep(double newKomi, float oldKomi, Rand& rand);
 
   void adjustKomiToEven(
     Search* botB,
