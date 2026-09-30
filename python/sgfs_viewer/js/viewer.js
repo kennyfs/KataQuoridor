@@ -81,12 +81,13 @@ function drawBoard(st, paths) {
   }
 }
 
-function drawWallsCounter(id, used) {
+// One pip per initial wall (WB / WW, 10 unless the game has a fence handicap).
+function drawWallsCounter(id, used, initial) {
   const box = $(id);
   box.innerHTML = "";
-  for (let i = 0; i < WALLS_PER_PLAYER; i++) {
+  for (let i = 0; i < initial; i++) {
     const s = document.createElement("i");
-    if (i >= WALLS_PER_PLAYER - used) s.className = "used";
+    if (i >= initial - used) s.className = "used";
     box.appendChild(s);
   }
 }
@@ -134,6 +135,8 @@ function renderInfo() {
   const rows = [
     ["Game", `#${curGameIdx + 1} of ${games.length}`],
     ["Result", h.result],
+    ...(h.komi !== STANDARD_KOMI ? [["Komi", `${fmtKomi(h.komi)} (standard −0.5)`]] : []),
+    ...(h.wb !== STANDARD_WALLS || h.ww !== STANDARD_WALLS ? [["Initial walls", `Black ${h.wb} · White ${h.ww}`]] : []),
     ["Moves", `${g.moves.length}  (init ${g.startTurnIdx}, searched ${g.moves.length - g.startTurnIdx})`],
     ["Type", (g.kv.gtype || "—") + (g.kv.usedInitialPosition ? " · initial pos" : "")],
     ["Players", (g.props.PB?.[0] || "—") + (g.props.PW?.[0] && g.props.PW[0] !== g.props.PB?.[0] ? " vs " + g.props.PW[0] : "")],
@@ -238,10 +241,11 @@ function update(scrollList = true) {
   const paths = { B: shortestPaths(st.block, st.B, "B"), W: shortestPaths(st.block, st.W, "W") };
   drawBoard(st, paths);
   renderPathTile(st, paths);
-  drawWallsCounter("wallsB", st.used.B);
-  drawWallsCounter("wallsW", st.used.W);
-  $("subB").textContent = `→ row 1 · ${WALLS_PER_PLAYER - st.used.B} walls`;
-  $("subW").textContent = `→ row 9 · ${WALLS_PER_PLAYER - st.used.W} walls`;
+  const h = games[curGameIdx];
+  drawWallsCounter("wallsB", st.used.B, h.wb);
+  drawWallsCounter("wallsW", st.used.W, h.ww);
+  $("subB").textContent = `→ row 1 · ${h.wb - st.used.B} walls`;
+  $("subW").textContent = `→ row 9 · ${h.ww - st.used.W} walls`;
   for (const [id, name] of [["modelB", cur.props.PB?.[0]], ["modelW", cur.props.PW?.[0]]])
     $(id).innerHTML = match && name ? `${mDot(name)}${mLabel(name)} · ${escapeHtml(shortName(name))}` : "";
   const over = ply === cur.moves.length;
@@ -308,6 +312,7 @@ function applyFilters() {
   $("gameList").innerHTML = filtered.map(i => {
     const g = games[i];
     let tag = g.gtype && g.gtype !== "normal" ? `<span class="tag">${escapeHtml(g.gtype)}</span>` : "";
+    if (g.rulesLabel) tag += `<span class="tag">${escapeHtml(g.rulesLabel)}</span>`;
     if (match) tag += ` · ${mDot(g.winnerModel)}${mLabel(g.winnerModel)} won`;
     const v = statsCache && M.key !== "idx" && M.key !== "len" ? M.get(statsCache[i]) : undefined;
     const mval = v === undefined ? "" : v === null ? "—" : M.fmt(v);
