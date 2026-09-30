@@ -127,6 +127,12 @@ winner
 = none
 ```
 
+## Play in the browser
+
+`python3 python/play_gui/serve.py --katago <katago> --model <net.bin.gz>` starts a local web page for
+playing against the engine with the mouse (hints, undo, evaluation, SGF download). See
+[docs/PlayGUI.md](docs/PlayGUI.md).
+
 ## Training
 
 The self-play training loop is KataGo's, with Quoridor configs:

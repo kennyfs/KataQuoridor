@@ -2,6 +2,8 @@ KataQuoridor v0.1.0 (based on KataGo v1.18.2)
 
 KataQuoridor is a Quoridor (Duel, 9x9) engine built on KataGo (https://github.com/lightvector/KataGo).
 It plays through QTP, a Quoridor dialect of GTP. It has no graphical interface of its own.
+(The source tree has a browser GUI for playing against it, python/play_gui; see docs/PlayGUI.md.
+It is not part of these zips.)
 
 The release notes (recommended net, strength, known limitations) are in docs/releases/v0.1.0.md of the
 source tree. Release tags use a "kq-" prefix (e.g. kq-v0.1.0), because the repository also carries upstream
