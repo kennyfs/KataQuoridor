@@ -482,9 +482,8 @@ are counted from the real game start. Training data is unchanged by step 3.
 - `maxMovesPerGame` (and its alias `cutoffMoves`) must not disagree with `Rules::maxPlies`. **Resolution:**
   `maxPlies` (config key, default 300) is the source of truth. `maxMovesPerGame` defaults to it; if both are set
   and differ, `selfplay`, `gatekeeper` and `match` fail at startup.
-- **Draw games are still discarded from training data**, as the 0.1.0 cutoff games were: `Play::runGame` marks a
-  `maxPlies` draw as `hitTurnLimit` when `Play::DISCARD_MAX_PLIES_DRAWS` is true (the one switch; step 2 flips it).
-  They still count as "cutoff" games in the self-play stats.
+- **Draw games are training data** (since step 2, see §4 and §8): written with value 0.5 / 0.5, score 0 and no lead
+  target, and reported as draws (not "cutoff") in the self-play stats.
 - The self-play `komiMean` must be a valid komi (standard −0.5, also the default); the old `komiMean = 0` is
   rejected at startup. `GameInitializer` starts every game from the config's rules and applies the initial walls.
 - `Play::runGame` writes the final value targets' lead as `finalWhiteLead` (it used to copy the score).
@@ -512,19 +511,10 @@ are counted from the real game start. Training data is unchanged by step 3.
   move ends the game as a draw.
 - **Score-utility scale with λ > 0.** `u` at the start is about λ·maxPlies. With the static score utility the
   offset is harmless (a constant), with the dynamic one it is re-centred. To be measured in step 3.
-- **Gatekeeper draws** are counted as `0.5·noResultUtilityForWhite + 0.5` wins for White (unchanged from 0.1.0).
-  With a rule draw, 0.5 would be cleaner.
-- **The arena** keeps its own `--max-plies` (default 300) and asks the arbiter for the winner first, so a rule draw
-  is reported by the arbiter. Its SGFs still write `KM[0]` and integer margins in `RE` (they load as standard
-  games); switch them to the engine's `KM`/`RE` when the arena learns about komi.
 - **v1 nets and the NN cache.** The NN cache hash now includes the ply count, so a v1 net re-evaluates the same
   position at a different ply (e.g. after a pawn goes back and forth). Measure the cost if it matters.
-- **The v1 training writer** (`TrainingWriteBuffers::addRow`, I/O v1 branch) still writes the raw margin as the
-  score target for rows without a lead (the self-play default, `estimateLeadProb = 0`), but a row's lead where it
-  has one, which is now `s` (margin ∓ 0.5). Step 2 replaces these targets (`u` and `s`) anyway.
-- **Draw rows (step 2).** `hitTurnLimit` also feeds training-row global targets (a "game ended normally" flag). When
-  `Play::DISCARD_MAX_PLIES_DRAWS` is turned off, draws become normal finished games (`hitTurnLimit` false), so
-  their rows get value 0.5 / 0.5 through `whiteWinsOfWinner`; check the lead / score weights of those rows.
+- *Resolved in steps 2 and 3 (kept here as a record):* the v1 training writer's targets and the draw rows (step 2,
+  §8); gatekeeper draws now count exactly 0.5 and the arena writes the arbiter's `KM` / `RE` (step 3, §5, §9).
 
 ## 8. Step 2: where things live
 
@@ -544,9 +534,6 @@ are counted from the real game start. Training data is unchanged by step 3.
 | Exporter | `python/export_model_pytorch.py` (option D, scoreValue mapping, ONNX channel counts) |
 | Python tests | `tests/test_quoridor_model.py` (shapes, gradients, draw rows, symmetries), `tests/test_nn_parity.py` (v1 and v2 features and parity), `tests/test_end_to_end_training.py` |
 | v1 only | `python/model_viewer` (refuses v2 nets) |
-
-This supersedes §6.4's "draw games are still discarded" and the two step-2 items of §7 ("the v1 training writer",
-"draw rows").
 
 Open points after step 2:
 

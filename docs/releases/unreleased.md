@@ -66,8 +66,8 @@ were not trained with a time bonus.
 
 - **`maxPlies`** (config key, default 300) replaces `maxMovesPerGame` / `cutoffMoves`. They may still be given but
   must equal `maxPlies`, otherwise `selfplay`, `gatekeeper` and `match` fail at startup.
-- **Drawn games are still discarded from training data** (as the 0.1.0 cutoff games were) and still count as
-  "hit cutoff" in the self-play stats. Writing them with value 0.5/0.5 is planned for the I/O v2 net.
+- **Drawn games are training data** (value 0.5/0.5, see the I/O v2 section below) and are reported as draws in the
+  self-play stats.
 - **`komiMean` must be a Quoridor komi.** The Quoridor configs now say `komiMean = -0.5`; the old `komiMean = 0`
   fails at startup with an explanation. Update copies of `selfplay_quoridor.cfg` in running training directories
   before using a new binary.
@@ -106,8 +106,8 @@ details are in [QuoridorIOv2.md](../QuoridorIOv2.md) §4.
   trainer refuses v1 models, and v1 training data can't be mixed in. Use the new presets `b2c64_quoridor_v2` or
   `tf2_b4c192_quoridor_v2` (`-model-kind`); the presets without `_v2` remain for exporting and inspecting v1 nets.
 - **Draws are training data.** Games drawn at 300 plies are written like any other game (value 0.5 / 0.5, score 0,
-  no lead target), with side positions and reanalysis; this replaces the "drawn games are still discarded" note
-  above. The self-play log reports them as draws, with a draw rate, instead of "hit cutoff".
+  no lead target), with side positions and reanalysis. The self-play log reports them as draws, with a draw
+  rate, instead of "hit cutoff".
 - Training metrics: `smloss` (utility score), `leadloss` (lead) and the new `rtloss` (remaining plies) replace
   `gmloss`.
 - Tools: `dumpnninputs -io-version`, `writesampletrainquoridor` (now with draws and komi), and the NN parity test
