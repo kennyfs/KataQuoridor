@@ -33,7 +33,8 @@ except ImportError:
 class QuoridorOnnxExportWrapper(torch.nn.Module):
     """
     Wrapper for KataQuoridor neural net inference export.
-    Exposes InputSpatial (B, 17, 9, 9) and InputGlobal (B, 15, 1, 1) as inputs,
+    Exposes InputSpatial (B, C, 9, 9) and InputGlobal (B, G, 1, 1) as inputs (C / G = 17 / 15 for I/O v1,
+    19 / 17 for I/O v2),
     and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2, 1, 1) as outputs.
     """
     def __init__(self, model: torch.nn.Module):
@@ -97,8 +98,10 @@ def export_quoridor_onnx(
     wrapper.eval()
 
     device = next(model.parameters()).device
-    dummy_spatial = torch.zeros(1, 17, 9, 9, dtype=torch.float32, device=device)
-    dummy_global = torch.zeros(1, 15, 1, 1, dtype=torch.float32, device=device)
+    num_spatial = modelconfigs.get_num_bin_input_features(model.config)
+    num_global = modelconfigs.get_num_global_input_features(model.config)
+    dummy_spatial = torch.zeros(1, num_spatial, 9, 9, dtype=torch.float32, device=device)
+    dummy_global = torch.zeros(1, num_global, 1, 1, dtype=torch.float32, device=device)
 
     os.makedirs(os.path.dirname(os.path.abspath(export_path)), exist_ok=True)
 
@@ -128,8 +131,8 @@ def export_quoridor_onnx(
             "katago.metadataVersion": "1",
             "katago.name": model_name,
             "katago.modelVersion": "1",
-            "katago.numInputChannels": "17",
-            "katago.numInputGlobalChannels": "15",
+            "katago.numInputChannels": str(num_spatial),
+            "katago.numInputGlobalChannels": str(num_global),
             "katago.numInputMetaChannels": "0",
             "katago.numPolicyChannels": "3",
             "katago.numValueChannels": "2",
@@ -353,9 +356,9 @@ def main(args):
             writeln(1)
         else:
             writeln(0)
-        # Model option D: Quoridor I/O version (0 = not a Quoridor network, i.e. a Go network).
-        # Options E-H are unused spare slots for future model options.
-        writeln(1 if modelconfigs.is_quoridor(model_config) else 0)
+        # Model option D: Quoridor I/O version (0 = not a Quoridor network, i.e. a Go network; else the config's
+        # quoridor_io_version, 1 or 2). Options E-H are unused spare slots for future model options.
+        writeln(modelconfigs.get_quoridor_io_version(model_config) if modelconfigs.is_quoridor(model_config) else 0)
         writeln(0)
         writeln(0)
         writeln(0)
@@ -824,8 +827,8 @@ def main(args):
 
         if modelconfigs.is_quoridor(model_config):
             # v17 value channels: [win, loss, noResult]. noResult gets zero weights and bias -30
-            # so the engine never predicts it - self-play never trains on the 300-move-cutoff draw
-            # (docs/KataQuoridor_Review_and_Roadmap.md §4.2).
+            # so the engine never predicts it: Quoridor has no no-result games (a maxPlies draw is a result, trained
+            # as win 0.5 / loss 0.5, docs/QuoridorIOv2.md).
             assert valuehead.linear_value.weight.shape[0] == 2
             c_v2 = valuehead.linear2.weight.shape[0]
             c_v1 = valuehead.conv1.weight.shape[0]
@@ -836,26 +839,28 @@ def main(args):
             write_matbias(name+".bias_valuehead", value_b)
 
             # v17 scoreValue channels: [scoreMean, scoreStdev(pre-softplus), lead, varTimeLeft,
-            # shorttermWinlossError, shorttermScoreError] <- [game margin, margin stdev, game margin,
-            # variance time, shortterm winloss error, shortterm margin error]. The post-processing
-            # multipliers written in the header (Model.__init__, Quoridor branch) make whiteScoreMean and
-            # whiteLead come out in moves of margin, matching Model.postprocess_output.
-            linear_game_margin, linear_variance_time, misc = (
-                valuehead.linear_game_margin,
+            # shorttermWinlossError, shorttermScoreError] <- [utility score u, its stdev, lead s, variance time,
+            # shortterm winloss error, shortterm score error] (I/O v2), with the lead from the utility-score head
+            # for I/O v1 nets (whose one head predicts the margin). The post-processing multipliers written in the
+            # header (Model.__init__, Quoridor branch) make whiteScoreMean and whiteLead come out in moves,
+            # matching Model.postprocess_output. The remaining-plies head is training-only and not exported.
+            linear_utility_score, linear_variance_time, misc = (
+                valuehead.linear_utility_score,
                 valuehead.linear_variance_time,
                 valuehead.linear_misc,
             )
+            linear_lead = valuehead.linear_lead if valuehead.io_version >= 2 else linear_utility_score
             misc_w = torch.cat((
-                linear_game_margin.weight,
+                linear_utility_score.weight,
                 misc.weight[0:1],
-                linear_game_margin.weight,
+                linear_lead.weight,
                 linear_variance_time.weight,
                 misc.weight[1:3],
             ) ,dim=0)
             misc_b = torch.cat((
-                linear_game_margin.bias,
+                linear_utility_score.bias,
                 misc.bias[0:1],
-                linear_game_margin.bias,
+                linear_lead.bias,
                 linear_variance_time.bias,
                 misc.bias[1:3],
             ), dim=0)
