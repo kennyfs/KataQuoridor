@@ -90,3 +90,32 @@ were not trained with a time bonus.
   [QuoridorIOv2.md](../QuoridorIOv2.md) §6.3). In particular, terminal score variance is no longer "gridded" the Go
   way.
 - New `runtests quoridorv2` test group; `python/tests/test_qtp_rules.py` covers the new QTP behaviour.
+
+## Self-play setup, gatekeeper, arena (Quoridor I/O v2, step 3)
+
+See [QuoridorIOv2.md](../QuoridorIOv2.md) §5. All new randomizations and compensations are off by default; the
+existing configs create the same games as before.
+
+- **New configs** `cpp/configs/training/selfplay_quoridor_v2.cfg` and `gatekeeper_quoridor_v2.cfg` for training
+  I/O v2 nets: time bonus `timeBonusPerPly = 0.05` (a placeholder until the λ experiments),
+  `staticScoreUtilityFactor = 0`, `maxPlies = 300`, and the randomizations below.
+- **Komi randomization** (`quoridorKomiRandomProb`, `quoridorKomiRandomWeights`): in the v2 config, 30% of normal
+  self-play games have komi −0.5 ± 1, 2 or 3 (weighted 60/30/10), the rest the standard −0.5.
+- **Fence-handicap randomization** (`quoridorFenceHandicapProb`, `quoridorFenceHandicapWeights`): in the v2 config,
+  10% of normal games give one side 9, 8 or 7 walls (60/30/10), independently of the komi.
+- **Komi compensation** (`forkCompensateKomiProb` 0.8 for fork games, `handicapCompensateKomiProb` 0.5 for
+  fence-handicap games in the v2 config) sets a fair komi with `adjustKomiToEven`. It needs nets of Quoridor I/O
+  version ≥ 2; **with I/O v1 nets (e.g. 0.1.0) it is skipped** with a one-time warning.
+- **Gatekeeper:** a draw counts **exactly half a point** for each side (it used to depend on
+  `noResultUtilityForWhite`), draws are logged separately, and the gatekeeper refuses configs with komi or
+  fence-handicap randomization (gating always uses the standard game).
+- **Self-play log:** a new per-model `Quoridor stats` line with the draw rate, average plies, Black's win rate in
+  standard games, by komi and in fence-handicap games.
+- **Arena:** komi and initial walls per game (roster `"rules"` / `"pair_rules"`, `--komi`, `--black-walls`,
+  `--white-walls`), sent to KataQuoridor engines and the arbiter; engines like SimpleQuoridor
+  (`"supports_rules": false`) play standard games only. Arena SGFs now carry the arbiter's `KM`, `WB`, `WW` and
+  `RE` (the lead, e.g. `W+0.5`; `B+F` / `W+F` for forfeits) instead of `KM[0]` and integer margins; results record
+  `komi`, `black_walls`, `white_walls`, `lead` and `result`. See [Evaluation.md](../Evaluation.md).
+- **sgfs_viewer:** shows komi and initial walls when not standard, counts walls from the initial walls, and adds
+  win-rate slices by komi and fence handicap to the stats page.
+- New `runtests quoridorselfplay` test group; arena tests for komi, walls and arbiter draws.
