@@ -2,6 +2,8 @@
 #define PROGRAM_SELFPLAYMANAGER_H_
 
 #include <atomic>
+#include <map>
+#include <mutex>
 
 #include "../core/threadsafequeue.h"
 #include "../core/timer.h"
@@ -71,6 +73,9 @@ class SelfplayManager {
   //Count a game that hit maxMovesPerGame and was discarded rather than written (numMoves = its length).
   //Games finished normally are counted by the data write loop (gamesFinishedCount).
   void countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMoves);
+  //Quoridor I/O v2 step 3: count the result of every completed game (written or not) for the Quoridor stats line
+  //(draw rate, first-player win rates, average plies).
+  void countQuoridorGameResult(NNEvaluator* nnEval, const FinishedGameData& gameData);
 
   //SelfplayManager takes responsibility for deleting the gameData once written.
   //Use these only if loadModelAndStartDataWriting was used to start the model.
@@ -96,6 +101,21 @@ class SelfplayManager {
     // Games that hit the move cutoff, and the moves in them. These games are not written or counted above.
     std::atomic<int64_t> gamesCutoffCount;
     std::atomic<int64_t> movesPlayedCutoffCount;
+    // Quoridor results of all completed games (see countQuoridorGameResult), guarded by quoridorStats.mutex.
+    struct QuoridorStats {
+      std::mutex mutex;
+      int64_t games = 0;
+      int64_t draws = 0;
+      int64_t plies = 0;
+      // Normal games (not forks etc.) with the standard komi and 10/10 walls.
+      int64_t standardGames = 0;
+      int64_t standardBlackWins = 0;
+      // Normal games with 10/10 walls by komi: (games, Black wins).
+      std::map<float,std::pair<int64_t,int64_t>> byKomi;
+      // Normal games with a fence handicap: (games, Black wins).
+      std::pair<int64_t,int64_t> fenceHandicap = {0,0};
+    };
+    QuoridorStats quoridorStats;
     double lastReleaseTime;
     bool hasDataWriteLoop;
 
@@ -135,6 +155,8 @@ class SelfplayManager {
   void runDataWriteLoopImpl(ModelData* modelData);
   //One summary line: games started / finished normally / hit cutoff, cutoff rate, average game length.
   static std::string gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount);
+  //One line of Quoridor result stats: draw rate, average plies, first-player win rates (standard, by komi, handicap).
+  static std::string quoridorStatsSummary(ModelData* modelData);
 
  public:
   //For internal use

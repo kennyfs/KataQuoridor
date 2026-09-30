@@ -292,6 +292,7 @@ void SelfplayManager::countOneGameStarted(NNEvaluator* nnEval) {
   if(logger != NULL && gameStartedCount % logGamesEvery == 0) {
     logger->write("Started " + Global::int64ToString(gameStartedCount) + " games with " + nnEval->getModelName());
     logger->write(gameStatsSummary(foundData, gameStartedCount));
+    logger->write(quoridorStatsSummary(foundData));
   }
   int64_t logNNEvery = logGamesEvery*100 > 1000 ? logGamesEvery*100 : 1000;
   if(logger != NULL && gameStartedCount % logNNEvery == 0) {
@@ -321,6 +322,69 @@ void SelfplayManager::countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMove
     throw StringError("SelfplayManager::countOneGameHitCutoff: could not find model. Possible bug - client did not acquire model?");
   foundData->gamesCutoffCount.fetch_add(1, std::memory_order_relaxed);
   foundData->movesPlayedCutoffCount.fetch_add(numMoves, std::memory_order_relaxed);
+}
+
+void SelfplayManager::countQuoridorGameResult(NNEvaluator* nnEval, const FinishedGameData& gameData) {
+  std::unique_lock<std::mutex> lock(managerMutex);
+  ModelData* foundData = NULL;
+  for(size_t i = 0; i<modelDatas.size(); i++) {
+    if(modelDatas[i]->nnEval == nnEval) {
+      foundData = modelDatas[i];
+      break;
+    }
+  }
+  if(foundData == NULL)
+    throw StringError("SelfplayManager::countQuoridorGameResult: could not find model. Possible bug - client did not acquire model?");
+  lock.unlock();
+
+  const BoardHistory& hist = gameData.endHist;
+  const Rules standard = Rules::getQuoridorRules();
+  const bool isDecisive = hist.isGameFinished && (hist.winner == P_BLACK || hist.winner == P_WHITE);
+  const bool blackWon = isDecisive && hist.winner == P_BLACK;
+  const bool isNormal = gameData.mode == FinishedGameData::MODE_NORMAL;
+  const bool standardWalls =
+    hist.rules.blackInitialFences == standard.blackInitialFences && hist.rules.whiteInitialFences == standard.whiteInitialFences;
+
+  ModelData::QuoridorStats& stats = foundData->quoridorStats;
+  std::lock_guard<std::mutex> statsLock(stats.mutex);
+  stats.games += 1;
+  stats.draws += isDecisive ? 0 : 1;
+  stats.plies += hist.getCurrentTurnNumber();
+  if(isNormal && standardWalls) {
+    std::pair<int64_t,int64_t>& bucket = stats.byKomi[hist.rules.komi];
+    bucket.first += 1;
+    bucket.second += blackWon ? 1 : 0;
+    if(hist.rules.komi == standard.komi) {
+      stats.standardGames += 1;
+      stats.standardBlackWins += blackWon ? 1 : 0;
+    }
+  }
+  if(isNormal && !standardWalls) {
+    stats.fenceHandicap.first += 1;
+    stats.fenceHandicap.second += blackWon ? 1 : 0;
+  }
+}
+
+string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
+  ModelData::QuoridorStats& stats = modelData->quoridorStats;
+  std::lock_guard<std::mutex> statsLock(stats.mutex);
+  auto rate = [](int64_t num, int64_t denom) {
+    return Global::strprintf("%.3f", denom > 0 ? (double)num / (double)denom : 0.0);
+  };
+  string s =
+    "Quoridor stats for " + modelData->modelName +
+    ": completed " + Global::int64ToString(stats.games) +
+    ", draws " + Global::int64ToString(stats.draws) + " (rate " + rate(stats.draws, stats.games) + ")" +
+    ", avg plies " + Global::strprintf("%.1f", stats.games > 0 ? (double)stats.plies / (double)stats.games : 0.0) +
+    ", black win rate in normal standard games " + rate(stats.standardBlackWins, stats.standardGames) +
+    " (" + Global::int64ToString(stats.standardBlackWins) + "/" + Global::int64ToString(stats.standardGames) + ")" +
+    ", by komi (10/10 walls):";
+  for(const auto& kv : stats.byKomi)
+    s += " " + Global::strprintf("%+.1f", kv.first) + " " + rate(kv.second.second, kv.second.first) +
+      " (" + Global::int64ToString(kv.second.second) + "/" + Global::int64ToString(kv.second.first) + ")";
+  s += ", fence handicap " + rate(stats.fenceHandicap.second, stats.fenceHandicap.first) +
+    " (" + Global::int64ToString(stats.fenceHandicap.second) + "/" + Global::int64ToString(stats.fenceHandicap.first) + ")";
+  return s;
 }
 
 string SelfplayManager::gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount) {
