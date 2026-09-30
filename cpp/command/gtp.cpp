@@ -2338,6 +2338,38 @@ int MainCmds::gtp(const vector<string>& args) {
     bool maybeStartPondering = false;
     string response;
 
+    //KataQuoridor: Quoridor strictly alternates with no pass, and nothing may be played once a pawn has reached
+    //its goal. Search::makeMove would otherwise accept an out-of-turn move (treating it as a pass by the side to
+    //move) and moves after the end of the game (which clears the result). Returns an error message, or "" if pla
+    //may move now.
+    auto quoridorMoveError = [&](Player pla) -> string {
+      if(engine->bot->getRootHist().isGameFinished)
+        return "game is over";
+      if(pla != engine->bot->getRootPla())
+        return "not " + Global::toLower(PlayerIO::playerToString(pla)) + "'s turn";
+      return "";
+    };
+    //Shared by play/move/wall.
+    auto playQuoridorMove = [&](Loc loc, Player pla) {
+      string err = quoridorMoveError(pla);
+      if(err == "game is over") {
+        responseIsError = true;
+        response = err;
+      }
+      else if(err != "") {
+        responseIsError = true;
+        response = "illegal move: " + err;
+      }
+      else {
+        bool suc = engine->play(loc,pla);
+        if(!suc) {
+          responseIsError = true;
+          response = "illegal move";
+        }
+        maybeStartPondering = true;
+      }
+    };
+
     if(command == "protocol_version") {
       response = "2";
     }
@@ -2941,14 +2973,8 @@ int MainCmds::gtp(const vector<string>& args) {
           responseIsError = true;
           response = "Could not parse vertex: '" + moveStr + "'";
         }
-        else {
-          bool suc = engine->play(loc,pla);
-          if(!suc) {
-            responseIsError = true;
-            response = "illegal move";
-          }
-          maybeStartPondering = true;
-        }
+        else
+          playQuoridorMove(loc,pla);
       }
     }
 
@@ -2980,14 +3006,8 @@ int MainCmds::gtp(const vector<string>& args) {
           responseIsError = true;
           response = "Could not parse vertex: '" + destStr + "'";
         }
-        else {
-          bool suc = engine->play(loc, pla);
-          if(!suc) {
-            responseIsError = true;
-            response = "illegal move";
-          }
-          maybeStartPondering = true;
-        }
+        else
+          playQuoridorMove(loc, pla);
       }
     }
 
@@ -3019,14 +3039,8 @@ int MainCmds::gtp(const vector<string>& args) {
           responseIsError = true;
           response = "Could not parse vertex: '" + destStr + "'";
         }
-        else {
-          bool suc = engine->play(loc, pla);
-          if(!suc) {
-            responseIsError = true;
-            response = "illegal move";
-          }
-          maybeStartPondering = true;
-        }
+        else
+          playQuoridorMove(loc, pla);
       }
     }
 
@@ -3095,6 +3109,10 @@ int MainCmds::gtp(const vector<string>& args) {
         responseIsError = true;
         response = "Could not parse color: '" + pieces[0] + "'";
       }
+      else if(quoridorMoveError(pla) != "") {
+        responseIsError = true;
+        response = quoridorMoveError(pla);
+      }
       else {
         bool debug = command == "genmove_debug" || command == "kata-search_debug";
         bool playChosenMove = command == "genmove" || command == "genmove_debug";
@@ -3153,6 +3171,10 @@ int MainCmds::gtp(const vector<string>& args) {
       if(parseFailed) {
         responseIsError = true;
         response = "Could not parse genmove_analyze arguments or arguments out of range: '" + Global::concat(pieces," ") + "'";
+      }
+      else if(quoridorMoveError(pla) != "") {
+        responseIsError = true;
+        response = quoridorMoveError(pla);
       }
       else {
         bool debug = false;
@@ -3287,7 +3309,8 @@ int MainCmds::gtp(const vector<string>& args) {
         response = "Expected 0 or 1 arguments for legal_moves but got '" + Global::concat(pieces," ") + "'";
       }
 
-      if(!responseIsError) {
+      //Nothing is legal once the game is over.
+      if(!responseIsError && !engine->bot->getRootHist().isGameFinished) {
         const Board& board = engine->bot->getRootBoard();
         ostringstream sout;
         bool first = true;
@@ -3469,6 +3492,12 @@ int MainCmds::gtp(const vector<string>& args) {
       if(parseFailed) {
         responseIsError = true;
         response = "Could not parse analyze arguments or arguments out of range: '" + Global::concat(pieces," ") + "'";
+      }
+      //Analyzing for the side not to move would silently hand it the turn (AsyncBot clears the history and sets
+      //the root player), so it is refused like an out-of-turn play.
+      else if(quoridorMoveError(pla) != "") {
+        responseIsError = true;
+        response = quoridorMoveError(pla);
       }
       else {
         //Make sure the "equals" for GTP is printed out prior to the first analyze line, regardless of thread racing
@@ -3669,7 +3698,7 @@ int MainCmds::gtp(const vector<string>& args) {
     if(shouldQuitAfterResponse)
       break;
 
-    if(maybeStartPondering && ponderingEnabled)
+    if(maybeStartPondering && ponderingEnabled && !engine->bot->getRootHist().isGameFinished)
       engine->ponder();
 
   } //Close read loop

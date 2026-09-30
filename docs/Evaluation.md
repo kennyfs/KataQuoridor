@@ -40,8 +40,9 @@ reimplements the rules:
   loses the game for the mover (reason `illegal`, logged with `!!!` to the console and to `anomalies.log`;
   it indicates a bug).
 - `winner` decides the result, and the referee checks it before every move, so a game ends at the first
-  win. (KataQuoridor's `play` still accepts moves after a win and `winner` can revert to `none`, and it does
-  not enforce turn order. The referee controls the move order, so neither matters here.)
+  win. (Since 0.1.0, KataQuoridor refuses every move after a win with `? game is over`, so `winner` stays
+  at the result, and it refuses a `play`/`genmove` by the side not to move. Older binaries accepted both;
+  the referee controls the move order and stops at the first win, so it works with either.)
 - Draw rule: after 300 plies with `winner` = `none`, the game is a draw (reason `draw300`). The arbiter
   has no ply cap of its own.
 - `--verify`: before every move, the arbiter's `legal_moves` is compared with the mover's (only for
