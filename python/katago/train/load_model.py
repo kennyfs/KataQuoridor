@@ -14,6 +14,10 @@ if packaging.version.parse(torch.__version__) > packaging.version.parse("2.4.0")
     torch.serialization.add_safe_globals([defaultdict])
     torch.serialization.add_safe_globals([float])
 
+def rename_legacy_key(key):
+    # KataQuoridor I/O v1 checkpoints name the Quoridor value head's score head linear_game_margin.
+    return key.replace(".linear_game_margin.", ".linear_utility_score.")
+
 def load_model_state_dict(state_dict):
     # Strip off any "module." from DDP or "_orig_mod." from torch.compile
     model_state_dict = {}
@@ -27,7 +31,7 @@ def load_model_state_dict(state_dict):
         # Filter out some extra keys that were present in older checkpoints
         if "score_belief_offset_vector" in key or "score_belief_offset_bias_vector" in key or "score_belief_parity_vector" in key:
             continue
-        model_state_dict[key] = state_dict["model"][old_key]
+        model_state_dict[rename_legacy_key(key)] = state_dict["model"][old_key]
     return model_state_dict
 
 def load_swa_model_state_dict(state_dict):
@@ -38,7 +42,7 @@ def load_swa_model_state_dict(state_dict):
         # Filter out some extra keys that were present in older checkpoints
         if "score_belief_offset_vector" in key or "score_belief_offset_bias_vector" in key or "score_belief_parity_vector" in key:
             continue
-        swa_model_state_dict[key] = state_dict["swa_model"][key]
+        swa_model_state_dict[rename_legacy_key(key)] = state_dict["swa_model"][key]
     return swa_model_state_dict
 
 

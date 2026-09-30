@@ -29,6 +29,9 @@ def pad_global_targets_nc(globalTargetsNC: np.ndarray) -> np.ndarray:
 # (QuoridorNN::fillRow). They cannot be stored in the packed bit planes (which hold 0 there);
 # the npz carries them raw in spatialDistNCHW (uint8 [N,4,H,W], canonical orientation, 255 =
 # unreachable), and the loader rebuilds the channels from it.
+# Spatial input channels on the 8x8 wall-anchor grid (mirrored c -> 7 - c): placed V / H walls, the anchor domain
+# mask, and (I/O v2) the legal V / H wall placements.
+QUORIDOR_WALL_ANCHOR_CHANNELS = (14, 15, 16, 17, 18)
 QUORIDOR_DIST_FIRST_CHANNEL = 8
 QUORIDOR_DIST_NUM_CHANNELS = 4
 QUORIDOR_DIST_UNREACHABLE = 255
@@ -130,8 +133,10 @@ def read_npz_training_data(
 
         binaryInputNCHW = decode_binary_input(binaryInputNCHWPacked, spatialDistNCHW, pos_len, npz_file)
 
-        assert binaryInputNCHW.shape[1] == num_bin_features
-        assert globalInputNC.shape[1] == num_global_features
+        # Quoridor I/O v1 data (17 / 15 input channels, other targets) cannot train an I/O v2 model.
+        assert binaryInputNCHW.shape[1] == num_bin_features and globalInputNC.shape[1] == num_global_features, (
+            f"{npz_file}: {binaryInputNCHW.shape[1]} spatial / {globalInputNC.shape[1]} global input channels, the model"
+            f" expects {num_bin_features} / {num_global_features} (old Quoridor I/O v1 training data?)")
         return (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove)
 
     if not npz_files:
@@ -242,10 +247,12 @@ def apply_symmetry_quoridor(tensor, symm):
     out[:, 5, :, :] = ch6
     out[:, 6, :, :] = ch5
 
-    # Fix wall anchor and domain mask channels 14, 15, and 16:
+    # Fix wall anchor and domain mask channels 14, 15, 16, and in I/O v2 the legal-wall channels 17, 18:
     # Wall anchors/masks are in :8, :8. When 9x9 is flipped, :8 shifts to 1:9.
     # We must flip :8 within :8 so c -> 7 - c.
-    for ch in (14, 15, 16):
+    for ch in QUORIDOR_WALL_ANCHOR_CHANNELS:
+        if ch >= tensor.shape[1]:
+            continue
         orig_wall = tensor[:, ch, :8, :8]
         out[:, ch, :, :] = 0.0
         out[:, ch, :8, :8] = torch.flip(orig_wall, dims=[-1])

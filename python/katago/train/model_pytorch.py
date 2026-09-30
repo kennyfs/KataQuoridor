@@ -2916,6 +2916,7 @@ class QuoridorValueHead(torch.nn.Module):
         self.activation = activation
         self.pos_len = pos_len
         self.num_value_outputs = config.get("num_value_outputs", 2)
+        self.io_version = modelconfigs.get_quoridor_io_version(config)
 
         self.conv1 = torch.nn.Conv2d(c_in, c_v1, kernel_size=1, padding="same", bias=False)
         self.bias1 = BiasMask(
@@ -2938,14 +2939,22 @@ class QuoridorValueHead(torch.nn.Module):
         # 3. Variance Time (1 scalar)
         self.linear_variance_time = torch.nn.Linear(c_v2, 1, bias=True)
 
-        # 4. Game Margin (1 scalar: terminal shortest-distance margin +D / -D)
-        self.linear_game_margin = torch.nn.Linear(c_v2, 1, bias=True)
+        # 4. Utility score (1 scalar, KataGo's scoreMean): I/O v2: the final utility score u (docs/QuoridorIOv2.md
+        # §2.6). I/O v1: the final margin (+D / -D), which v1 nets also export as the lead. (Named
+        # linear_game_margin in v1 checkpoints, see load_model.load_model_state_dict.)
+        self.linear_utility_score = torch.nn.Linear(c_v2, 1, bias=True)
 
-        # 4b. Margin uncertainty (3 scalars, all pre-softplus): [game-margin stdev,
-        # shortterm winloss error, shortterm game-margin error]. Exported into the v17 scoreValue slots
+        # 4b. Score uncertainty (3 scalars, all pre-softplus): [utility-score stdev,
+        # shortterm winloss error, shortterm utility-score error]. Exported into the v17 scoreValue slots
         # [1], [4] and [5] (see export_model_pytorch.py); the search uses them for dynamic score utility
         # and uncertainty-weighted playouts.
         self.linear_misc = torch.nn.Linear(c_v2, 3, bias=True)
+
+        if self.io_version >= 2:
+            # 4c. Tempo lead (1 scalar, KataGo's lead): the final lead s = tempo + komi (§2.4).
+            self.linear_lead = torch.nn.Linear(c_v2, 1, bias=True)
+            # 4d. Remaining plies (1 scalar, training only, not exported): plies until the game ends / 300.
+            self.linear_remaining_turns = torch.nn.Linear(c_v2, 1, bias=True)
 
         # 5. Trajectory Head (2 x 9 x 9: current player future path, opp future path)
         self.conv_trajectory = torch.nn.Conv2d(c_v1, 2, kernel_size=1, padding="same", bias=False)
@@ -2968,8 +2977,12 @@ class QuoridorValueHead(torch.nn.Module):
         init_weights(self.linear_variance_time.weight, "identity", scale=1.0)
         init_weights(self.linear_variance_time.bias, "identity", scale=bias_scale, fan_tensor=self.linear_variance_time.weight)
 
-        init_weights(self.linear_game_margin.weight, "identity", scale=1.0)
-        init_weights(self.linear_game_margin.bias, "identity", scale=bias_scale, fan_tensor=self.linear_game_margin.weight)
+        init_weights(self.linear_utility_score.weight, "identity", scale=1.0)
+        init_weights(self.linear_utility_score.bias, "identity", scale=bias_scale, fan_tensor=self.linear_utility_score.weight)
+        if self.io_version >= 2:
+            for linear in (self.linear_lead, self.linear_remaining_turns):
+                init_weights(linear.weight, "identity", scale=1.0)
+                init_weights(linear.bias, "identity", scale=bias_scale, fan_tensor=linear.weight)
 
         init_weights(self.linear_misc.weight, "identity", scale=1.0)
         init_weights(self.linear_misc.bias, "identity", scale=bias_scale, fan_tensor=self.linear_misc.weight)
@@ -2991,8 +3004,12 @@ class QuoridorValueHead(torch.nn.Module):
         reg_dict["output"].append(self.linear_variance_time.weight)
         reg_dict["output_noreg"].append(self.linear_variance_time.bias)
 
-        reg_dict["output"].append(self.linear_game_margin.weight)
-        reg_dict["output_noreg"].append(self.linear_game_margin.bias)
+        reg_dict["output"].append(self.linear_utility_score.weight)
+        reg_dict["output_noreg"].append(self.linear_utility_score.bias)
+        if self.io_version >= 2:
+            for linear in (self.linear_lead, self.linear_remaining_turns):
+                reg_dict["output"].append(linear.weight)
+                reg_dict["output_noreg"].append(linear.bias)
 
         reg_dict["output"].append(self.linear_misc.weight)
         reg_dict["output_noreg"].append(self.linear_misc.bias)
@@ -3028,11 +3045,19 @@ class QuoridorValueHead(torch.nn.Module):
         # 3. Variance Time (B, 1)
         out_variance_time = self.linear_variance_time(outv2)
 
-        # 4. Game Margin (B, 1)
-        out_game_margin = self.linear_game_margin(outv2)
+        # 4. Utility score (B, 1)
+        out_utility_score = self.linear_utility_score(outv2)
 
-        # 4b. Margin stdev, shortterm winloss error, shortterm margin error (B, 3), pre-softplus
+        # 4b. Utility-score stdev, shortterm winloss error, shortterm utility-score error (B, 3), pre-softplus
         out_misc = self.linear_misc(outv2)
+
+        # 4c, 4d. Lead and remaining plies (B, 1). A v1 net's lead is its margin head; it has no remaining-plies head.
+        if self.io_version >= 2:
+            out_lead = self.linear_lead(outv2)
+            out_remaining_turns = self.linear_remaining_turns(outv2)
+        else:
+            out_lead = out_utility_score
+            out_remaining_turns = torch.zeros_like(out_utility_score)
 
         # 5. Trajectory Head (B, 2, pos_len, pos_len)
         out_trajectory = self.conv_trajectory(outv1) * mask
@@ -3044,10 +3069,12 @@ class QuoridorValueHead(torch.nn.Module):
             out_value,
             out_td_value,
             out_variance_time,
-            out_game_margin,
+            out_utility_score,
             out_misc,
             out_trajectory,
             out_wall_graph,
+            out_lead,
+            out_remaining_turns,
         )
 
 class MetadataEncoder(torch.nn.Module):
@@ -3241,13 +3268,14 @@ class Model(torch.nn.Module):
         if modelconfigs.is_quoridor(config):
             # Quoridor post-processing multipliers, written into the v17 model header by the exporter and
             # applied identically by nneval.cpp:
-            # - scoremean / lead = 1: whiteScoreMean and whiteLead are the game margin in moves (the
-            #   game-margin head is trained directly in moves; typical |margin| is 0-10).
+            # - scoremean / lead = 1: whiteScoreMean and whiteLead are in moves, as the heads are trained (I/O v2:
+            #   the utility score u and the tempo lead s; v1: both the game margin; typical |s| is 0-10, |u| can
+            #   reach about timeBonusPerPly * maxPlies more).
             # - td_score = 1: unused by Quoridor (no TD-score head), kept in moves for consistency.
             # - scorestdev = 2: stdev = softplus(x) * 2 moves, ~1.4 moves at x = 0.
             # - variance_time = 1: the Python head is trained on the raw target, so C++ must not rescale.
             # - shortterm_value_error = 0.25 (as upstream): predicted squared winloss error in [0, 4].
-            # - shortterm_score_error = 4: predicted squared margin error in moves^2, ~2 (≈1.4 moves) at x = 0.
+            # - shortterm_score_error = 4: predicted squared score error in moves^2, ~2 (≈1.4 moves) at x = 0.
             #   (Upstream uses 150 for Go points; margins are ~an order of magnitude smaller.)
             self.td_score_multiplier = 1.0
             self.scoremean_multiplier = 1.0
@@ -4099,15 +4127,7 @@ class Model(torch.nn.Module):
                     extra_outputs=extra_outputs
                 )
                 if modelconfigs.is_quoridor(self.config):
-                    (
-                        iout_value,
-                        iout_td_value,
-                        iout_variance_time,
-                        iout_game_margin,
-                        iout_misc,
-                        iout_trajectory,
-                        iout_wall_graph,
-                    ) = self.intermediate_value_head(
+                    iout_quoridor_value = self.intermediate_value_head(
                         iout_fp32,
                         mask=mask_fp32,
                         mask_sum_hw=mask_sum_hw_fp32,
@@ -4229,15 +4249,7 @@ class Model(torch.nn.Module):
                 extra_outputs=extra_outputs
             )
             if modelconfigs.is_quoridor(self.config):
-                (
-                    out_value,
-                    out_td_value,
-                    out_variance_time,
-                    out_game_margin,
-                    out_misc,
-                    out_trajectory,
-                    out_wall_graph,
-                ) = self.value_head(
+                out_quoridor_value = self.value_head(
                     out,
                     mask=mask_fp32,
                     mask_sum_hw=mask_sum_hw_fp32,
@@ -4265,40 +4277,15 @@ class Model(torch.nn.Module):
                 )
 
         if modelconfigs.is_quoridor(self.config):
+            # (policy,) + QuoridorValueHead's outputs: value, td_value, variance_time, utility_score, misc,
+            # trajectory, wall_graph, lead, remaining_turns.
             if self.has_intermediate_head:
                 return (
-                    (
-                        out_policy,
-                        out_value,
-                        out_td_value,
-                        out_variance_time,
-                        out_game_margin,
-                        out_misc,
-                        out_trajectory,
-                        out_wall_graph,
-                    ),
-                    (
-                        iout_policy,
-                        iout_value,
-                        iout_td_value,
-                        iout_variance_time,
-                        iout_game_margin,
-                        iout_misc,
-                        iout_trajectory,
-                        iout_wall_graph,
-                    ),
+                    (out_policy,) + out_quoridor_value,
+                    (iout_policy,) + iout_quoridor_value,
                 )
             else:
-                return ((
-                    out_policy,
-                    out_value,
-                    out_td_value,
-                    out_variance_time,
-                    out_game_margin,
-                    out_misc,
-                    out_trajectory,
-                    out_wall_graph,
-                ),)
+                return ((out_policy,) + out_quoridor_value,)
         else:
             if self.has_intermediate_head:
                 return (
@@ -4343,26 +4330,7 @@ class Model(torch.nn.Module):
 
     def float32ify_single_heads_output(self, outputs):
         if modelconfigs.is_quoridor(self.config):
-            (
-                out_policy,
-                out_value,
-                out_td_value,
-                out_variance_time,
-                out_game_margin,
-                out_misc,
-                out_trajectory,
-                out_wall_graph,
-            ) = outputs
-            return (
-                out_policy.to(torch.float32),
-                out_value.to(torch.float32),
-                out_td_value.to(torch.float32),
-                out_variance_time.to(torch.float32),
-                out_game_margin.to(torch.float32),
-                out_misc.to(torch.float32),
-                out_trajectory.to(torch.float32),
-                out_wall_graph.to(torch.float32),
-            )
+            return tuple(out.to(torch.float32) for out in outputs)
         (
             out_policy,
             out_value,
@@ -4396,17 +4364,19 @@ class Model(torch.nn.Module):
                 out_value,
                 out_td_value,
                 out_variance_time,
-                out_game_margin,
+                out_utility_score,
                 out_misc,
                 out_trajectory,
                 out_wall_graph,
+                out_lead,
+                out_remaining_turns,
             ) = outputs
             return (
                 out_policy,
                 out_value,
                 out_td_value,
                 SoftPlusWithGradientFloorFunction.apply(out_variance_time.squeeze(-1), 0.05, False) * self.variance_time_multiplier,
-                out_game_margin.squeeze(-1) * self.scoremean_multiplier,
+                out_utility_score.squeeze(-1) * self.scoremean_multiplier,
                 # Same functional forms as upstream v14+ scorestdev / shortterm errors, so that the C++
                 # postprocessing in nneval.cpp (with the multipliers written by the exporter) matches.
                 SoftPlusWithGradientFloorFunction.apply(out_misc[:, 0], 0.05, False) * self.scorestdev_multiplier,
@@ -4414,6 +4384,9 @@ class Model(torch.nn.Module):
                 SoftPlusWithGradientFloorFunction.apply(out_misc[:, 2], 0.05, True) * self.shortterm_score_error_multiplier,
                 out_trajectory,
                 out_wall_graph,
+                # Appended in I/O v2 (a v1 net's lead is its utility score, its remaining turns 0).
+                out_lead.squeeze(-1) * self.lead_multiplier,
+                out_remaining_turns.squeeze(-1),  # plies until the game ends / 300
             )
         (
             out_policy,
