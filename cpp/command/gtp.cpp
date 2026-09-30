@@ -32,6 +32,8 @@ static const vector<string> knownCommands = {
 
   "clear_board",
   "set_position",
+  "komi",
+  "get_komi",
   "play",
   "move",
   "wall",
@@ -548,6 +550,7 @@ struct GTPEngine {
       isGenmoveParams = true;
 
       Board board(boardXSize,boardYSize);
+      board.setFencesLeft(currentRules.blackInitialFences, currentRules.whiteInitialFences);
       Player pla = P_BLACK;
       BoardHistory hist(board,pla,currentRules,0,Search::resolveHistoryModes(genmoveParams,nnEval));
       vector<Move> newMoveHistory;
@@ -581,6 +584,7 @@ struct GTPEngine {
     int newXSize = bot->getRootBoard().x_size;
     int newYSize = bot->getRootBoard().y_size;
     Board board(newXSize,newYSize);
+    board.setFencesLeft(currentRules.blackInitialFences, currentRules.whiteInitialFences);
     Player pla = P_BLACK;
     BoardHistory hist(board,pla,currentRules,0,Search::resolveHistoryModes(genmoveParams,nnEval));
     vector<Move> newMoveHistory;
@@ -593,6 +597,7 @@ struct GTPEngine {
     int newXSize = bot->getRootBoard().x_size;
     int newYSize = bot->getRootBoard().y_size;
     Board board(newXSize,newYSize);
+    board.setFencesLeft(currentRules.blackInitialFences, currentRules.whiteInitialFences);
     bool suc = board.setStonesFailIfNoLibs(initialStones);
     if(!suc)
       return false;
@@ -605,7 +610,7 @@ struct GTPEngine {
     }
     Player pla = P_BLACK;
     BoardHistory hist(board,pla,currentRules,0,Search::resolveHistoryModes(genmoveParams,nnEval));
-    hist.setInitialTurnNumber(board.numStonesOnBoard()); //Heuristic to guess at what turn this is
+    hist.setInitialTurnNumber(board.numStonesOnBoard()); //Heuristic to guess at what turn this is (Quoridor: walls on the board, so 0)
     vector<Move> newMoveHistory;
     setPositionAndRules(pla,board,hist,board,pla,newMoveHistory);
     clearStatsForNewGame();
@@ -668,13 +673,26 @@ struct GTPEngine {
       return false;
     }
 
+    //KataQuoridor: maxPlies and the initial walls define the game from its start, so they can only change before the
+    //first move. The initial walls are then applied to the initial board.
+    bool startChanges =
+      newRules.maxPlies != currentRules.maxPlies ||
+      newRules.blackInitialFences != currentRules.blackInitialFences ||
+      newRules.whiteInitialFences != currentRules.whiteInitialFences;
+    if(startChanges && moveHistory.size() > 0) {
+      error = "maxPlies and the initial walls can only be changed before the first move (use clear_board first)";
+      return false;
+    }
+
     vector<Move> moveHistoryCopy = moveHistory;
 
     Board board = initialBoard;
+    if(startChanges)
+      board.setFencesLeft(newRules.blackInitialFences, newRules.whiteInitialFences);
     BoardHistory hist(board,initialPla,newRules,0,Search::resolveHistoryModes(genmoveParams,nnEval));
     hist.setInitialTurnNumber(bot->getRootHist().initialTurnNumber);
     vector<Move> emptyMoveHistory;
-    setPositionAndRules(initialPla,board,hist,initialBoard,initialPla,emptyMoveHistory);
+    setPositionAndRules(initialPla,board,hist,board,initialPla,emptyMoveHistory);
 
     for(int i = 0; i<moveHistoryCopy.size(); i++) {
       Loc moveLoc = moveHistoryCopy[i].loc;
@@ -1464,8 +1482,9 @@ struct GTPEngine {
        )
     ) {
       //For GTP purposes, we treat noResult as a draw since there is no provision for anything else.
+      //KataQuoridor: report the lead (tempo + komi), which excludes the time bonus of the score.
       winner = hist.winner;
-      finalWhiteMinusBlackScore = hist.finalWhiteMinusBlackScore;
+      finalWhiteMinusBlackScore = hist.finalWhiteLead;
     }
     //Human-friendly score or incomplete game score estimation
     else {
@@ -2036,7 +2055,7 @@ int MainCmds::gtp(const vector<string>& args) {
     cerr << Version::getKataGoVersionForHelp() << endl;
   }
 
-  //Defaults to 7.5 komi, gtp will generally override this
+  //KataQuoridor: defaults to the standard komi (-0.5); the komi command overrides it
   const bool loadKomiFromCfg = false;
   Rules initialRules = Setup::loadSingleRules(cfg,loadKomiFromCfg);
   logger.write("Using " + initialRules.toStringNoKomiMaybeNice() + " rules initially, unless GTP/GUI overrides this");
@@ -2047,7 +2066,9 @@ int MainCmds::gtp(const vector<string>& args) {
   float forcedKomi = 0;
   if(cfg.contains("ignoreGTPAndForceKomi")) {
     isForcingKomi = true;
-    forcedKomi = cfg.getFloat("ignoreGTPAndForceKomi", Rules::MIN_USER_KOMI, Rules::MAX_USER_KOMI);
+    forcedKomi = cfg.getFloat("ignoreGTPAndForceKomi", -Rules::MAX_KOMI, Rules::MAX_KOMI);
+    if(!Rules::isValidKomi(forcedKomi))
+      throw StringError("ignoreGTPAndForceKomi must be a Quoridor komi (a half-integer, e.g. -0.5)");
     initialRules.komi = forcedKomi;
   }
 
@@ -2420,6 +2441,31 @@ int MainCmds::gtp(const vector<string>& args) {
         shouldReloadAutoAvoidPatterns = false;
       }
       engine->clearBoard();
+    }
+
+    //KataQuoridor: komi is a half-integer; White wins iff tempo + komi > 0 (see docs/QuoridorIOv2.md). The standard
+    //game has komi -0.5. Like upstream, komi may change mid-game, and changes the result of a finished game.
+    else if(command == "komi") {
+      float newKomi = 0;
+      if(pieces.size() != 1 || !Global::tryStringToFloat(pieces[0],newKomi)) {
+        responseIsError = true;
+        response = "Expected single float argument for komi but got '" + Global::concat(pieces," ") + "'";
+      }
+      else if(!Rules::isValidKomi(newKomi)) {
+        responseIsError = true;
+        response = "komi must be a half-integer (e.g. -0.5, 1.5) with |komi| <= " + Global::floatToString(Rules::MAX_KOMI);
+      }
+      else {
+        if(isForcingKomi)
+          newKomi = forcedKomi;
+        engine->updateKomiIfNew(newKomi);
+        //In case the controller tells us komi every move, restart pondering afterward.
+        maybeStartPondering = engine->bot->getRootHist().moveHistory.size() > 0;
+      }
+    }
+
+    else if(command == "get_komi") {
+      response = Global::doubleToString(engine->getCurrentRules().komi);
     }
 
     else if(command == "kata-get-rules") {
@@ -3275,7 +3321,8 @@ int MainCmds::gtp(const vector<string>& args) {
     else if(command == "winner") {
       const BoardHistory& hist = engine->bot->getRootHist();
       if(hist.isGameFinished) {
-        if(hist.isNoResult)
+        //A draw by the maxPlies rule (winner empty), or a no-result game
+        if(hist.isNoResult || hist.winner == C_EMPTY)
           response = "Draw";
         else if(hist.winner == P_BLACK)
           response = "B";

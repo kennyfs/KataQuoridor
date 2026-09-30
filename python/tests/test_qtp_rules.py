@@ -5,11 +5,15 @@
    still work.
 2. Turn order: Quoridor strictly alternates with no pass, so play/move/wall/genmove with an explicit colour that is
    not the side to move fail (and do not change the side to move).
+3. Quoridor I/O v2 rules (docs/QuoridorIOv2.md): komi / get_komi, kata-get-rules / kata-set-rule(s) (maxPlies,
+   timeBonusPerPly, initial walls), the draw at maxPlies (winner -> Draw), komi deciding the winner, the fence
+   handicap, and SGF KM / WB / WW / RU / RE.
 
 The engine runs without a net (`-model /dev/null`, debugSkipNeuralNet=true), like the arena's arbiter. The binary is
 taken from $KATAGO_BIN, else the most recently built cpp/build*/katago.
 """
 import glob
+import json
 import os
 import subprocess
 import tempfile
@@ -222,3 +226,179 @@ def test_genmove_alternates(eng):
         mv = eng.ok("genmove " + color)
         assert mv not in ("pass", "resign", ""), mv
         color = other
+
+
+# --- Quoridor I/O v2 rules (docs/QuoridorIOv2.md): komi, maxPlies draw, time bonus, fence handicap ----------------
+
+# Black and White shuffle sideways on their start rows: nobody ever gets closer to the goal.
+def _shuffle(n):
+    moves = []
+    for i in range(n):
+        color = "b" if i % 2 == 0 else "w"
+        row = "9" if color == "b" else "1"
+        col = "d" if (i // 2) % 2 == 0 else "e"
+        moves.append("%s %s%s" % (color, col, row))
+    return moves
+
+
+# An equal race: Black steps to d9 and walks down column d, White steps to f1 and walks up column f. Black, moving
+# first, arrives on ply 17 with White 1 step away: B+1, tempo 0.
+EQUAL_RACE = ["b d9", "w f1"] + [m for r in range(8) for m in ("b d%d" % (8 - r), "w f%d" % (2 + r))][:15]
+
+
+def _json(text):
+    return json.loads(text)
+
+
+def test_komi_commands(eng):
+    assert eng.ok("get_komi") == "-0.5"
+    for bad in ("komi 0", "komi 7", "komi 0.25", "komi 21.5", "komi -21.5", "komi abc", "komi"):
+        assert "komi" in eng.err(bad), bad
+    assert eng.ok("get_komi") == "-0.5"
+    eng.ok("komi 1.5")
+    assert eng.ok("get_komi") == "1.5"
+    assert "Komi: 1.5" in eng.ok("showboard")
+    eng.ok("komi -0.5")
+    assert "Komi" not in eng.ok("showboard")
+
+
+def test_rules_commands(eng):
+    assert _json(eng.ok("kata-get-rules")) == {
+        "maxPlies": 300, "timeBonusPerPly": 0.0, "blackInitialWalls": 10, "whiteInitialWalls": 10}
+    eng.ok("kata-set-rule maxPlies 40")
+    eng.ok("kata-set-rule timeBonusPerPly 0.05")
+    eng.ok("kata-set-rule whiteInitialWalls 7")
+    assert _json(eng.ok("kata-get-rules")) == {
+        "maxPlies": 40, "timeBonusPerPly": 0.05, "blackInitialWalls": 10, "whiteInitialWalls": 7}
+    assert eng.ok("walls") == "B: 10 W: 7"
+    for bad in ("kata-set-rule komi 1.5", "kata-set-rule maxPlies 0", "kata-set-rule blackInitialWalls 11",
+                "kata-set-rule timeBonusPerPly -1", "kata-set-rule ko SIMPLE", "kata-set-rule maxPlies"):
+        eng.err(bad)
+    # maxPlies and the initial walls define the game from its start: only before the first move.
+    eng.ok("play b e8")
+    assert "before the first move" in eng.err("kata-set-rule maxPlies 50")
+    assert "before the first move" in eng.err("kata-set-rule blackInitialWalls 5")
+    eng.ok("kata-set-rule timeBonusPerPly 0.1")
+    eng.ok("clear_board")
+    eng.ok("kata-set-rules quoridor")
+    assert _json(eng.ok("kata-get-rules"))["maxPlies"] == 300
+    assert eng.ok("walls") == "B: 10 W: 10"
+
+
+def test_showboard_ply(eng):
+    assert "Ply: 0 (draw at 300, 300 left)" in eng.ok("showboard")
+    eng.ok("play b e8")
+    eng.ok("play w e2")
+    assert "Ply: 2 (draw at 300, 298 left)" in eng.ok("showboard")
+    # set_position starts counting at 0 again.
+    eng.ok("set_position")
+    assert "Ply: 0 (draw at 300, 300 left)" in eng.ok("showboard")
+
+
+def test_draw_at_300_plies(eng):
+    moves = _shuffle(300)
+    for m in moves[:-1]:
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "none"
+    eng.ok("play " + moves[-1])
+    assert eng.ok("winner") == "Draw"
+    board = eng.ok("showboard")
+    assert "Game finished: Draw (300-ply limit)" in board and "Ply: 300 (draw at 300, 0 left)" in board
+    assert eng.err("play b e9") == "game is over"
+    assert eng.err("genmove b") == "game is over"
+    assert eng.ok("legal_moves") == ""
+    assert "RE[0]" in eng.ok("printsgf")
+    # Undo across the draw reopens the game with one ply to go.
+    eng.ok("undo")
+    assert eng.ok("winner") == "none"
+    assert "Ply: 299 (draw at 300, 1 left)" in eng.ok("showboard")
+    eng.ok("play " + moves[-1])
+    assert eng.ok("winner") == "Draw"
+
+
+def test_win_on_last_ply_is_a_win(eng):
+    # The equal race ends on ply 17. With maxPlies 17 Black's arrival is still a win; with 16 the game is a draw.
+    eng.ok("kata-set-rule maxPlies 17")
+    for m in EQUAL_RACE:
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "B"
+    eng.ok("clear_board")
+    eng.ok("kata-set-rule maxPlies 16")
+    for m in EQUAL_RACE[:-1]:
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "Draw"
+
+
+def test_komi_decides_winner(eng):
+    for m in EQUAL_RACE:
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "B"
+    assert "RE[B+0.5]" in eng.ok("printsgf")
+    # Komi +0.5: the equal race goes to White, although Black's pawn reached its goal.
+    eng.ok("komi 0.5")
+    assert eng.ok("winner") == "W"
+    assert "Game finished: winner = White (W+0.5)" in eng.ok("showboard")
+    sgf = eng.ok("printsgf")
+    assert "KM[0.5]" in sgf and "RE[W+0.5]" in sgf
+    assert eng.err("play w f9") == "game is over"
+    eng.ok("komi -0.5")
+    assert eng.ok("winner") == "B"
+
+
+def test_fence_handicap(eng):
+    eng.ok("kata-set-rule blackInitialWalls 0")
+    assert eng.ok("walls") == "B: 0 W: 10"
+    assert eng.err("wall b a1h").startswith("illegal move")
+    eng.ok("play b e8")
+    eng.ok("wall w a1h")
+    assert eng.ok("walls") == "B: 0 W: 9"
+    assert "WB[0]WW[10]" in eng.ok("printsgf")
+    # clear_board keeps the rules.
+    eng.ok("clear_board")
+    assert eng.ok("walls") == "B: 0 W: 10"
+
+
+def test_sgf_round_trip(eng):
+    eng.ok("kata-set-rule maxPlies 100")
+    eng.ok("kata-set-rule timeBonusPerPly 0.05")
+    eng.ok("kata-set-rule whiteInitialWalls 6")
+    eng.ok("komi 1.5")
+    for m in EQUAL_RACE:
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "W"
+    sgf = eng.ok("printsgf")
+    for prop in ("KM[1.5]", "WB[10]WW[6]", "RU[Quoridor:maxPlies=100,timeBonusPerPly=0.05,whiteInitialWalls=6]",
+                 "RE[W+1.5]"):
+        assert prop in sgf, (prop, sgf)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "game.sgf")
+        with open(path, "w") as f:
+            f.write(sgf)
+        eng.ok("komi -0.5")
+        eng.ok("clear_board")
+        eng.ok("kata-set-rules quoridor")
+        eng.ok("loadsgf " + path)
+        assert eng.ok("get_komi") == "1.5"
+        assert _json(eng.ok("kata-get-rules")) == {
+            "maxPlies": 100, "timeBonusPerPly": 0.05, "blackInitialWalls": 10, "whiteInitialWalls": 6}
+        assert eng.ok("winner") == "W"
+        # Up to move 10: plies count from the start of the SGF.
+        eng.ok("loadsgf %s 11" % path)
+        assert "Ply: 10 (draw at 100, 90 left)" in eng.ok("showboard")
+        assert eng.ok("walls") == "B: 10 W: 6"
+
+
+def test_load_old_sgf(eng):
+    # KataQuoridor 0.1.0 wrote KM[0] and no WB/WW for the standard game; without KM the komi is standard too.
+    old = "(;FF[4]GM[1]SZ[17]PB[a]PW[b]HA[0]KM[0]RU[Quoridor]RE[B+R]AB[iq]AW[ia];B[io];W[ic])"
+    no_km = "(;FF[4]GM[1]SZ[17]AB[iq]AW[ia];B[io];W[ic])"
+    eng.ok("komi 2.5")
+    for text in (old, no_km):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "old.sgf")
+            with open(path, "w") as f:
+                f.write(text)
+            eng.ok("loadsgf " + path)
+            assert eng.ok("get_komi") == "-0.5"
+            assert eng.ok("walls") == "B: 10 W: 10"
+            assert "Ply: 2 (draw at 300, 298 left)" in eng.ok("showboard")

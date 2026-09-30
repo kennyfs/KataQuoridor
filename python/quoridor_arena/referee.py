@@ -171,7 +171,9 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
             result = (w.lower(), "goal", "")
             break
         if w is not None:
-            result = (None, "draw", "arbiter says %s" % w)
+            # KataQuoridor >= 0.2 ends a game itself at its maxPlies (default 300, a game rule) and says "Draw";
+            # label it like the referee's own cutoff below.
+            result = (None, "draw%d" % len(moves), "arbiter says %s" % w)
             break
         if len(moves) >= max_plies:
             result = (None, "draw%d" % max_plies, "")

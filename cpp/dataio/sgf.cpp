@@ -458,42 +458,27 @@ float SgfNode::getKomiOrDefault(float defaultKomi) const {
   if(!suc)
     propertyFail("Could not parse komi in sgf");
 
-  if(!Rules::komiIsIntOrHalfInt(komi)) {
-    //Hack - if the komi is a quarter integer and it looks like a Chinese GoGoD file, then double komi and accept
-    if(Rules::komiIsIntOrHalfInt(komi*2.0f) && hasProperty("US") && hasProperty("RU") &&
-       Global::isPrefix(getSingleProperty("US"),"GoGoD") &&
-       (
-         Global::toLower(getSingleProperty("RU")) == "chinese" ||
-         Global::toLower(getSingleProperty("RU")) == "chinese, pair go"
-       )
-    )
-      komi *= 2.0f;
-    else
-      propertyFail("Komi in sgf is not integer or half-integer");
-  }
-
-  //Hack - check for foxwq or SGFC sgfs with weird komis
-  if(hasProperty("AP")) {
-    auto ap = getProperties("AP");
-    if (contains(ap,"foxwq") || contains(ap, "SGFC:2.0")) {
-      if(komi == 550 || komi == 275)
-        komi = 5.5f;
-      else if(komi == 325 || komi == 650)
-        komi = 6.5f;
-      else if(komi == 375 || komi == 750)
-        komi = 7.5f;
-      else if(komi == 350 || komi == 700)
-        komi = 7.0f;
-      else if(komi == 0)
-        komi = 0.0f;
-      else if(komi == 6.5 || komi == 7.5 || komi == 7)
-      {}
-      else
-        propertyFail("Currently no case implemented for foxwq or SGFC komi: " + Global::floatToString(komi));
-    }
-  }
-
+  //KataQuoridor: KataQuoridor 0.1.0 wrote KM[0] for the standard game, which is komi -0.5 since I/O v2.
+  if(komi == 0.0f)
+    komi = Rules::DEFAULT_KOMI;
+  if(!Rules::isValidKomi(komi))
+    propertyFail("Komi in sgf is not a Quoridor komi (a half-integer with |komi| <= " + Global::floatToString(Rules::MAX_KOMI) + ")");
   return komi;
+}
+
+//KataQuoridor: the initial walls of Black and White (fence handicap) are the SGF properties WB and WW, like PB/PW
+//("Walls Black/White"). Without them a game starts with the standard 10 walls each.
+static void setInitialWallsFromSgf(const SgfNode& node, Rules& rules) {
+  auto get = [&](const string& prop) {
+    if(!node.hasProperty(prop))
+      return Rules::DEFAULT_INITIAL_FENCES;
+    int n;
+    if(!Global::tryStringToInt(node.getSingleProperty(prop), n) || n < 0 || n > Board::MAX_FENCE_NUM)
+      throw StringError("Could not parse " + prop + " (initial walls) in sgf: " + node.getSingleProperty(prop));
+    return n;
+  };
+  rules.blackInitialFences = get("WB");
+  rules.whiteInitialFences = get("WW");
 }
 
 int Sgf::getHandicapValue() const {
@@ -518,6 +503,7 @@ Rules Sgf::getRulesOrFail() const {
   checkNonEmpty(nodes);
   Rules rules = nodes[0]->getRulesFromRUTagOrFail();
   rules.komi = getKomiOrFail();
+  setInitialWallsFromSgf(*nodes[0], rules);
   return rules;
 }
 
@@ -786,6 +772,10 @@ void Sgf::iterAllUniquePositions(
   Rules rules = Rules::getTrompTaylorish();
   rules.koRule = Rules::KO_SITUATIONAL;
   rules.multiStoneSuicideLegal = true;
+  if(nodes.size() > 0) {
+    setInitialWallsFromSgf(*nodes[0], rules);
+    board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
+  }
   BoardHistory hist(board,nextPla,rules,0,BoardHistoryModes());
 
   PositionSample sampleBuf;
@@ -814,6 +804,10 @@ void Sgf::iterAllPositions(
   Rules rules = Rules::getTrompTaylorish();
   rules.koRule = Rules::KO_SITUATIONAL;
   rules.multiStoneSuicideLegal = true;
+  if(nodes.size() > 0) {
+    setInitialWallsFromSgf(*nodes[0], rules);
+    board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
+  }
   BoardHistory hist(board,nextPla,rules,0,BoardHistoryModes());
 
   PositionSample sampleBuf;
@@ -1752,9 +1746,12 @@ bool CompactSgf::hasRules() const {
 Rules CompactSgf::getRulesOrFail() const {
   Rules rules = rootNode.getRulesFromRUTagOrFail();
   rules.komi = rootNode.getKomiOrFail();
+  setInitialWallsFromSgf(rootNode, rules);
   return rules;
 }
 
+//KataQuoridor: without KM the komi is the standard Rules::DEFAULT_KOMI, not defaultRules' komi, and without WB/WW
+//the walls are the standard 10: an SGF's KM and WB/WW describe its game.
 Rules CompactSgf::getRulesOrFailAllowUnspecified(const Rules& defaultRules) const {
   Rules rules;
   if(!hasRules())
@@ -1762,13 +1759,17 @@ Rules CompactSgf::getRulesOrFailAllowUnspecified(const Rules& defaultRules) cons
   else
     rules = rootNode.getRulesFromRUTagOrFail();
 
-  if(rootNode.hasProperty("KM"))
-    rules.komi = rootNode.getKomiOrFail();
+  rules.komi = rootNode.getKomiOrDefault(Rules::DEFAULT_KOMI);
+  setInitialWallsFromSgf(rootNode, rules);
   return rules;
 }
 
-Rules CompactSgf::getRulesOrWarn(const Rules& defaultRules, const std::function<void(const string& msg)>& f) const {
-  if(!hasRules()) {
+static Rules getRulesOrWarnHelper(const CompactSgf& sgf, const Rules& defaultRulesOrig, const std::function<void(const string& msg)>& f) {
+  const SgfNode& rootNode = sgf.rootNode;
+  //KataQuoridor: without KM the komi is the standard one (see getRulesOrFailAllowUnspecified).
+  Rules defaultRules = defaultRulesOrig;
+  defaultRules.komi = Rules::DEFAULT_KOMI;
+  if(!sgf.hasRules()) {
     Rules rules = defaultRules;
     if(rootNode.hasProperty("KM")) {
       try {
@@ -1814,6 +1815,12 @@ Rules CompactSgf::getRulesOrWarn(const Rules& defaultRules, const std::function<
   return rules;
 }
 
+Rules CompactSgf::getRulesOrWarn(const Rules& defaultRules, const std::function<void(const string& msg)>& f) const {
+  Rules rules = getRulesOrWarnHelper(*this, defaultRules, f);
+  setInitialWallsFromSgf(rootNode, rules);
+  return rules;
+}
+
 
 void CompactSgf::setupInitialBoardAndHist(const Rules& initialRules, Board& board, Player& nextPla, BoardHistory& hist, const BoardHistoryModes& modes) const {
   Color plPlayer = rootNode.getPLSpecifiedColor();
@@ -1839,6 +1846,7 @@ void CompactSgf::setupInitialBoardAndHist(const Rules& initialRules, Board& boar
     nextPla = moves[0].pla;
 
   board = Board(xSize,ySize);
+  board.setFencesLeft(initialRules.blackInitialFences, initialRules.whiteInitialFences);
   bool suc = board.setStonesFailIfNoLibs(placements);
   if(!suc)
     throw StringError("setupInitialBoardAndHist: initial board position contains invalid stones or zero-liberty stones");
@@ -1915,6 +1923,8 @@ string WriteSgf::gameResultNoSgfTag(const BoardHistory& hist, double overrideFin
   else if(hist.isResignation && hist.winner == C_WHITE)
     return "W+R";
 
+  //KataQuoridor: the result is the lead (tempo + komi, a half-integer), not the utility score, which may include
+  //a time bonus. overrideFinishedWhiteScore is a lead too.
   if(!std::isnan(overrideFinishedWhiteScore)) {
     if(overrideFinishedWhiteScore < 0)
       return "B+" + Global::doubleToString(-overrideFinishedWhiteScore);
@@ -1925,9 +1935,9 @@ string WriteSgf::gameResultNoSgfTag(const BoardHistory& hist, double overrideFin
   }
   else {
     if(hist.winner == C_BLACK)
-      return "B+" + Global::doubleToString(-hist.finalWhiteMinusBlackScore);
+      return "B+" + Global::doubleToString(-hist.finalWhiteLead);
     else if(hist.winner == C_WHITE)
-      return "W+" + Global::doubleToString(hist.finalWhiteMinusBlackScore);
+      return "W+" + Global::doubleToString(hist.finalWhiteLead);
     else if(hist.winner == C_EMPTY)
       return "0";
     else
@@ -2027,6 +2037,9 @@ void WriteSgf::writeSgf(
   }
 
   out << "KM[" << rules.komi << "]";
+  //KataQuoridor: the initial walls (fence handicap), see setInitialWallsFromSgf.
+  out << "WB[" << initialBoard.blackFences << "]";
+  out << "WW[" << initialBoard.whiteFences << "]";
   out << "RU[" << (tryNicerRulesString ? rules.toStringNoKomiMaybeNice() : rules.toStringNoKomi()) << "]";
   printGameResult(out,endHist,overrideFinishedWhiteScore);
 

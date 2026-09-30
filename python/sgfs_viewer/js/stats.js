@@ -74,10 +74,12 @@ function niceWidth(range, target = 36) {
   for (const s of [1, 2, 5, 10, 20, 25, 50, 100]) if (s >= raw) return s;
   return 200;
 }
-// integer-valued histogram with shared bins
+// integer-valued histogram with shared bins. Values that are all half-integers (SGF results since the Quoridor I/O v2
+// rules: the lead, e.g. W+0.5 or B+2.5) get bins shifted by 0.5, so each bin is labelled by the value it holds.
 function binsFor(arrays, width, lo, hi) {
   const all = arrays.flat();
-  lo ??= Math.floor(Math.min(...all) / width) * width;
+  const half = all.length > 0 && all.every(x => Math.abs(x - Math.floor(x) - 0.5) < 1e-9) ? 0.5 : 0;
+  lo ??= Math.floor((Math.min(...all) - half) / width) * width + half;
   hi ??= Math.max(...all);
   const nb = Math.floor((hi - lo) / width) + 1;
   const counts = arrays.map(a => { const c = new Array(nb).fill(0); for (const x of a) c[Math.min(nb - 1, Math.floor((x - lo) / width))]++; return c; });
@@ -247,23 +249,25 @@ function renderStats() {
 
   // 5. signed final margin
   {
-    const c = card("Final margin (White's view)", "Result margin; negative = Black won by that much, positive = White won.");
+    const c = card("Final margin (White's view)", "Result margin (the SGF result: since the I/O v2 rules the tempo lead, e.g. W+0.5); negative = Black won by that much, positive = White won. Draws are left out.");
     legend(c, [["Black wins", C_B], ["White wins", C_W]]);
-    const vals = S.map(s => s.signed), lo = Math.min(...vals), hi = Math.max(...vals);
+    const decided = [...B, ...Wn], draws = S.length - decided.length;
+    const vals = decided.map(s => s.signed), lo = Math.min(...vals), hi = Math.max(...vals);
     const w = niceWidth(hi - lo, 40);
     const bins = binsFor([vals], w);
     const d = describe(vals);
-    mini(c, `mean ${fmtScore(d.mean)} · median ${fmtScore(d.median)} · mean |margin| B wins ${f1(describe(B.map(s => s.margin)).mean)}, W wins ${f1(describe(Wn.map(s => s.margin)).mean)}`);
+    mini(c, `mean ${fmtScore(d.mean)} · median ${fmtScore(d.median)} · mean |margin| B wins ${f1(describe(B.map(s => s.margin)).mean)}, W wins ${f1(describe(Wn.map(s => s.margin)).mean)}` + (draws ? ` · ${draws} draws` : ""));
     barChart(c, [{ name: "Games", color: C_W, values: bins.counts[0] }], { labels: bins.labels,
-      colorsFor: b => bins.lo + b * w + w / 2 < 0 ? C_B : C_W,
+      colorsFor: b => bins.lo + b * w < 0 ? C_B : C_W,
       tipFor: b => `<b>margin ${bins.labels[b]}</b><br>${bins.counts[0][b]} games` });
   }
 
   // 6. walls used by winner vs loser
   {
-    const c = card("Walls used: winner vs loser", "Walls placed per game (0–10) by the winning and the losing side.");
+    const c = card("Walls used: winner vs loser", "Walls placed per game (0–10) by the winning and the losing side. Draws are left out.");
     legend(c, [["Winner", "var(--margin)"], ["Loser", "var(--neutral)"]]);
-    const win = S.map(s => s.used[s.winner]), lose = S.map(s => s.used[s.winner === "B" ? "W" : "B"]);
+    const decided = [...B, ...Wn];
+    const win = decided.map(s => s.used[s.winner]), lose = decided.map(s => s.used[s.winner === "B" ? "W" : "B"]);
     const bins = binsFor([win, lose], 1, 0, WALLS_PER_PLAYER);
     const hv = S.reduce((a, s) => [a[0] + s.hw, a[1] + s.vw], [0, 0]);
     mini(c, `mean winner ${f1(describe(win).mean)} · loser ${f1(describe(lose).mean)} · horizontal ${pct(hv[0] / (hv[0] + hv[1] || 1))} of walls`);
@@ -425,11 +429,12 @@ function renderMatchStats(S) {
   {
     const c = card(`Final margin (${LA}'s view)`, `Negative = ${LB} won by that much, positive = ${LA} won.`, host);
     legend(c, [[`${LB} wins`, CB], [`${LA} wins`, CA]]);
-    const vals = S.map(s => s.winnerModel === A ? s.margin : -s.margin), lo = Math.min(...vals), hi = Math.max(...vals);
+    const decided = S.filter(s => s.winnerModel), draws = S.length - decided.length;
+    const vals = decided.map(s => s.winnerModel === A ? s.margin : -s.margin), lo = Math.min(...vals), hi = Math.max(...vals);
     const w = niceWidth(hi - lo, 40), bins = binsFor([vals], w), d = describe(vals);
-    mini(c, `mean ${fmtScore(d.mean)} · median ${fmtScore(d.median)} · sd ${f1(d.sd)}`);
+    mini(c, `mean ${fmtScore(d.mean)} · median ${fmtScore(d.median)} · sd ${f1(d.sd)}` + (draws ? ` · ${draws} draws (left out)` : ""));
     barChart(c, [{ name: "Games", color: CA, values: bins.counts[0] }], { labels: bins.labels,
-      colorsFor: b => bins.lo + b * w + w / 2 < 0 ? CB : CA, tipFor: b => `<b>margin ${bins.labels[b]}</b><br>${bins.counts[0][b]} games` });
+      colorsFor: b => bins.lo + b * w < 0 ? CB : CA, tipFor: b => `<b>margin ${bins.labels[b]}</b><br>${bins.counts[0][b]} games` });
   }
 
   // walls used per model

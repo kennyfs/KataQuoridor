@@ -46,8 +46,11 @@ reimplements the rules:
   win. (Since 0.1.0, KataQuoridor refuses every move after a win with `? game is over`, so `winner` stays
   at the result, and it refuses a `play`/`genmove` by the side not to move. Older binaries accepted both;
   the referee controls the move order and stops at the first win, so it works with either.)
-- Draw rule: after 300 plies with `winner` = `none`, the game is a draw (reason `draw300`). The arbiter
-  has no ply cap of its own.
+- Draw rule: after 300 plies (`--max-plies`) with `winner` = `none`, the game is a draw (reason `draw300`).
+  Since the Quoridor I/O v2 rules ([QuoridorIOv2.md](QuoridorIOv2.md)), KataQuoridor itself ends a game at
+  its `maxPlies` (default 300) and `winner` reports `Draw`; the referee records that as `draw<plies>` too, so
+  keep `--max-plies` equal to the arbiter's `maxPlies`. Arena games use the standard komi (−0.5), under which the
+  winner is the side whose pawn arrives.
 - `--verify`: before every move, the arbiter's `legal_moves` is compared with the mover's (only for
   engines where `known_command legal_moves` is true). A mismatch aborts the whole run.
 
@@ -88,7 +91,9 @@ line from an interrupted run is dropped). Raising `--games-per-pair` adds only t
 the opening parameters for an existing directory is refused.
 
 **Margin** = max(1, the loser's shortest-path distance from the arbiter's `dist`), the same definition
-as the engine's terminal score. Draws have margin 0.
+as the engine's margin (`Board::whiteMarginWhenWonBy`). Draws have margin 0. Arena SGFs write this integer margin
+in `RE` and `KM[0]`; the engine's own SGFs write the lead (margin − 0.5 in the standard game) and `KM[-0.5]`. Both
+load as standard games.
 
 ## Ratings
 

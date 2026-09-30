@@ -8,11 +8,13 @@
  *  - the fence handicap (initial walls), including self-play game setup
  *  - Rules parsing / serialization and the self-play config checks
  *  - search: terminal nodes report the lead and the utility score separately, and see the draw
+ *  - SGF: KM, WB/WW (initial walls), RU and RE round trip; older SGFs load as the standard game
  */
 
 #include "../tests/tests.h"
 
 #include "../core/config_parser.h"
+#include "../dataio/sgf.h"
 #include "../program/play.h"
 #include "../program/playutils.h"
 #include "../program/setup.h"
@@ -589,6 +591,110 @@ static void testSearchTerminalValues() {
   delete nnEval;
 }
 
+//------------------------------------------------------------------------------------------------
+
+static bool contains(const string& s, const string& sub) {
+  return s.find(sub) != string::npos;
+}
+
+static void testSgf() {
+  cout << "  SGF KM, WB/WW, RU and RE" << endl;
+  Rules rules = Rules::getQuoridorRules();
+  rules.komi = 1.5f;
+  rules.maxPlies = 400;
+  rules.timeBonusPerPly = 0.05f;
+  rules.blackInitialFences = 7;
+  //B+3 on ply 17: tempo -2, lead -0.5 with komi 1.5, so Black still wins, by half a tempo.
+  ScriptedGame g = playScripted("LFFFFFFFF", "RLRFFFFF", rules);
+  testAssert(g.hist.winner == P_BLACK && g.hist.finalWhiteLead == -0.5f);
+
+  ostringstream out;
+  WriteSgf::writeSgf(out, "black", "white", g.hist, NULL, true, false);
+  string sgf = out.str();
+  testAssert(contains(sgf, "KM[1.5]"));
+  testAssert(contains(sgf, "WB[7]WW[10]"));
+  testAssert(contains(sgf, "RU[Quoridor:maxPlies=400,timeBonusPerPly=0.05,blackInitialWalls=7]"));
+  //RE is the lead, not the utility score (which includes the time bonus).
+  testAssert(contains(sgf, "RE[B+0.5]"));
+
+  std::unique_ptr<CompactSgf> c = CompactSgf::parse(sgf);
+  testAssert(c->getRulesOrFail() == rules);
+  testAssert(c->getRulesOrFailAllowUnspecified(Rules::getQuoridorRules()) == rules);
+  testAssert(c->getRulesOrWarn(Rules::getQuoridorRules(), [](const string&) { testAssert(false); }) == rules);
+  testAssert(c->sgfWinner == P_BLACK);
+  {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    c->setupBoardAndHistAssumeLegal(rules, board, pla, hist, (int64_t)c->moves.size(), BoardHistoryModes());
+    testAssert(hist.initialBoard.blackFences == 7 && hist.initialBoard.whiteFences == 10);
+    testAssert(hist.isGameFinished && hist.winner == P_BLACK);
+    testAssert(hist.finalWhiteLead == g.hist.finalWhiteLead);
+    testAssert(hist.finalWhiteMinusBlackScore == g.hist.finalWhiteMinusBlackScore);
+    testAssert(approxEqual(hist.finalWhiteMinusBlackScore, -0.5 - 0.05 * (400 - 17)));
+  }
+  //Plies after an SGF load count from the start of the SGF (QTP loadsgf sets the initial turn number to
+  //Board::numStonesOnBoard(), the walls on the initial board: 0).
+  {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    c->setupInitialBoardAndHist(rules, board, pla, hist, BoardHistoryModes());
+    hist.setInitialTurnNumber(board.numStonesOnBoard());
+    c->playMovesAssumeLegal(board, pla, hist, 10);
+    testAssert(!hist.isGameFinished && hist.getCurrentTurnNumber() == 10 && hist.pliesUntilDraw() == 390);
+    testAssert(board.blackFences == 7);
+  }
+
+  //A draw: RE[0].
+  {
+    Rules r = Rules::getQuoridorRules();
+    r.maxPlies = 10;
+    ScriptedGame d = playScripted("LFFFFFFF", "FFFFFFFF", r);
+    ostringstream dout;
+    WriteSgf::writeSgf(dout, "black", "white", d.hist, NULL, true, false);
+    testAssert(contains(dout.str(), "RE[0]"));
+    testAssert(contains(dout.str(), "KM[-0.5]WB[10]WW[10]RU[Quoridor:maxPlies=10]"));
+    std::unique_ptr<CompactSgf> dc = CompactSgf::parse(dout.str());
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    dc->setupBoardAndHistAssumeLegal(dc->getRulesOrFail(), board, pla, hist, (int64_t)dc->moves.size(), BoardHistoryModes());
+    testAssert(hist.isDraw());
+  }
+
+  //Older SGFs: KataQuoridor 0.1.0 wrote KM[0] and no WB/WW, for the standard game.
+  {
+    const string old = "(;FF[4]GM[1]SZ[17]PB[a]PW[b]HA[0]KM[0]RU[Quoridor]RE[B+R]AB[iq]AW[ia];B[io];W[ic])";
+    std::unique_ptr<CompactSgf> oc = CompactSgf::parse(old);
+    testAssert(oc->getRulesOrFail() == Rules::getQuoridorRules());
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    oc->setupBoardAndHistAssumeLegal(oc->getRulesOrFail(), board, pla, hist, 2, BoardHistoryModes());
+    testAssert(board.blackFences == 10 && board.whiteFences == 10 && hist.getCurrentTurnNumber() == 2);
+  }
+  //Without KM (and RU) the komi is the standard one, whatever the caller's default rules say.
+  {
+    const string noKomi = "(;FF[4]GM[1]SZ[17]AB[iq]AW[ia];B[io])";
+    std::unique_ptr<CompactSgf> nc = CompactSgf::parse(noKomi);
+    Rules defaults = Rules::getQuoridorRules();
+    defaults.komi = 2.5f;
+    testAssert(nc->getRulesOrFailAllowUnspecified(defaults).komi == -0.5f);
+    testAssert(nc->getRulesOrWarn(defaults, [](const string&) {}).komi == -0.5f);
+  }
+  //Invalid KM and WB are rejected.
+  for(const string& bad : {
+    string("(;FF[4]GM[1]SZ[17]KM[1]RU[Quoridor];B[io])"),
+    string("(;FF[4]GM[1]SZ[17]KM[30.5]RU[Quoridor];B[io])"),
+    string("(;FF[4]GM[1]SZ[17]KM[-0.5]WB[11]RU[Quoridor];B[io])"),
+  }) {
+    bool threw = false;
+    try { CompactSgf::parse(bad)->getRulesOrFail(); } catch(const StringError&) { threw = true; }
+    testAssert(threw);
+  }
+}
+
 }  // namespace
 
 void Tests::runQuoridorIOv2Tests() {
@@ -600,5 +706,6 @@ void Tests::runQuoridorIOv2Tests() {
   testFenceHandicap();
   testRulesSerializationAndConfig();
   testSearchTerminalValues();
+  testSgf();
   cout << "=== Quoridor I/O v2 rules and scoring tests passed ===" << endl;
 }
