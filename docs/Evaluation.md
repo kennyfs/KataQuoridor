@@ -52,7 +52,9 @@ reimplements the rules:
 - Draw rule: after 300 plies (`--max-plies`) with `winner` = `none`, the game is a draw (reason `draw300`).
   Since the Quoridor I/O v2 rules ([QuoridorIOv2.md](QuoridorIOv2.md)), KataQuoridor itself ends a game at
   its `maxPlies` (default 300) and `winner` reports `Draw`; the referee records that as `draw<plies>` too, so
-  keep `--max-plies` equal to the arbiter's `maxPlies`. `winner` knows the game's komi, so with a non-standard
+  keep `--max-plies` equal to the arbiter's `maxPlies`. With the repetition draw on
+  ([Komi and fence handicap](#komi-and-fence-handicap)), the arbiter also says `Draw` at the N-th occurrence of a
+  position, and its SGF's `DR[repetition]` makes the referee record reason `repetition`. `winner` knows the game's komi, so with a non-standard
   komi the side whose pawn arrived can lose (see [Komi and fence handicap](#komi-and-fence-handicap)).
 - `--verify`: before every move, the arbiter's `legal_moves` is compared with the mover's (only for
   engines where `known_command legal_moves` is true). A mismatch aborts the whole run.
@@ -125,13 +127,15 @@ Self-play and gatekeeper SGFs write the same `lead=` token (the root search's `s
 
 ## Komi and fence handicap
 
-Games can use a non-standard komi (a half-integer; White wins iff tempo + komi > 0, the standard game is −0.5)
-and initial walls (`blackInitialWalls` / `whiteInitialWalls`, 0–10, standard 10), see
+Games can use a non-standard komi (a half-integer; White wins iff tempo + komi > 0, the standard game is −0.5),
+initial walls (`blackInitialWalls` / `whiteInitialWalls`, 0–10, standard 10) and the repetition draw
+(`repetitionDrawCount`: a draw at the N-th occurrence of a position, standard 0 = off), see
 [QuoridorIOv2.md](QuoridorIOv2.md) §2. They are set per game, layered from least to most specific:
 
 1. the standard game;
 2. the roster's `"rules"`, for all games: `"rules": {"komi": 1.5, "whiteInitialWalls": 9}`;
-3. the command line, for all games: `--komi 1.5`, `--black-walls 9`, `--white-walls 9`;
+3. the command line, for all games: `--komi 1.5`, `--black-walls 9`, `--white-walls 9`,
+   `--repetition-draw-count 3`;
 4. the roster's `"pair_rules"`, for the games of one pair (either order):
    `"pair_rules": [{"pair": ["kq-a-v256", "kq-b-v256"], "komi": -1.5}]`.
 
@@ -139,14 +143,20 @@ Each layer only changes the keys it gives. Both games of an opening (colours swa
 engine plays the favoured and the disfavoured side equally often.
 
 - The referee sends them through QTP after `clear_board`, to both engines and the arbiter: `komi <k>`,
-  `kata-set-rule blackInitialWalls <n>`, `kata-set-rule whiteInitialWalls <n>`. QTP rules persist across
+  `kata-set-rule blackInitialWalls <n>`, `kata-set-rule whiteInitialWalls <n>`,
+  `kata-set-rule repetitionDrawCount <n>`. QTP rules persist across
   `clear_board`, so the referee tracks each process's rules and sends only changes (a restarted process has the
-  standard rules). The arbiter decides the winner with the komi, and the SGF records `KM`, `WB`, `WW` and `RE`.
+  standard rules). The arbiter decides the winner with the komi, and the SGF records `KM`, `WB`, `WW`, `RU` (with
+  the repetition rule), `RE` and, for a draw, `DR` (`repetition` or `maxPlies`).
+- The repetition rule is for KataQuoridor-only matches: SimpleQuoridor doesn't implement it. Result records get
+  `repetition_draw_count`, and repetition draws get reason `repetition` (listed under "End reasons" and per pair,
+  and in the summary's "draw rate … (by repetition …)").
 - Only engines with `"supports_rules": true` can play non-standard games. It defaults to true for
   `katago_model` entries (KataQuoridor ≥ the I/O v2 rules) and false otherwise (SimpleQuoridor). A run that
   schedules an unsupported engine in a non-standard game stops at startup; an engine that rejects a rules command
   aborts the run (`!!! RULES REJECTED`).
-- Game ids of non-standard games carry the rules, e.g. `a_vs_b_o000_ab_k+1.5_w9-10`, so rerunning a directory
+- Game ids of non-standard games carry the rules, e.g. `a_vs_b_o000_ab_k+1.5_w9-10` (plus `_r3` with the repetition
+  rule), so rerunning a directory
   with other rules plays new games; standard ids are unchanged. The report's per-pair table gets a Rules column.
 - Openings are sampled on the standard board; with very few walls (fewer than the opening's walls for a side) an
   opening can be illegal, and the game is not recorded (referee error).
@@ -166,8 +176,9 @@ opening in one pair), so the two colour-swapped games are resampled together.
 
 `report.md` contains:
 
-- a summary: games, Black (first-player) score, draw rate, average plies, end reasons;
-- anomalies: every game that did not end by reaching the goal or by a draw;
+- a summary: games, Black (first-player) score, draw rate (and the share of repetition draws), average plies, end
+  reasons;
+- anomalies: every game that did not end by reaching the goal or by a draw (ply limit or repetition);
 - the rating table: Elo, 95% CI, games, score;
 - the crosstable: the row player's score against each column player, with game counts;
 - per pair: games, score, Black win rate, draw rate, average plies, average margin, other end reasons, and the
@@ -183,13 +194,14 @@ opening in one pair), so the two colour-swapped games are resampled together.
     {"name": "kq-s16141056-v256", "katago_model": "run1-s16141056-d2846694", "visits": 256}
   ],
   "arbiter": ["optional argv for the arbiter; the default uses {arbiter_katago}"],
-  "rules": {"komi": -0.5, "blackInitialWalls": 10, "whiteInitialWalls": 10},
+  "rules": {"komi": -0.5, "blackInitialWalls": 10, "whiteInitialWalls": 10, "repetitionDrawCount": 0},
   "pair_rules": [{"pair": ["kq-a-v256", "kq-b-v256"], "komi": 1.5}]
 }
 ```
 
 `rules` and `pair_rules` are optional (see [Komi and fence handicap](#komi-and-fence-handicap)); an engine entry's
-optional `"supports_rules"` says whether it understands `komi` and `kata-set-rule` for the walls.
+optional `"supports_rules"` says whether it understands `komi` and `kata-set-rule` for the walls and the repetition
+rule.
 
 `{seed}`, `{name}`, `{out}`, `{repo}` (this checkout), every key of `vars` and `{env:NAME}` (the environment
 variable `NAME`) are substituted in `command` and `args`. An unset environment variable is an error only if an

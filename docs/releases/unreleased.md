@@ -147,3 +147,30 @@ existing configs create the same games as before.
 - **sgfs_viewer:** the margin everywhere is the predicted `lead=` (the utility `score` is no longer shown when `lead=` is present; old files fall back to `score`, labelled "no lead in file"); phone-friendly responsive layout (swipe to step, collapsible game list, sticky controls); `serve.py --host 0.0.0.0` prints a LAN URL. Shows komi and initial walls when not standard, counts walls from the initial walls, and adds
   win-rate slices by komi and fence handicap to the stats page.
 - New `runtests quoridorselfplay` test group; arena tests for komi, walls and arbiter draws.
+
+## Draw by repetition (optional rule)
+
+See [QuoridorIOv2.md](../QuoridorIOv2.md) §2.10 and §10. **Off by default**, so GTP, match, the arena against other
+engines and old configs behave as before.
+
+- **New rule `repetitionDrawCount`** (0 = off; e.g. 3): the game is a draw the moment a position (both pawns, all
+  walls, walls left, side to move; not the ply) occurs for the N-th time. It ends shuffles in equilibrium positions
+  (a sealed pawn that can only escape by a losing jump, and a blocker with nothing better) long before 300 plies.
+  Search sees it at terminal nodes like the 300-ply draw, including from a root one move before the repetition;
+  graph search keeps paths with different repetition counts apart.
+- **Configs:** `repetitionDrawCount = 3` in `selfplay_quoridor_v2.cfg` and `gatekeeper_quoridor_v2.cfg`; off
+  (commented) in `gtp_quoridor.cfg` — turn it on only for KataQuoridor-only matches.
+- **QTP:** `kata-set-rule(s)` / `kata-get-rules` key `repetitionDrawCount` (before the first move only); `winner`
+  says `Draw`; `showboard` prints the rule, the current position's count and `Game finished: Draw (repetition, …)`.
+  `kata-get-rules` now always lists `repetitionDrawCount`.
+- **SGF:** the rule is in `RU` (`Quoridor:repetitionDrawCount=3`); a drawn game gets a new root property `DR` with
+  the reason: `repetition`, `maxPlies` or `cutoff`.
+- **Training data:** a repetition draw is written exactly like a 300-ply draw (value 0.5 / 0.5, score 0, no lead,
+  remaining plies to the actual end). No I/O version change.
+- **Logs:** self-play `Quoridor stats` and `Game stats` and the gatekeeper's game stats count repetition draws
+  separately from 300-ply draws. A draw is still half a point in gating.
+- **Arena:** `--repetition-draw-count N` or roster `rules` / `pair_rules` key `repetitionDrawCount`, sent to
+  KataQuoridor engines and the arbiter (SimpleQuoridor-type engines play standard games only); game ids get `_rN`;
+  repetition draws get reason `repetition` and are counted in the report.
+- **sgfs_viewer:** shows why a draw ended ("0 (draw by repetition)", a list tag) and the rule when on.
+- New `runtests quoridorrepetition` test group.

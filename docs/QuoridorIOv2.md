@@ -7,6 +7,9 @@
 2. *the I/O v2 neural net (inputs, heads, training data, exporter, loader);*
 3. *self-play randomization and experiments.*
 
+*Added later: the optional **repetition draw** rule (`repetitionDrawCount`), see
+[§2.10](#210-draw-by-repetition-optional) and [§10](#10-repetition-draw-design-and-where-things-live).*
+
 *Steps 2 and 3 are sketched here and will be refined when they start. Where this document and the older
 [roadmap](KataQuoridor_Review_and_Roadmap.md) (§5 Phase 6, "margin komi `k`") disagree, this document wins.*
 
@@ -75,7 +78,8 @@ Black wins.
 - The **standard game has `komi = -0.5`**: B+1 is a Black win and W+1 a White win, exactly as before.
 - Positive komi favours White. With komi, the side whose pawn reached the goal can lose: the game still ends the
   moment a pawn arrives, and `t + komi` decides the winner.
-- Komi never causes a draw (it is a half-integer). Draws come only from `maxPlies`.
+- Komi never causes a draw (it is a half-integer). Draws come only from `maxPlies` and, if on, the repetition rule
+  (§2.10).
 
 ### 2.4 Lead score `s`
 
@@ -152,6 +156,21 @@ nets (e.g. the 0.1.0 release net) keep loading and playing with the default sett
 
 Using non-default komi or λ > 0 **with a v1 net** is possible but not meaningful: v1 nets have no komi input and
 their score head doesn't include a time bonus, so only terminal nodes would see the change.
+
+### 2.10 Draw by repetition (optional)
+
+`Rules::repetitionDrawCount` N (default **0 = off**, the standard game; else 2..1000; config / QTP / JSON key
+`repetitionDrawCount`). With N > 0 the game is a **draw the moment a position occurs for the N-th time** (N = 3:
+threefold repetition). A *position* is both pawns, all walls, the walls left of each player and the side to move,
+not the ply number: exactly `Board::getSitHash(nextPlayer)` (`pos_hash` covers the pawns, the wall cells and both
+walls-left counts; the player hash is added). Occurrences count from the history's initial position.
+
+- It is scored like the `maxPlies` draw (§2.5): `isGameFinished`, `winner = C_EMPTY`, `isScored`, `s = u = 0`,
+  value 0.5 / 0.5. A pawn reaching its goal is checked first; a repetition on ply `maxPlies` counts as a repetition
+  draw. `maxPlies` stays as the backstop.
+- `BoardHistory::isRepetitionDraw()` / `isMaxPliesDraw()` tell the two apart; SGF `DR` records it (§10).
+- In the standard game (komi −0.5, 10/10 walls) the rule is off. The v2 self-play and gatekeeper configs turn it on
+  with N = 3; `gtp_quoridor.cfg` leaves it off (turn it on for KataQuoridor-only matches).
 
 ## 3. Display: `scoreMean` vs `scoreLead`
 
@@ -238,7 +257,7 @@ Global targets (`globalTargetsNC`, `cpp/dataio/trainingwrite.h`), from the side 
 | **C20** | **the game's final utility score `u`** (`finalWhiteMinusBlackScore`); 0 for a draw | C27 |
 | **C21** | **the game's final tempo lead `s`** (`finalWhiteLead`); a search's lead estimate for the position if there is one (`estimateLeadProb`, 0 in the Quoridor configs) | C29 |
 | C22 | expected arrival time of the win/loss variance (`varTimeLeft`, unchanged) | C27 |
-| **C23** | **plies from this row to the end of the game** (`endHist` ply − row ply), draws included (a draw ends at `maxPlies`) | C27 |
+| **C23** | **plies from this row to the end of the game** (`endHist` ply − row ply), draws included (a draw ends at `maxPlies` or at the repetition) | C27 |
 | C27 | outcome weight: the value weight on main rows of a game with a result, draws included; 0 on side positions and on reanalyzed rows without outcome targets | |
 | C29 | lead weight: as C27, but **0 for a draw** (a draw carries no tempo information); set by a lead estimate | |
 | C47 | komi from the side to move's view (unchanged) | |
@@ -386,7 +405,8 @@ must be the λ the net was trained with.
 - A game without a winner (the `maxPlies` draw, or a game cut off early) scores **exactly 0.5** for each side
   (`PlayUtils::whitePointsOfGame`), no longer `0.5·noResultUtilityForWhite + 0.5` (this settles the §7 question).
   Rule draws, cut-off games and Black's wins are counted and logged separately:
-  `Game stats for A vs B: N games, D decisive (K black wins), R draws by maxPlies, C cut off, avg game length L`.
+  `Game stats for A vs B: N games, D decisive (K black wins), R draws by maxPlies, P draws by repetition, C cut off,
+  avg game length L`.
 - Gatekeeper games are always the **standard game** (komi −0.5, 10/10 walls): the gatekeeper refuses a config that
   can create anything else (`GameInitializer::mayCreateNonStandardGames`: komi or fence randomization, komi noise,
   `komiAuto`, a non-standard `komiMean` or initial walls).
@@ -396,7 +416,8 @@ must be the λ the net was trained with.
 Every `logGamesEvery` started games, and at a net's final cleanup, self-play logs per model, next to the
 started / finished / cutoff line:
 
-    Quoridor stats for <model>: completed N, draws D (rate r), avg plies P, black win rate in normal standard games
+    Quoridor stats for <model>: completed N, draws D (rate r; repetition R (rate r), maxPlies M (rate r)), avg plies P,
+    black win rate in normal standard games
     b (k/n), by komi (10/10 walls): -1.5 0.778 (21/27) -0.5 0.622 (102/164) +0.5 0.385 (10/26) ..., fence handicap
     f (k/n)
 
@@ -433,6 +454,7 @@ are counted from the real game start. Training data is unchanged by step 3.
 | `komi` | −0.5 | `komi` (config), QTP `komi`, SGF `KM` | yes (`komi`) |
 | `maxPlies` | 300 | `maxPlies` | only before the first move |
 | `timeBonusPerPly` | 0 | `timeBonusPerPly` | yes |
+| `repetitionDrawCount` | 0 (off) | `repetitionDrawCount`, in SGF `RU` | only before the first move |
 | `blackInitialFences` | 10 | `blackInitialWalls`, SGF `WB` | only before the first move |
 | `whiteInitialFences` | 10 | `whiteInitialWalls`, SGF `WW` | only before the first move |
 
@@ -443,10 +465,11 @@ are counted from the real game start. Training data is unchanged by step 3.
   what SGF `RU` holds. JSON uses the keys above (`kata-get-rules` prints the JSON without komi). Parsing accepts
   both forms plus `quoridor` / `default`; unknown keys are errors, the Go keys (`ko`, `scoring`, …) are accepted
   and ignored in JSON input. The Go rule fields remain as inert stubs.
-- `Rules::validateOrThrow` checks the ranges (komi as above, `maxPlies` 1..100000, λ 0..1, walls 0..10).
+- `Rules::validateOrThrow` checks the ranges (komi as above, `maxPlies` 1..100000, λ 0..1, walls 0..10,
+  `repetitionDrawCount` 0 or 2..1000).
 - `Rules::operator==` compares all Quoridor fields (it used to return `true`).
-- Config: `Setup::loadQuoridorRuleKeys` reads `maxPlies`, `timeBonusPerPly`, `blackInitialWalls`,
-  `whiteInitialWalls` (gtp and every tool through `Setup::loadSingleRules`, self-play through `GameInitializer`).
+- Config: `Setup::loadQuoridorRuleKeys` reads `maxPlies`, `repetitionDrawCount`, `timeBonusPerPly`,
+  `blackInitialWalls`, `whiteInitialWalls` (gtp and every tool through `Setup::loadSingleRules`, self-play through `GameInitializer`).
 
 ### 6.2 Results (`cpp/game/boardhistory.{h,cpp}`)
 
@@ -456,7 +479,7 @@ are counted from the real game start. Training data is unchanged by step 3.
   `finalWhiteLead = s`.
 - `BoardHistory::setKomi` validates the komi and re-scores a finished game (the winner may flip), like upstream.
 - `BoardHistory::getSituationRulesAndKoHash` (used by both the graph-search hash and the NN cache) folds in komi,
-  `maxPlies`, λ and the ply count. With λ > 0 or near the ply limit, the same position at a different ply has a
+  `maxPlies`, `repetitionDrawCount`, λ and the ply count. With λ > 0 or near the ply limit, the same position at a different ply has a
   different value, so transpositions must not merge across plies.
 - The only change in `cpp/search/`: at a finished game's terminal node, search takes `lead` from
   `finalWhiteLead` instead of copying `scoreMean` (`Search::playoutDescend`).
@@ -566,3 +589,112 @@ Open points after step 2:
 | C++ tests | `cpp/tests/testquoridorselfplay.cpp` (`runtests quoridorselfplay`) |
 | Arena | `referee.py` (`make_rules`, `RulesState`, `play_game(rules=...)`, result from the arbiter's `RE`), `arena.py` (roster `rules` / `pair_rules` / `supports_rules`, `--komi` / `--black-walls` / `--white-walls`, rules in game ids), `elo.py` (Rules column); tests `tests/test_arena.py`, `tests/test_referee_rules.py`, mock engine `tests/mock_engine.py` |
 | Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`), `viewer.js` (tags, info, walls counters), `stats.js` (win-rate slices) |
+
+## 10. Repetition draw: design and where things live
+
+*Added 2026-10-01.* The rule is defined in [§2.10](#210-draw-by-repetition-optional).
+
+### 10.1 Why
+
+In strong self-play some games reach a real equilibrium: a pawn sealed in a region can only escape by jumping the
+opponent, after which it is walled off and loses, so it shuffles back and forth, and the blocker has no better move
+either. The game value is a draw, but without the rule the game only ends at the 300-ply draw, wasting compute and
+over-weighting these games in training. A "pass = draw offer" was rejected: KataGo's search is zero-sum, and in a
+zero-sum game an early and a late draw have the same value, so nothing would teach the net to offer early. A rule
+that ends the game is what's needed. No domain knowledge (e.g. "detect sealed regions"): just the rule.
+
+### 10.2 Repetition counts in `BoardHistory`
+
+- `positionsSinceLastWall`: the `getSitHash` of every position since the last wall placement, the position right
+  after the wall (or the initial position) first and the current one last. Walls are never removed and the walls-left
+  counts only decrease, so **no position before the last wall placement can recur**; a wall placement clears the
+  list. Without walls it grows by one per ply (bounded by `maxPlies`).
+- `currentRepetitionCount` (read with `currentPositionRepetitionCount()`, O(1)): how often the current position has
+  occurred, 1 the first time. `makeBoardMoveAssumeLegal` computes it with one pass over the list (plies since the
+  last wall: typically a few dozen 128-bit compares), then checks goal → repetition → `maxPlies`.
+- The constructor and `clear` (so also `copyToInitial`) start the list at the initial position. There is no
+  incremental `BoardHistory` undo: QTP `undo`, `kata-set-rule(s)` and the SGF loaders rebuild by replaying, which
+  recomputes the counts (`runtests quoridorrepetition` checks replays against the forward counts). Copies (search
+  threads, side positions, forks via `replayGameUpToMove`) copy the list.
+- Positions before a set-up start position (QTP `set_position`, SGF `AB`/`AW` setups) are unknown and not counted.
+- The tracking runs whether the rule is on or not, so the count is available as an input (§10.6).
+- The `KoHashTable` stubs are left as they were (unused).
+
+### 10.3 Search
+
+- **Terminal nodes:** search descends with a copy of the root's `BoardHistory`, so a child that makes the N-th
+  occurrence is finished in `thread.history` and goes through the same terminal branch as the `maxPlies` draw
+  (`Search::playoutDescend`: win/loss 0, `scoreMean` 0, `lead` = `finalWhiteLead` = 0, terminal variance 0). The
+  root carries its counts, so a root at count N − 1 sees the repeating move as a draw (tested with and without graph
+  search).
+- **NN cache:** fine for v2 (the net doesn't see repetitions); the hash includes the rule value with the other rules.
+- **Graph search (`GraphHash`):** the decision was "after a wall placement the state hash alone is enough; after a
+  pawn move, chain the previous graph hash, as upstream does for Go". **That is already what the code does, rule on
+  or off:** `GraphHash::getGraphHash` is upstream's (fd0723fd) unchanged, and `Board::simpleRepetitionBoundGt(loc,
+  bound)` returns true exactly for wall placements. After a pawn move the graph hash is `mix(prevGraphHash) +
+  stateHash`, so it depends on every state since the last wall placement: two paths that reach the same position on
+  the same ply merge only if they went through the same positions since the last wall, i.e. only if their repetition
+  counts agree for every future position. After a wall placement the state hash (board, ply, rules) is the whole
+  relevant history, since nothing before it can recur. **No code change was needed.** The chaining stays
+  unconditional rather than switching to state-only hashing when the rule is off: that would change today's graph
+  search in GTP / match / arena (where the rule is off) for little gain (with the ply in the state hash, pawn-move
+  transpositions are rare anyway).
+- The transposition test (`runtests quoridorrepetition`): Black e9 / White e2, White to move, ply 7, reached once by
+  a direct shuffle (e8 e2 e9 e1 e8 e2 e9: count 2) and once by a detour (e8 f1 d8 f2 d9 e2 e9: count 1). The state
+  hashes are equal; White's e1 is the third occurrence of the start position (a draw) on the first path only; the
+  graph hashes differ for `graphSearchRepBound` 3, 11 and 50, and a search from each root finds e1 an exact draw on
+  the first and not on the second. After the same wall placement from both, the graph hashes are equal (safe to
+  merge).
+
+### 10.4 Where things live
+
+| What | Where |
+|---|---|
+| Rule field, string / JSON / parse, validation | `Rules::repetitionDrawCount` (`cpp/game/rules.{h,cpp}`); key in `Rules::quoridorRuleKeys` |
+| Config key | `Setup::loadQuoridorRuleKeys` (`cpp/program/setup.cpp`) |
+| Counting, terminal check, draw kinds | `BoardHistory::positionsSinceLastWall`, `currentPositionRepetitionCount`, `isRepetitionDraw`, `isMaxPliesDraw`, `endAsRuleDraw` (`cpp/game/boardhistory.{h,cpp}`) |
+| Hash | `BoardHistory::getSituationRulesAndKoHash` folds in the rule |
+| QTP | `kata-set-rule(s)` / `kata-get-rules` (only before the first move, like `maxPlies`; `cpp/command/gtp.cpp`); `winner` → `Draw`; `showboard` prints the rule, the current count and `Game finished: Draw (repetition, occurrence N)` |
+| SGF | `RU[Quoridor:repetitionDrawCount=3,...]` (files without it: off); `RE[0]` plus a new root property **`DR`** = `repetition`, `maxPlies` or `cutoff` for a drawn game (`WriteSgf::drawReason`, `cpp/dataio/sgf.cpp`) |
+| Training rows | No code change: a repetition draw is a draw (`isDraw`), written with value 0.5 / 0.5, `u` = 0 with weight, lead weight 0, C23 = plies to the actual end. No I/O version change. |
+| Self-play stats | `SelfplayManager` (`gamesRepetitionDrawnCount`, `QuoridorStats::repetitionDraws` / `maxPliesDraws`) |
+| Gatekeeper | `numRepetitionDraws` (`cpp/command/gatekeeper.cpp`); a draw is half a point either way, as before |
+| Configs | `repetitionDrawCount = 3` in `selfplay_quoridor_v2.cfg` and `gatekeeper_quoridor_v2.cfg`; commented out (off) in `gtp_quoridor.cfg` |
+| Arena | `referee.py`: `STANDARD_RULES["repetitionDrawCount"] = 0`, sent by `RulesState` as `kata-set-rule repetitionDrawCount N`, game-id tag `_rN`, reason `repetition` from the arbiter's `DR`, result field `repetition_draw_count`; `arena.py --repetition-draw-count`; `elo.py` (draw rate by repetition, rules label) |
+| Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`: `repetition`, `drawReason`; `resultLabel`), `viewer.js` (result, rule row, list tag) |
+| Tests | `cpp/tests/testquoridorrepetition.cpp` (`runtests quoridorrepetition`), `python/tests/test_qtp_rules.py::test_repetition_draw`, `python/quoridor_arena/tests/test_arena.py::test_repetition_draw`, `test_referee_rules.py`, mock engine `--shuffle` |
+
+### 10.5 Measurements (2026-10-01)
+
+**Example games replayed with N = 3** (QTP `loadsgf` up to each ply, with `RU[Quoridor:repetitionDrawCount=3]`):
+
+| Game (`gameHash`) | File | Original | With N = 3 |
+|---|---|---|---|
+| `F67F6665213B45A4C55287C39619E63B` | `~/q0_run/selfplay/run1-s16141056-d2846694/sgfs/25051CCE52149C63.sgfs` | 287 plies, B+2 | draw on ply 38 |
+| `90751E91F0C141688994709B122519C9` | same | 203 plies, B+3 | draw on ply 50 |
+| `6B77C23D0CF552975306A6314D5D4F1C` | same | 223 plies, B+3 | draw on ply 31 |
+| `308DA2A3D96637DDAF10257BD5B8284A` | `~/q1_run/run3/selfplay/run3-s6894592-d1737323/sgfs/EE4FEF4CDF518646.sgfs` | 300 plies, draw | draw on ply 69 |
+
+The three run1 games were eventually won: the shuffling stopped much later and Black broke through. With the rule
+they end as draws; a side that can still win must vary before the third occurrence, which search now sees.
+
+**Self-play smoke** (v2 config, net `run3-s7865856-d1908789`, 400 games): `completed 400, draws 2 (rate 0.005;
+repetition 2 (rate 0.005), maxPlies 0 (rate 0.000)), avg plies 74.1`. The two repetition draws ended on plies 63
+and 46 (`RU[Quoridor:repetitionDrawCount=3,timeBonusPerPly=0.05]RE[0]DR[repetition]`); their 17 main rows with
+outcome weight all have C0 = C1 = 0.5, C20 (u) = 0, C27 = 1, C29 (lead weight) = 0, C52 = 0, C62 = 1, and C23
+counting down to 1 on the last row. With a random net, 89% of games ended by repetition (avg 52 plies).
+
+**Arena** `--verify --repetition-draw-count 3`, two run3 nets: 16 games at 16 visits and 40 at 1 visit, no
+legal-move mismatch; all games were decided at the goal (no repetition draws occurred).
+
+### 10.6 For Quoridor I/O v3 (repetition-count input)
+
+- The current position's count is `BoardHistory::currentPositionRepetitionCount()`: O(1), maintained on every move
+  (also with the rule off) and copied with every search thread's history. The input filler gets the history
+  (`QuoridorNN::fillRow(board, hist, ...)`, `fillQuoridorInputRow`), so the feature is one read. Candidates:
+  `count − 1`, "one more occurrence draws" (`rules.repetitionDrawCount > 0 && count == N − 1`), and the rule value.
+- A per-move feature ("this move repeats") needs each child's count: one pass over `positionsSinceLastWall` per
+  child hash, or a small hash → count map if that shows up in profiles.
+- **The NN cache hash must then include the count** (equal positions on the same ply with different counts get
+  different inputs): add `currentRepetitionCount` (or a capped value) to `getSituationRulesAndKoHash` for v3. The
+  graph hash needs nothing more.
