@@ -67,6 +67,7 @@ TAPER_WINDOW_SCALE="${TAPER_WINDOW_SCALE:-500000}" # Parameter setting the scale
 SHUFFLE_KEEPROWS="${SHUFFLE_KEEPROWS:-1200000}" # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, so the shuffler samples enough rows each cycle for the training to use.
 EXPAND_WINDOW_PER_ROW="${EXPAND_WINDOW_PER_ROW:-0.6}" # Initial slope of the shuffle window growth (shuffle.sh default 0.4). Larger keeps more older data in the window.
 MAX_CYCLES="${MAX_CYCLES:-0}" # Stop after this many cycles (0 = run forever). Rerunning continues the run.
+VALIDATE="${VALIDATE:-1}" # 1: shuffle peels off ~5% of the selfplay files (by path md5) as validation data; 0: no validation.
 GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs longer than this many seconds (it has hung
 # once in CUDA backend init); the candidate stays in modelstobetested/ and is tested again next cycle. 0 disables.
 
@@ -111,9 +112,9 @@ do
 
     echo "Shuffle"
     (
-        # Skip validate since peeling off 5% of data is actually a bit too chunky and discrete when running at a small scale, and validation data
-        # doesn't actually add much to debugging a fast-changing RL training.
-        time SKIP_VALIDATE=1 ./shuffle.sh "$BASEDIR" "$SCRATCHDIR" "$NUM_THREADS_FOR_SHUFFLING" -min-rows "$SHUFFLE_MINROWS" -keep-target-rows "$SHUFFLE_KEEPROWS" -taper-window-scale "$TAPER_WINDOW_SCALE" -expand-window-per-row "$EXPAND_WINDOW_PER_ROW" | tee -a "$BASEDIR"/logs/outshuffle.txt
+        # The validation split is per file, so it needs many files per cycle (see maxRowsPerTrainFile in the selfplay config).
+        if [[ "$VALIDATE" == "0" ]]; then export SKIP_VALIDATE=1; else unset SKIP_VALIDATE; fi
+        time ./shuffle.sh "$BASEDIR" "$SCRATCHDIR" "$NUM_THREADS_FOR_SHUFFLING" -min-rows "$SHUFFLE_MINROWS" -keep-target-rows "$SHUFFLE_KEEPROWS" -taper-window-scale "$TAPER_WINDOW_SCALE" -expand-window-per-row "$EXPAND_WINDOW_PER_ROW" | tee -a "$BASEDIR"/logs/outshuffle.txt
     )
 
     echo "Train"
