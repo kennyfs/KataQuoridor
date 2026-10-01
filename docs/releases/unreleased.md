@@ -131,7 +131,7 @@ existing configs create the same games as before.
   10% of normal games give one side 9, 8 or 7 walls (60/30/10), independently of the komi.
 - **Komi compensation** (`forkCompensateKomiProb` 0.8 for fork games, `handicapCompensateKomiProb` 0.5 for
   fence-handicap games in the v2 config) sets a fair komi with `adjustKomiToEven`. It needs nets of Quoridor I/O
-  version ≥ 2; **with I/O v1 nets (e.g. 0.1.0) it is skipped** with a one-time warning. A fair komi more than 5
+  version ≥ 2; **with I/O v1 nets (e.g. 0.1.0) it is skipped** with a one-time warning. A fair komi more than 10
   tempi from the standard −0.5 is not applied (the game keeps its komi), so an untrained net can't produce games
   with an extreme komi.
 - **Gatekeeper:** a draw counts **exactly half a point** for each side (it used to depend on

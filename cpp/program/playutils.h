@@ -87,7 +87,7 @@ namespace PlayUtils {
   //Compensation (adjustKomiToEven) never moves the komi further than this from the standard komi (-0.5). A "fair"
   //komi outside that window comes from a net whose lead doesn't track komi yet (e.g. early in training): with it,
   //one side could practically only play for the maxPlies draw, so the game keeps its komi instead.
-  constexpr double MAX_COMPENSATED_KOMI_DELTA = 5.0;
+  constexpr double MAX_COMPENSATED_KOMI_DELTA = 10.0;
   //The komi a compensated game gets: newKomi randomly rounded, or oldKomi if newKomi is outside the window above.
   float compensatedKomiOrKeep(double newKomi, float oldKomi, Rand& rand);
 

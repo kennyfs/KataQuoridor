@@ -350,7 +350,7 @@ A fair komi comes from `PlayUtils::adjustKomiToEven`: a few steps along the lead
 winrate over the Quoridor komi grid (steps of 1), interpolated between the two neighbouring komis and randomly
 rounded to one of them (`PlayUtils::findEvenKomi`, `roundKomiRandomly`).
 
-**Compensation window.** If the fair komi is more than 5 tempi from the standard −0.5 (outside [−5.5, 4.5],
+**Compensation window.** If the fair komi is more than 10 tempi from the standard −0.5 (outside [−10.5, 9.5],
 `PlayUtils::MAX_COMPENSATED_KOMI_DELTA`), the game keeps its komi (`PlayUtils::compensatedKomiOrKeep`). An
 untrained lead head doesn't track komi, and the search then runs to the edge of the komi range: in a smoke run
 with a random-init v2 net, every compensated game got komi +20.5, where Black can practically only play for the

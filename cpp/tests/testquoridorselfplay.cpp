@@ -218,9 +218,11 @@ static void testFindEvenKomi() {
   {
     Rand rand("testquoridorselfplay compensated window");
     testAssert(PlayUtils::compensatedKomiOrKeep(20.5, -0.5f, rand) == -0.5f);
-    testAssert(PlayUtils::compensatedKomiOrKeep(-6.0, 1.5f, rand) == 1.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(-11.0, 1.5f, rand) == 1.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(10.5, 1.5f, rand) == 1.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(9.5, -0.5f, rand) == 9.5f);
+    testAssert(PlayUtils::compensatedKomiOrKeep(-10.5, 2.5f, rand) == -10.5f);
     testAssert(PlayUtils::compensatedKomiOrKeep(4.5, -0.5f, rand) == 4.5f);
-    testAssert(PlayUtils::compensatedKomiOrKeep(-5.5, 2.5f, rand) == -5.5f);
     float k = PlayUtils::compensatedKomiOrKeep(1.2, -0.5f, rand);
     testAssert(k == 0.5f || k == 1.5f);
   }
