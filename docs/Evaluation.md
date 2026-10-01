@@ -83,7 +83,7 @@ They are cached in `<out>/openings.json`. Every opening is played twice with col
 
 | Path | Content |
 |---|---|
-| `results.jsonl` | One JSON object per game: `id`, `pair`, `opening`, `opening_moves`, `black`, `white`, `winner` (`b`/`w`/null), `winner_name`, `margin`, `lead`, `result`, `komi`, `black_walls`, `white_walls`, `plies`, `reason` (`goal`/`draw300`/`illegal`/`timeout`/`crash`), `detail`, `moves`, `seconds`. |
+| `results.jsonl` | One JSON object per game: `id`, `pair`, `opening`, `opening_moves`, `black`, `white`, `winner` (`b`/`w`/null), `winner_name`, `margin`, `lead`, `result`, `komi`, `black_walls`, `white_walls`, `plies`, `reason` (`goal`/`draw300`/`illegal`/`timeout`/`crash`), `detail`, `moves`, `evals` (see [Search info](#search-info-in-arena-sgfs); null if no player is a KataQuoridor engine), `seconds`. |
 | `sgfs/<a>_vs_<b>.sgfs` | One SGF per line, same format as self-play SGFs: `PB`/`PW` = engine names; `KM`, `WB`, `WW`, `RU` from the arbiter's `printsgf`; `RE` = the arbiter's result (the lead, e.g. `W+0.5`, `B+2.5`, or `0` for a draw), `B+F` / `W+F` for a forfeit, `0` for the referee's own `--max-plies` cutoff; and a root comment with `startTurnIdx=<opening plies>` so the viewer shades the opening. Open with `python sgfs_viewer/serve.py DIR/sgfs/<file>.sgfs`. |
 | `report.md` | Ratings, crosstable, per-pair statistics, anomalies. |
 | `openings.json`, `roster_used.json` | Parameters of the run. |
@@ -99,6 +99,30 @@ Draws have margin 0. **Lead** = |t + komi| from the arbiter's `RE` ([QuoridorIOv
 − 0.5 in the standard game; 0 for a draw, null for a forfeit. **Result** is the SGF `RE`. Arena runs before
 the Quoridor I/O v2 step 3 wrote `KM[0]` and the integer margin in `RE`; those SGFs load as standard games, and
 their results have no `lead` / `result` / `komi` / walls fields (the report treats them as standard games).
+
+### Search info in arena SGFs
+
+An engine that knows `kata-genmove_analyze` (auto-detected with `known_command`, or set `"kata": true / false` in
+its roster entry) is asked for its moves with `kata-genmove_analyze <color> rootInfo true noResultValue true` instead
+of `genmove`. It is the same search as `genmove` (same `genMove` path, limits and move choice); the final analysis
+is printed once before `play <move>`. The root info goes on that move's SGF node in the self-play comment format
+(values of the search at the position before the move, **White's** view), plus a named `lead=` token:
+
+```
+B[ln]C[0.54 0.46 0.00 3.6 v=256 lead=0.46]
+```
+
+`win loss noResult score v=<root visits> lead=<scoreLead>`. `score` is `scoreSelfplay`, the **utility score u**
+(with the time bonus, so not comparable across nets trained with different `timeBonusPerPly`); `lead` is the
+predicted tempo lead `s`, comparable across nets. The root info has no noResult value; it is the played move's
+`noResultValue`. The engine's analysis is from the side to move (KataQuoridor's default
+`reportAnalysisWinratesAs`); set `"kata_perspective": "white"` / `"black"` in the roster entry if it is configured
+otherwise. Opening moves and moves of other engines (SimpleQuoridor) have no comment. `results.jsonl` has the
+same per move as `evals`: `[White win, score, lead, visits]` or null. `sgfs_viewer` shows `lead` (as the margin,
+in the eval graph and the stats) when present and the utility next to it; old SGFs without `lead=` look as before.
+Self-play and gatekeeper SGFs don't write `lead=` yet: it would go in `WriteSgf::writeSgf`
+(`cpp/dataio/sgf.cpp`, after `v=` / `weight=`) from `ValueTargets::lead` in `whiteValueTargetsByTurn`, which is
+already filled per turn (`cpp/program/play.cpp`, `extractValueTargets`).
 
 ## Komi and fence handicap
 
