@@ -44,6 +44,9 @@ BoardHistory::BoardHistory()
     winner(C_EMPTY),
     isNoResult(false),
     isResignation(false),
+    isRepetitionDrawFlag(false),
+    positionsSinceLastWall(),
+    currentRepetitionCount(1),
     initialEncorePhase(0),
     encorePhase(0),
     numTurnsThisPhase(0),
@@ -71,6 +74,7 @@ BoardHistory::BoardHistory()
   std::fill(secondEncoreStartColors, secondEncoreStartColors + Board::MAX_ARR_SIZE, C_EMPTY);
   for(int i = 0; i < NUM_RECENT_BOARDS; i++)
     recentBoards[i] = initialBoard;
+  resetRepetitions(initialBoard, initialPla);
 }
 
 BoardHistory::~BoardHistory() {}
@@ -96,6 +100,9 @@ BoardHistory::BoardHistory(const Board& board, Player pla, const Rules& r, int e
     winner(C_EMPTY),
     isNoResult(false),
     isResignation(false),
+    isRepetitionDrawFlag(false),
+    positionsSinceLastWall(),
+    currentRepetitionCount(1),
     initialEncorePhase(ePhase),
     encorePhase(ePhase),
     numTurnsThisPhase(0),
@@ -123,6 +130,7 @@ BoardHistory::BoardHistory(const Board& board, Player pla, const Rules& r, int e
   std::fill(secondEncoreStartColors, secondEncoreStartColors + Board::MAX_ARR_SIZE, C_EMPTY);
   for(int i = 0; i < NUM_RECENT_BOARDS; i++)
     recentBoards[i] = board;
+  resetRepetitions(board, pla);
 }
 
 BoardHistory::BoardHistory(const BoardHistory& other) = default;
@@ -145,12 +153,14 @@ void BoardHistory::clear(const Board& board, Player pla, const Rules& r, int enc
   winner = C_EMPTY;
   isNoResult = false;
   isResignation = false;
+  isRepetitionDrawFlag = false;
   presumedNextMovePla = pla;
   whiteHasMoved = false;
 
   currentRecentBoardIdx = 0;
   for(int i = 0; i < NUM_RECENT_BOARDS; i++)
     recentBoards[i] = board;
+  resetRepetitions(board, pla);
 
   // Reset compatibility stubs
   initialEncorePhase = 0;
@@ -299,6 +309,31 @@ bool BoardHistory::isDraw() const {
   return isGameFinished && !isNoResult && !isResignation && winner == C_EMPTY;
 }
 
+bool BoardHistory::isRepetitionDraw() const {
+  return isDraw() && isRepetitionDrawFlag;
+}
+
+bool BoardHistory::isMaxPliesDraw() const {
+  return isDraw() && !isRepetitionDrawFlag && getCurrentTurnNumber() >= rules.maxPlies;
+}
+
+void BoardHistory::resetRepetitions(const Board& board, Player pla) {
+  positionsSinceLastWall.clear();
+  positionsSinceLastWall.push_back(board.getSitHash(pla));
+  currentRepetitionCount = 1;
+}
+
+void BoardHistory::endAsRuleDraw(bool byRepetition) {
+  isGameFinished = true;
+  winner = C_EMPTY;
+  isNoResult = false;
+  isResignation = false;
+  isScored = true;
+  isRepetitionDrawFlag = byRepetition;
+  finalWhiteMinusBlackScore = 0.0f;
+  finalWhiteLead = 0.0f;
+}
+
 void BoardHistory::scoreGameEndedAtGoal(const Board& board, Player arrived) {
   assert(arrived == P_BLACK || arrived == P_WHITE);
   double whiteMargin = board.whiteMarginWhenWonBy(arrived);
@@ -326,6 +361,7 @@ void BoardHistory::makeBoardMoveAssumeLegal(
   winner = C_EMPTY;
   isNoResult = false;
   isResignation = false;
+  isRepetitionDrawFlag = false;
   isScored = false;
   finalWhiteMinusBlackScore = 0.0f;
   finalWhiteLead = 0.0f;
@@ -348,20 +384,36 @@ void BoardHistory::makeBoardMoveAssumeLegal(
   if(movePla == P_WHITE)
     whiteHasMoved = true;
 
-  // 4. Terminal conditions. A pawn on its goal ends the game (komi decides the winner, see Rules), even on the
-  // last ply before the draw. Otherwise reaching rules.maxPlies plies is a draw.
+  // 4. Repetition counts. A wall placement makes every earlier position unreachable (walls are never removed).
+  Hash128 posHash = board.getSitHash(presumedNextMovePla);
+  if(Location::isHWallLoc(moveLoc, board.x_size) || Location::isVWallLoc(moveLoc, board.x_size)) {
+    positionsSinceLastWall.clear();
+    currentRepetitionCount = 1;
+  }
+  else {
+    int count = 1;
+    for(const Hash128& h : positionsSinceLastWall) {
+      if(h == posHash)
+        count++;
+    }
+    currentRepetitionCount = count;
+  }
+  positionsSinceLastWall.push_back(posHash);
+
+  // 5. Terminal conditions. A pawn on its goal ends the game (komi decides the winner, see Rules), even on the
+  // last ply before the draw. Otherwise the repetitionDrawCount-th occurrence of a position, or reaching
+  // rules.maxPlies plies, is a draw (a repetition on the last ply counts as a repetition draw).
   Player arrived = pawnOnGoal(board);
   if(arrived != C_EMPTY) {
     scoreGameEndedAtGoal(board, arrived);
     return;
   }
+  if(rules.repetitionDrawCount > 0 && currentRepetitionCount >= rules.repetitionDrawCount) {
+    endAsRuleDraw(true);
+    return;
+  }
   if(getCurrentTurnNumber() >= rules.maxPlies) {
-    isGameFinished = true;
-    winner = C_EMPTY;
-    isNoResult = false;
-    isScored = true;
-    finalWhiteMinusBlackScore = 0.0f;
-    finalWhiteLead = 0.0f;
+    endAsRuleDraw(false);
     return;
   }
 }
@@ -385,15 +437,8 @@ bool BoardHistory::isLegalTolerant(const Board& board, Loc moveLoc, Player moveP
 
 void BoardHistory::endGameIfAllPassAlive(const Board&) {}
 void BoardHistory::endAndScoreGameNow(const Board&) {
-  if(!isGameFinished) {
-    isGameFinished = true;
-    winner = C_EMPTY;
-    isNoResult = false;
-    isResignation = false;
-    isScored = true;
-    finalWhiteMinusBlackScore = 0.0f;
-    finalWhiteLead = 0.0f;
-  }
+  if(!isGameFinished)
+    endAsRuleDraw(false);
 }
 void BoardHistory::endAndScoreGameNow(const Board& board, Color area[Board::MAX_ARR_SIZE]) {
   endAndScoreGameNow(board);
@@ -419,10 +464,14 @@ void BoardHistory::printBasicInfo(ostream& out, const Board& board) const {
     out << "Komi: " << rules.komi << endl;
   if(rules.timeBonusPerPly != 0.0f)
     out << "Time bonus per ply: " << rules.timeBonusPerPly << endl;
+  if(rules.repetitionDrawCount > 0)
+    out << "Repetition draw at occurrence " << rules.repetitionDrawCount << " (current position: " << currentRepetitionCount << ")" << endl;
   if(isGameFinished) {
     if(winner == C_EMPTY) {
-      // Either the maxPlies draw rule, or a game cut off by a controller (endAndScoreGameNow).
-      if(getCurrentTurnNumber() >= rules.maxPlies)
+      // The repetition or maxPlies draw rule, or a game cut off by a controller (endAndScoreGameNow).
+      if(isRepetitionDrawFlag)
+        out << "Game finished: Draw (repetition, occurrence " << currentRepetitionCount << ")" << (isNoResult ? " (NoResult)" : "") << endl;
+      else if(getCurrentTurnNumber() >= rules.maxPlies)
         out << "Game finished: Draw (" << rules.maxPlies << "-ply limit)" << (isNoResult ? " (NoResult)" : "") << endl;
       else
         out << "Game finished: Draw (move cutoff)" << (isNoResult ? " (NoResult)" : "") << endl;
@@ -483,7 +532,7 @@ static uint64_t floatBits(float x) {
 }
 
 //Besides the board and the side to move, the value of a Quoridor position depends on the rules that score it
-//(komi, maxPlies, the time bonus) and on the ply count (the maxPlies draw and the time bonus). Pawn moves are
+//(komi, maxPlies, repetitionDrawCount, the time bonus) and on the ply count (the maxPlies draw and the time bonus). Pawn moves are
 //reversible, so the same board recurs at different plies, and those must not share search nodes or (for nets
 //that see the ply count or komi) NN evaluations. Both the graph search hash and the NN cache use this.
 Hash128 BoardHistory::getSituationRulesAndKoHash(
@@ -492,6 +541,7 @@ Hash128 BoardHistory::getSituationRulesAndKoHash(
   Hash128 hash = board.getSitHash(nextPlayer);
   uint64_t h = Hash::splitMix64((uint64_t)hist.getCurrentTurnNumber());
   h = Hash::splitMix64(h ^ (uint64_t)(uint32_t)hist.rules.maxPlies);
+  h = Hash::splitMix64(h ^ (uint64_t)(uint32_t)hist.rules.repetitionDrawCount);
   h = Hash::splitMix64(h ^ floatBits(hist.rules.komi));
   h = Hash::splitMix64(h ^ floatBits(hist.rules.timeBonusPerPly));
   hash.hash0 ^= h;

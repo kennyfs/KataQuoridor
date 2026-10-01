@@ -392,7 +392,7 @@ static void testRulesSerializationAndConfig() {
   testAssert(standard.toString() == "Quoridor");
   testAssert(standard.toStringNoKomi() == "Quoridor");
   testAssert(Rules::parseRules("Quoridor") == standard);
-  testAssert(standard.toJsonStringNoKomi() == "{\"blackInitialWalls\":10,\"maxPlies\":300,\"timeBonusPerPly\":0.0,\"whiteInitialWalls\":10}");
+  testAssert(standard.toJsonStringNoKomi() == "{\"blackInitialWalls\":10,\"maxPlies\":300,\"repetitionDrawCount\":0,\"timeBonusPerPly\":0.0,\"whiteInitialWalls\":10}");
 
   Rules r = standard;
   r.komi = 1.5f;

@@ -961,6 +961,8 @@ Player Setup::parseReportAnalysisWinrates(
 void Setup::loadQuoridorRuleKeys(ConfigParser& cfg, Rules& rules) {
   if(cfg.contains("maxPlies"))
     rules.maxPlies = cfg.getInt("maxPlies", 1, Rules::MAX_MAX_PLIES);
+  if(cfg.contains("repetitionDrawCount"))
+    rules.repetitionDrawCount = cfg.getInt("repetitionDrawCount", 0, Rules::MAX_REPETITION_DRAW_COUNT);
   if(cfg.contains("timeBonusPerPly"))
     rules.timeBonusPerPly = cfg.getFloat("timeBonusPerPly", 0.0f, Rules::MAX_TIME_BONUS_PER_PLY);
   if(cfg.contains("blackInitialWalls"))

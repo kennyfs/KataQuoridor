@@ -673,14 +673,15 @@ struct GTPEngine {
       return false;
     }
 
-    //KataQuoridor: maxPlies and the initial walls define the game from its start, so they can only change before the
-    //first move. The initial walls are then applied to the initial board.
+    //KataQuoridor: maxPlies, repetitionDrawCount and the initial walls define the game from its start, so they can
+    //only change before the first move. The initial walls are then applied to the initial board.
     bool startChanges =
       newRules.maxPlies != currentRules.maxPlies ||
+      newRules.repetitionDrawCount != currentRules.repetitionDrawCount ||
       newRules.blackInitialFences != currentRules.blackInitialFences ||
       newRules.whiteInitialFences != currentRules.whiteInitialFences;
     if(startChanges && moveHistory.size() > 0) {
-      error = "maxPlies and the initial walls can only be changed before the first move (use clear_board first)";
+      error = "maxPlies, repetitionDrawCount and the initial walls can only be changed before the first move (use clear_board first)";
       return false;
     }
 
@@ -3321,7 +3322,7 @@ int MainCmds::gtp(const vector<string>& args) {
     else if(command == "winner") {
       const BoardHistory& hist = engine->bot->getRootHist();
       if(hist.isGameFinished) {
-        //A draw by the maxPlies rule (winner empty), or a no-result game
+        //A draw by the maxPlies or repetition rule (winner empty), or a no-result game
         if(hist.isNoResult || hist.winner == C_EMPTY)
           response = "Draw";
         else if(hist.winner == P_BLACK)

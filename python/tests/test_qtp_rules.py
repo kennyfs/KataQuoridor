@@ -264,12 +264,14 @@ def test_komi_commands(eng):
 
 def test_rules_commands(eng):
     assert _json(eng.ok("kata-get-rules")) == {
-        "maxPlies": 300, "timeBonusPerPly": 0.0, "blackInitialWalls": 10, "whiteInitialWalls": 10}
+        "maxPlies": 300, "timeBonusPerPly": 0.0, "blackInitialWalls": 10, "whiteInitialWalls": 10,
+        "repetitionDrawCount": 0}
     eng.ok("kata-set-rule maxPlies 40")
     eng.ok("kata-set-rule timeBonusPerPly 0.05")
     eng.ok("kata-set-rule whiteInitialWalls 7")
     assert _json(eng.ok("kata-get-rules")) == {
-        "maxPlies": 40, "timeBonusPerPly": 0.05, "blackInitialWalls": 10, "whiteInitialWalls": 7}
+        "maxPlies": 40, "timeBonusPerPly": 0.05, "blackInitialWalls": 10, "whiteInitialWalls": 7,
+        "repetitionDrawCount": 0}
     assert eng.ok("walls") == "B: 10 W: 7"
     for bad in ("kata-set-rule komi 1.5", "kata-set-rule maxPlies 0", "kata-set-rule blackInitialWalls 11",
                 "kata-set-rule timeBonusPerPly -1", "kata-set-rule ko SIMPLE", "kata-set-rule maxPlies"):
@@ -380,12 +382,61 @@ def test_sgf_round_trip(eng):
         eng.ok("loadsgf " + path)
         assert eng.ok("get_komi") == "1.5"
         assert _json(eng.ok("kata-get-rules")) == {
-            "maxPlies": 100, "timeBonusPerPly": 0.05, "blackInitialWalls": 10, "whiteInitialWalls": 6}
+            "maxPlies": 100, "timeBonusPerPly": 0.05, "blackInitialWalls": 10, "whiteInitialWalls": 6,
+            "repetitionDrawCount": 0}
         assert eng.ok("winner") == "W"
         # Up to move 10: plies count from the start of the SGF.
         eng.ok("loadsgf %s 11" % path)
         assert "Ply: 10 (draw at 100, 90 left)" in eng.ok("showboard")
         assert eng.ok("walls") == "B: 10 W: 6"
+
+
+def test_repetition_draw(eng):
+    # Off by default: the shuffle goes on.
+    for m in _shuffle(12):
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "none"
+    eng.ok("clear_board")
+    for bad in ("kata-set-rule repetitionDrawCount 1", "kata-set-rule repetitionDrawCount -1",
+                "kata-set-rule repetitionDrawCount x"):
+        eng.err(bad)
+    eng.ok("kata-set-rule repetitionDrawCount 3")
+    assert _json(eng.ok("kata-get-rules"))["repetitionDrawCount"] == 3
+    # The start position recurs after plies 4 and 8: the third time is a draw.
+    moves = _shuffle(8)
+    for m in moves[:-1]:
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "none"
+    assert "before the first move" in eng.err("kata-set-rule repetitionDrawCount 0")
+    eng.ok("play " + moves[-1])
+    assert eng.ok("winner") == "Draw"
+    board = eng.ok("showboard")
+    assert "Game finished: Draw (repetition, occurrence 3)" in board and "Ply: 8 " in board
+    assert eng.err("genmove w") == "game is over"
+    sgf = eng.ok("printsgf")
+    for prop in ("RU[Quoridor:repetitionDrawCount=3]", "RE[0]", "DR[repetition]"):
+        assert prop in sgf, (prop, sgf)
+    # Undo reopens it; the same move draws again.
+    eng.ok("undo")
+    assert eng.ok("winner") == "none"
+    eng.ok("play " + moves[-1])
+    assert eng.ok("winner") == "Draw"
+    # SGF round trip: the rule and the draw come back.
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "game.sgf")
+        with open(path, "w") as f:
+            f.write(sgf)
+        eng.ok("clear_board")
+        eng.ok("kata-set-rules quoridor")
+        eng.ok("loadsgf " + path)
+        assert _json(eng.ok("kata-get-rules"))["repetitionDrawCount"] == 3
+        assert eng.ok("winner") == "Draw"
+    # The rules string form works too.
+    eng.ok("clear_board")
+    eng.ok("kata-set-rules Quoridor:repetitionDrawCount=2")
+    for m in _shuffle(4):
+        eng.ok("play " + m)
+    assert eng.ok("winner") == "Draw"
 
 
 def test_load_old_sgf(eng):

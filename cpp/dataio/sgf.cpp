@@ -1907,7 +1907,21 @@ void WriteSgf::printGameResult(ostream& out, const BoardHistory& hist, double ov
     out << "RE[";
     out << WriteSgf::gameResultNoSgfTag(hist, overrideFinishedWhiteScore);
     out << "]";
+    //The draw reason, unless an override turned the result into something else.
+    string reason = drawReason(hist);
+    if(reason != "" && (std::isnan(overrideFinishedWhiteScore) || overrideFinishedWhiteScore == 0.0))
+      out << "DR[" << reason << "]";
   }
+}
+
+string WriteSgf::drawReason(const BoardHistory& hist) {
+  if(!hist.isDraw())
+    return "";
+  if(hist.isRepetitionDraw())
+    return "repetition";
+  if(hist.isMaxPliesDraw())
+    return "maxPlies";
+  return "cutoff";
 }
 
 string WriteSgf::gameResultNoSgfTag(const BoardHistory& hist) {

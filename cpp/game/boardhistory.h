@@ -47,6 +47,18 @@ struct BoardHistory {
   Player winner;
   bool isNoResult;
   bool isResignation;
+  //Whether the game ended as a draw by rules.repetitionDrawCount (rather than by maxPlies or adjudication).
+  bool isRepetitionDrawFlag;
+
+  //Repetition tracking (rules.repetitionDrawCount). A position is Board::getSitHash(next player): both pawns,
+  //all walls, walls left and the side to move, not the ply. Walls are never removed, so a position can only recur
+  //among those since the last wall placement: this holds the hashes of the positions since then (the position right
+  //after the last wall, or the initial position, first; the current position last). Kept whether the rule is on
+  //or not, so it is cheap to read for an NN input.
+  std::vector<Hash128> positionsSinceLastWall;
+  //How many times the current position has occurred in this history (1 the first time), counting from the
+  //initial position (positions before a set-up start position are unknown).
+  int currentRepetitionCount;
 
   // Compatibility stubs for unchanged modules until Step 7-10
   int initialEncorePhase;
@@ -122,8 +134,15 @@ struct BoardHistory {
   int64_t getCurrentTurnNumber() const;
   //Plies left until the game is drawn by rules.maxPlies (0 once it is reached).
   int64_t pliesUntilDraw() const;
-  //Whether the game ended in a draw (by rules.maxPlies, or adjudicated by endAndScoreGameNow).
+  //Whether the game ended in a draw (by rules.maxPlies, rules.repetitionDrawCount, or adjudicated by
+  //endAndScoreGameNow).
   bool isDraw() const;
+  //Draw by the repetition rule.
+  bool isRepetitionDraw() const;
+  //Draw by the ply limit (and not by repetition).
+  bool isMaxPliesDraw() const;
+  //How many times the current position has occurred so far (1 = first time). O(1).
+  int currentPositionRepetitionCount() const { return currentRepetitionCount; }
 
   // Core Quoridor move execution and terminal check
   void makeBoardMoveAssumeLegal(Board& board, Loc moveLoc, Player movePla, const KoHashTable* rootKoHashTable, bool preventEncore = false);
@@ -141,6 +160,10 @@ struct BoardHistory {
 private:
   //Ends and scores the game after `arrived`'s pawn reached its goal on `board`.
   void scoreGameEndedAtGoal(const Board& board, Player arrived);
+  //Ends the game as a draw by a rule.
+  void endAsRuleDraw(bool byRepetition);
+  //Resets the repetition tracking to `board` with `pla` to move as the only position.
+  void resetRepetitions(const Board& board, Player pla);
 public:
 
   void printBasicInfo(std::ostream& out, const Board& board) const;

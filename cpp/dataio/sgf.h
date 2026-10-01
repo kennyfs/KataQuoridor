@@ -297,6 +297,9 @@ namespace WriteSgf {
   //Get the game result without a surrounding sgf tag
   std::string gameResultNoSgfTag(const BoardHistory& hist);
   std::string gameResultNoSgfTag(const BoardHistory& hist, double overrideFinishedWhiteScore);
+  //KataQuoridor: why a drawn game ended, written as the root property DR: "repetition" (Rules::repetitionDrawCount),
+  //"maxPlies" (Rules::maxPlies) or "cutoff" (ended early by a controller). "" if the game is not a draw.
+  std::string drawReason(const BoardHistory& hist);
 }
 
 #endif  // DATAIO_SGF_H_

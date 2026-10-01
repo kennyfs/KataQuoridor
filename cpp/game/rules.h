@@ -46,6 +46,7 @@ struct Rules {
   //   lead s       = t + komi (half-integer). White wins iff s > 0, even if Black's pawn reached the goal.
   //   utility u    = s + sign(s) * timeBonusPerPly * (maxPlies - T), T = plies at game end.
   //   Reaching maxPlies plies without a pawn on its goal is a draw, s = u = 0.
+  //   With repetitionDrawCount = N > 0, the N-th occurrence of a position is a draw too, s = u = 0.
   // BoardHistory computes these (finalWhiteLead = s, finalWhiteMinusBlackScore = u).
   // ---------------------------------------------------------------------------------------------
 
@@ -61,6 +62,11 @@ struct Rules {
   int maxPlies;
   static constexpr int DEFAULT_MAX_PLIES = 300;
   static constexpr int MAX_MAX_PLIES = 100000;
+
+  // Draw the moment a position (pawns, walls, walls left, side to move; not the ply) occurs for the N-th time
+  // in the game (3: threefold repetition). 0 = off, the default and the standard game; else 2..MAX.
+  int repetitionDrawCount;
+  static constexpr int MAX_REPETITION_DRAW_COUNT = 1000;
 
   // The time bonus lambda of the utility score. A property of the training run: search must use the lambda the
   // net was trained with.
@@ -107,14 +113,15 @@ struct Rules {
   static bool tryParseRules(const std::string& str, Rules& buf);
   static bool tryParseRulesWithoutKomi(const std::string& str, Rules& buf, float komi);
 
-  // Sets one Quoridor rule by its key (maxPlies, timeBonusPerPly, blackInitialWalls, whiteInitialWalls), as in
+  // Sets one Quoridor rule by its key (maxPlies, timeBonusPerPly, blackInitialWalls, whiteInitialWalls,
+  // repetitionDrawCount), as in
   // kata-set-rule. Komi is not a rule key here (use the komi command). Throws StringError on bad input.
   static Rules updateRules(const std::string& key, const std::string& value, const Rules& priorRules);
   static std::set<std::string> quoridorRuleKeys();
 
   bool equalsIgnoringKomi(const Rules& other) const;
   // Whether the final score can be a draw by the score alone (Go: integer komi). Never for Quoridor: komi is a
-  // half-integer and draws come only from maxPlies.
+  // half-integer and draws come only from maxPlies and repetitionDrawCount.
   bool gameResultWillBeInteger() const;
   // Upstream: komi is on the 0.5 grid. Use isValidKomi to validate a Quoridor komi.
   static bool komiIsIntOrHalfInt(float komi);

@@ -20,6 +20,7 @@ Rules::Rules()
     friendlyPassOk(false),
     komi(DEFAULT_KOMI),
     maxPlies(DEFAULT_MAX_PLIES),
+    repetitionDrawCount(0),
     timeBonusPerPly(0.0f),
     blackInitialFences(DEFAULT_INITIAL_FENCES),
     whiteInitialFences(DEFAULT_INITIAL_FENCES)
@@ -44,6 +45,7 @@ Rules::Rules(
     friendlyPassOk(pOk),
     komi(km),
     maxPlies(DEFAULT_MAX_PLIES),
+    repetitionDrawCount(0),
     timeBonusPerPly(0.0f),
     blackInitialFences(DEFAULT_INITIAL_FENCES),
     whiteInitialFences(DEFAULT_INITIAL_FENCES)
@@ -63,6 +65,7 @@ bool Rules::operator!=(const Rules& other) const {
 bool Rules::equalsIgnoringKomi(const Rules& other) const {
   return
     maxPlies == other.maxPlies &&
+    repetitionDrawCount == other.repetitionDrawCount &&
     timeBonusPerPly == other.timeBonusPerPly &&
     blackInitialFences == other.blackInitialFences &&
     whiteInitialFences == other.whiteInitialFences;
@@ -124,6 +127,8 @@ void Rules::validateOrThrow(const string& what) const {
     throw StringError(what + ": komi must be a half-integer (n + 0.5) with |komi| <= " + Global::floatToString(MAX_KOMI) + ", got " + Global::floatToString(komi));
   if(maxPlies < 1 || maxPlies > MAX_MAX_PLIES)
     throw StringError(what + ": maxPlies must be in [1, " + Global::intToString(MAX_MAX_PLIES) + "], got " + Global::intToString(maxPlies));
+  if(repetitionDrawCount != 0 && (repetitionDrawCount < 2 || repetitionDrawCount > MAX_REPETITION_DRAW_COUNT))
+    throw StringError(what + ": repetitionDrawCount must be 0 (off) or in [2, " + Global::intToString(MAX_REPETITION_DRAW_COUNT) + "], got " + Global::intToString(repetitionDrawCount));
   if(!std::isfinite(timeBonusPerPly) || timeBonusPerPly < 0.0f || timeBonusPerPly > MAX_TIME_BONUS_PER_PLY)
     throw StringError(what + ": timeBonusPerPly must be in [0, " + Global::floatToString(MAX_TIME_BONUS_PER_PLY) + "], got " + Global::floatToString(timeBonusPerPly));
   if(blackInitialFences < 0 || blackInitialFences > Board::MAX_FENCE_NUM)
@@ -134,7 +139,7 @@ void Rules::validateOrThrow(const string& what) const {
 
 //--------------------------------------------------------------------------------------------------------
 //Serialization. Keys: komi (only where komi is included), maxPlies, timeBonusPerPly, blackInitialWalls,
-//whiteInitialWalls. The string form is "Quoridor" for the standard game, else "Quoridor:key=value,..." listing the
+//whiteInitialWalls, repetitionDrawCount. The string form is "Quoridor" for the standard game, else "Quoridor:key=value,..." listing the
 //non-default keys; it is what SGF RU holds.
 
 static const char* KEY_KOMI = "komi";
@@ -142,6 +147,7 @@ static const char* KEY_MAX_PLIES = "maxPlies";
 static const char* KEY_TIME_BONUS = "timeBonusPerPly";
 static const char* KEY_BLACK_WALLS = "blackInitialWalls";
 static const char* KEY_WHITE_WALLS = "whiteInitialWalls";
+static const char* KEY_REPETITION = "repetitionDrawCount";
 
 //Go rule keys that older consumers may still send. Accepted and ignored.
 static const set<string> LEGACY_GO_KEYS = {
@@ -149,11 +155,11 @@ static const set<string> LEGACY_GO_KEYS = {
 };
 
 set<string> Rules::quoridorRuleKeys() {
-  return {KEY_MAX_PLIES, KEY_TIME_BONUS, KEY_BLACK_WALLS, KEY_WHITE_WALLS};
+  return {KEY_MAX_PLIES, KEY_TIME_BONUS, KEY_BLACK_WALLS, KEY_WHITE_WALLS, KEY_REPETITION};
 }
 
 static string canonicalKey(const string& key) {
-  for(const string& k : {string(KEY_KOMI), string(KEY_MAX_PLIES), string(KEY_TIME_BONUS), string(KEY_BLACK_WALLS), string(KEY_WHITE_WALLS)}) {
+  for(const string& k : {string(KEY_KOMI), string(KEY_MAX_PLIES), string(KEY_TIME_BONUS), string(KEY_BLACK_WALLS), string(KEY_WHITE_WALLS), string(KEY_REPETITION)}) {
     if(Global::isEqualCaseInsensitive(key, k))
       return k;
   }
@@ -166,7 +172,7 @@ static void setRuleFromString(Rules& rules, const string& keyOrig, const string&
   string key = canonicalKey(Global::trim(keyOrig));
   string value = Global::trim(valueOrig);
   if(key == "")
-    throw StringError("Unknown Quoridor rule: '" + keyOrig + "' (known: maxPlies, timeBonusPerPly, blackInitialWalls, whiteInitialWalls)");
+    throw StringError("Unknown Quoridor rule: '" + keyOrig + "' (known: maxPlies, timeBonusPerPly, blackInitialWalls, whiteInitialWalls, repetitionDrawCount)");
   if(key == KEY_KOMI) {
     if(!allowKomi)
       throw StringError("komi is not a rule here, use the komi command");
@@ -184,6 +190,7 @@ static void setRuleFromString(Rules& rules, const string& keyOrig, const string&
     if(key == KEY_MAX_PLIES) rules.maxPlies = x;
     else if(key == KEY_BLACK_WALLS) rules.blackInitialFences = x;
     else if(key == KEY_WHITE_WALLS) rules.whiteInitialFences = x;
+    else if(key == KEY_REPETITION) rules.repetitionDrawCount = x;
     else ASSERT_UNREACHABLE;
   }
 }
@@ -281,6 +288,8 @@ static string toStringHelper(const Rules& rules, bool includeKomi) {
     items.push_back(string(KEY_KOMI) + "=" + Global::floatToString(rules.komi));
   if(rules.maxPlies != d.maxPlies)
     items.push_back(string(KEY_MAX_PLIES) + "=" + Global::intToString(rules.maxPlies));
+  if(rules.repetitionDrawCount != d.repetitionDrawCount)
+    items.push_back(string(KEY_REPETITION) + "=" + Global::intToString(rules.repetitionDrawCount));
   if(rules.timeBonusPerPly != d.timeBonusPerPly)
     items.push_back(string(KEY_TIME_BONUS) + "=" + Global::floatToString(rules.timeBonusPerPly));
   if(rules.blackInitialFences != d.blackInitialFences)
@@ -321,6 +330,7 @@ json Rules::toJsonNoKomi() const {
   ret[KEY_TIME_BONUS] = niceDouble(timeBonusPerPly);
   ret[KEY_BLACK_WALLS] = blackInitialFences;
   ret[KEY_WHITE_WALLS] = whiteInitialFences;
+  ret[KEY_REPETITION] = repetitionDrawCount;
   return ret;
 }
 

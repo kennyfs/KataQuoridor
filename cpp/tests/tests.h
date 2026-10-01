@@ -36,6 +36,8 @@ namespace Tests {
   void runQuoridorScoreTests();
   //testquoridoriov2.cpp
   void runQuoridorIOv2Tests();
+  //testquoridorrepetition.cpp
+  void runQuoridorRepetitionTests();
   //testquoridorselfplay.cpp
   void runQuoridorSelfplayTests();
 
