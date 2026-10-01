@@ -18,13 +18,16 @@ class FakeEngine:
 def test_make_rules():
     assert make_rules() == STANDARD_RULES
     assert make_rules({"komi": 1.5}, {"whiteInitialWalls": 7}, {"komi": -2.5}) == {
-        "komi": -2.5, "blackInitialWalls": 10, "whiteInitialWalls": 7}
+        "komi": -2.5, "blackInitialWalls": 10, "whiteInitialWalls": 7, "repetitionDrawCount": 0}
     for bad in ({"komi": 0}, {"komi": 1.25}, {"komi": 21.5}, {"blackInitialWalls": -1}, {"whiteInitialWalls": 11},
-                {"whiteInitialWalls": 9.5}, {"maxPlies": 300}):
+                {"whiteInitialWalls": 9.5}, {"maxPlies": 300}, {"repetitionDrawCount": 1},
+                {"repetitionDrawCount": -1}, {"repetitionDrawCount": 3.0}, {"repetitionDrawCount": True}):
         with pytest.raises(ValueError):
             make_rules(bad)
     assert rules_tag(STANDARD_RULES) == "" and rules_tag(None) == ""
     assert rules_tag(make_rules({"komi": 1.5, "whiteInitialWalls": 9})) == "_k+1.5_w10-9"
+    assert make_rules({"repetitionDrawCount": 3})["repetitionDrawCount"] == 3
+    assert rules_tag(make_rules({"repetitionDrawCount": 3})) == "_k-0.5_w10-10_r3"
 
 
 def test_rules_state_sends_only_changes_and_resets_on_restart():
@@ -41,6 +44,12 @@ def test_rules_state_sends_only_changes_and_resets_on_restart():
     # Back to the standard game: the rules persist across clear_board, so they are reset.
     state.sync(eng, STANDARD_RULES, "e")
     assert eng.sent == ["komi -0.5", "kata-set-rule blackInitialWalls 10"]
+    eng.sent.clear()
+    state.sync(eng, make_rules({"repetitionDrawCount": 3}), "e")
+    assert eng.sent == ["kata-set-rule repetitionDrawCount 3"]
+    eng.sent.clear()
+    state.sync(eng, STANDARD_RULES, "e")
+    assert eng.sent == ["kata-set-rule repetitionDrawCount 0"]
     # After a restart the process has the standard rules again.
     state.sync(eng, r, "e")
     eng.sent.clear()

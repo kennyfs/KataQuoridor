@@ -6,10 +6,12 @@ Usage (from the python/ directory):
         --games-per-pair 10 --verify
     python -m quoridor_arena.arena --roster R.json --out DIR --pairs kq-a-v256:kq-b-v256,sq-search-d4:kq-b-v1
     python -m quoridor_arena.arena --roster R.json --out DIR --pairs kq-a-v256:kq-b-v256 --komi 1.5 --white-walls 9
+    python -m quoridor_arena.arena --roster R.json --out DIR --pairs kq-a-v256:kq-b-v256 --repetition-draw-count 3
 
 Results go to DIR/results.jsonl (one JSON object per game; reruns skip finished games), SGFs to
-DIR/sgfs/<pair>.sgfs, and the Elo report to DIR/report.md. Games can have a non-standard komi and initial walls
-(roster "rules" / "pair_rules", or --komi / --black-walls / --white-walls). See docs/Evaluation.md.
+DIR/sgfs/<pair>.sgfs, and the Elo report to DIR/report.md. Games can have a non-standard komi, initial walls and
+the repetition draw rule (roster "rules" / "pair_rules", or --komi / --black-walls / --white-walls /
+--repetition-draw-count). See docs/Evaluation.md.
 """
 import argparse
 import collections
@@ -61,13 +63,14 @@ def load_roster(path, out_dir):
       {"name", "katago_model": "<dir name>", "visits": V} shorthand for a KataQuoridor engine built from
                                                           vars katago, models_dir, gtp_config, katago_overrides
     An entry's "supports_rules" (default: true for katago_model entries, false otherwise) says whether the engine
-    understands QTP komi and kata-set-rule blackInitialWalls / whiteInitialWalls; engines that don't (SimpleQuoridor)
-    can only play the standard game.
+    understands QTP komi and kata-set-rule blackInitialWalls / whiteInitialWalls / repetitionDrawCount; engines that
+    don't (SimpleQuoridor) can only play the standard game.
     An entry's "kata" (default: auto-detected with known_command kata-genmove_analyze) says whether the engine is
     asked for its moves with kata-genmove_analyze, which puts its search info on the move nodes of the SGF
     (referee.parse_kata_genmove); "kata_perspective" is its reportAnalysisWinratesAs if not the side to move.
 
-    Game rules (komi, blackInitialWalls, whiteInitialWalls; default the standard -0.5, 10, 10):
+    Game rules (komi, blackInitialWalls, whiteInitialWalls, repetitionDrawCount; default the standard -0.5, 10, 10,
+    0 = off):
       "rules": {"komi": 1.5, ...}                          for all games
       "pair_rules": [{"pair": ["a", "b"], "komi": ...}]    for the games of one pair (either order), over "rules"
     The rules config returned is {"rules": {...}, "pair_rules": {frozenset({a, b}): {...}}}, unvalidated.
@@ -149,11 +152,11 @@ def make_schedule(names, pairs, games_per_pair, rules_of_pair=None):
 
 
 def check_rules_support(specs, schedule):
-    """Engines without komi / walls support may only play standard games."""
+    """Engines without komi / walls / repetition support may only play standard games."""
     supports = {s["name"]: s["supports_rules"] for s in specs}
     bad = sorted({n for g in schedule if not is_standard(g[5]) for n in (g[3], g[4]) if not supports[n]})
     if bad:
-        raise SystemExit("engines without komi / initial-walls support (roster \"supports_rules\") scheduled in "
+        raise SystemExit("engines without komi / initial-walls / repetition support (roster \"supports_rules\") scheduled in "
                          "non-standard games: %s" % ", ".join(bad))
 
 
@@ -393,6 +396,8 @@ def main(argv=None):
                     "pair_rules still override it")
     ap.add_argument("--black-walls", type=int, help="Black's initial walls in all games (default 10)")
     ap.add_argument("--white-walls", type=int, help="White's initial walls in all games (default 10)")
+    ap.add_argument("--repetition-draw-count", type=int,
+                    help="draw at the N-th occurrence of a position in all games (default 0 = off, the standard game)")
     ap.add_argument("--skip-min-games", type=int, default=20, help="0 disables the adaptive skip")
     ap.add_argument("--skip-threshold", type=float, default=0.975)
     ap.add_argument("--verify", action="store_true", help="compare legal_moves with the arbiter every ply")
@@ -407,7 +412,8 @@ def main(argv=None):
     os.makedirs(args.out, exist_ok=True)
     specs, arbiter_argv, rules_config = load_roster(args.roster, args.out)
     cli_rules = {k: v for k, v in (("komi", args.komi), ("blackInitialWalls", args.black_walls),
-                                   ("whiteInitialWalls", args.white_walls)) if v is not None}
+                                   ("whiteInitialWalls", args.white_walls),
+                                   ("repetitionDrawCount", args.repetition_draw_count)) if v is not None}
     if args.engines:
         want = [n.strip() for n in args.engines.split(",") if n.strip()]
         known = {s["name"] for s in specs}

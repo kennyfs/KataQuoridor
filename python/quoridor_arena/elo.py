@@ -193,6 +193,7 @@ def make_report(out_dir, names=None, anchor="sq-random", resamples=1000, seed=0,
     # Summary
     n = len(games)
     draws = sum(1 for g in games if g["winner"] is None)
+    rep_draws = sum(1 for g in games if g["reason"] == "repetition")
     bwins = sum(1 for g in games if g["winner"] == "b")
     reasons = collections.Counter(g["reason"] for g in games)
     secs = sum(g.get("seconds", 0) for g in games)
@@ -200,15 +201,16 @@ def make_report(out_dir, names=None, anchor="sq-random", resamples=1000, seed=0,
               "paired-game units (%d resamples)." % (n, len(names), len({tuple(g["pair"]) for g in games}),
                                                      anchor, resamples),
               "",
-              "Overall: Black (first player) score %.1f%%, draw rate %.1f%%, average plies %.1f, "
-              "summed game time %.1f h." % (100 * (bwins + 0.5 * draws) / n, 100 * draws / n,
-                                            sum(g["plies"] for g in games) / n, secs / 3600),
+              "Overall: Black (first player) score %.1f%%, draw rate %.1f%% (by repetition %.1f%%), average plies "
+              "%.1f, summed game time %.1f h." % (100 * (bwins + 0.5 * draws) / n, 100 * draws / n,
+                                                  100 * rep_draws / n, sum(g["plies"] for g in games) / n,
+                                                  secs / 3600),
               "",
               "End reasons: " + ", ".join("%s %d" % kv for kv in sorted(reasons.items())),
               ""]
     if run_info:
         lines += [run_info, ""]
-    bad = [g for g in games if g["reason"] not in ("goal",) and not g["reason"].startswith("draw")]
+    bad = [g for g in games if g["reason"] not in ("goal", "repetition") and not g["reason"].startswith("draw")]
     if bad:
         lines += ["## Anomalies", ""]
         for g in bad:
@@ -249,16 +251,20 @@ def make_report(out_dir, names=None, anchor="sq-random", resamples=1000, seed=0,
         lines.append("| %d | %s | %s |" % (r, a, " | ".join(cells)))
     lines.append("")
 
-    # Per pair. Games without komi / walls fields (older runs) are standard games.
+    # Per pair. Games without komi / walls / repetition fields (older runs) are standard games.
     def rules_label(g):
         k, bw, ww = g.get("komi", -0.5), g.get("black_walls", 10), g.get("white_walls", 10)
-        return "standard" if (k, bw, ww) == (-0.5, 10, 10) else "komi %+g, walls %d/%d" % (k, bw, ww)
+        rep = g.get("repetition_draw_count", 0)
+        if (k, bw, ww, rep) == (-0.5, 10, 10, 0):
+            return "standard"
+        return "komi %+g, walls %d/%d" % (k, bw, ww) + (", repetition %d" % rep if rep else "")
 
     show_rules = any(rules_label(g) != "standard" for g in games)
     lines += ["## Pairs", ""]
     if show_rules:
-        lines += ["Rules: komi (White wins iff tempo + komi > 0; standard -0.5) and Black/White initial walls. "
-                  "Avg margin is the distance of the pawn that did not arrive.", ""]
+        lines += ["Rules: komi (White wins iff tempo + komi > 0; standard -0.5), Black/White initial walls, and the "
+                  "repetition draw (at the N-th occurrence of a position) if on. Avg margin is the distance of the "
+                  "pawn that did not arrive.", ""]
     lines += ["| Pair | " + ("Rules | " if show_rules else "") +
               "Games | Score (first) | Black wins | Draws | Avg plies | Avg margin | Other ends |",
               "|---|" + ("---|" if show_rules else "") + "---:|---:|---:|---:|---:|---:|---|"]

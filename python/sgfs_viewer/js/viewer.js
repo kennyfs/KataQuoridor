@@ -110,7 +110,7 @@ function renderEvalStrip() {
   const tiles = ["evWin", "evMar", "evVis"];
   if (!hasEv(mv)) {
     tiles.forEach(t => $(t).classList.add("dim"));
-    const why = ply >= cur.moves.length ? `Game over · ${games[curGameIdx].result}` : ply < cur.startTurnIdx ? "Random init move, no search" : "No search data";
+    const why = ply >= cur.moves.length ? `Game over · ${resultLabel(games[curGameIdx])}` : ply < cur.startTurnIdx ? "Random init move, no search" : "No search data";
     $("evWinV").textContent = "—"; $("evMarV").textContent = "—"; $("evVisV").textContent = "—";
     $("evWinBar").style.flexBasis = "50%";
     $("evWinS").textContent = why; $("evMarS").textContent = ""; $("evVisS").textContent = "";
@@ -135,7 +135,8 @@ function renderInfo() {
   const g = cur, h = games[curGameIdx];
   const rows = [
     ["Game", `#${curGameIdx + 1} of ${games.length}`],
-    ["Result", h.result],
+    ["Result", resultLabel(h)],
+    ...(h.repetition ? [["Repetition rule", `draw at occurrence ${h.repetition} of a position`]] : []),
     ...(h.komi !== STANDARD_KOMI ? [["Komi", `${fmtKomi(h.komi)} (standard −0.5)`]] : []),
     ...(h.wb !== STANDARD_WALLS || h.ww !== STANDARD_WALLS ? [["Initial walls", `Black ${h.wb} · White ${h.ww}`]] : []),
     ["Moves", `${g.moves.length}  (init ${g.startTurnIdx}, searched ${g.moves.length - g.startTurnIdx})`],
@@ -263,7 +264,7 @@ function update(scrollList = true) {
   $("cardB").classList.toggle("tomove", !over && st.toMove === "B");
   $("cardW").classList.toggle("tomove", !over && st.toMove === "W");
   const last = ply > 0 ? cur.moves[ply - 1] : null;
-  $("moveInfo").textContent = over ? `End · ${games[curGameIdx].result}` : `${ply} / ${cur.moves.length}` + (last ? ` · ${last.pla} ${notation(last)}` : "");
+  $("moveInfo").textContent = over ? `End · ${resultLabel(games[curGameIdx])}` : `${ply} / ${cur.moves.length}` + (last ? ` · ${last.pla} ${notation(last)}` : "");
   $("moveSlider").max = cur.moves.length;
   $("moveSlider").value = ply;
   renderEvalStrip();
@@ -333,6 +334,7 @@ function applyFilters() {
     const g = games[i];
     let tag = g.gtype && g.gtype !== "normal" ? `<span class="tag">${escapeHtml(g.gtype)}</span>` : "";
     if (g.rulesLabel) tag += `<span class="tag">${escapeHtml(g.rulesLabel)}</span>`;
+    if (g.drawReason) tag += `<span class="tag">${escapeHtml(DRAW_REASONS[g.drawReason] || g.drawReason)}</span>`;
     if (match) tag += ` · ${mDot(g.winnerModel)}${mLabel(g.winnerModel)} won`;
     const v = statsCache && M.key !== "idx" && M.key !== "len" ? M.get(statsCache[i]) : undefined;
     const mval = v === undefined ? "" : v === null ? "—" : M.fmt(v);

@@ -20,9 +20,11 @@ class RulesError(Exception):
 # -- game rules (docs/QuoridorIOv2.md) ------------------------------------------
 
 # The rules the arena can set per game, by their QTP names. Engines start a process with these.
-STANDARD_RULES = {"komi": -0.5, "blackInitialWalls": 10, "whiteInitialWalls": 10}
+# repetitionDrawCount: draw at the N-th occurrence of a position, 0 = off (the standard game).
+STANDARD_RULES = {"komi": -0.5, "blackInitialWalls": 10, "whiteInitialWalls": 10, "repetitionDrawCount": 0}
 MAX_KOMI = 20.5
 MAX_WALLS = 10
+MAX_REPETITION_DRAW_COUNT = 1000
 
 
 def make_rules(*layers, where="rules"):
@@ -40,6 +42,10 @@ def make_rules(*layers, where="rules"):
     for k in ("blackInitialWalls", "whiteInitialWalls"):
         if not isinstance(rules[k], int) or not 0 <= rules[k] <= MAX_WALLS:
             raise ValueError("%s: %s must be an integer 0..%d, got %r" % (where, k, MAX_WALLS, rules[k]))
+    n = rules["repetitionDrawCount"]
+    if not isinstance(n, int) or isinstance(n, bool) or not (n == 0 or 2 <= n <= MAX_REPETITION_DRAW_COUNT):
+        raise ValueError("%s: repetitionDrawCount must be 0 (off) or an integer 2..%d, got %r"
+                         % (where, MAX_REPETITION_DRAW_COUNT, n))
     return rules
 
 
@@ -48,10 +54,14 @@ def is_standard(rules):
 
 
 def rules_tag(rules):
-    """'' for the standard game, else e.g. '_k+1.5_w9-10' (komi, Black's and White's initial walls)."""
+    """'' for the standard game, else e.g. '_k+1.5_w9-10' (komi, Black's and White's initial walls), plus '_r3'
+    with the repetition draw rule."""
     if is_standard(rules):
         return ""
-    return "_k%+g_w%d-%d" % (rules["komi"], rules["blackInitialWalls"], rules["whiteInitialWalls"])
+    tag = "_k%+g_w%d-%d" % (rules["komi"], rules["blackInitialWalls"], rules["whiteInitialWalls"])
+    if rules.get("repetitionDrawCount", 0):
+        tag += "_r%d" % rules["repetitionDrawCount"]
+    return tag
 
 
 class RulesState:
@@ -72,15 +82,15 @@ class RulesState:
         cmds = []
         if rules["komi"] != current["komi"]:
             cmds.append("komi %g" % rules["komi"])
-        for k in ("blackInitialWalls", "whiteInitialWalls"):
+        for k in ("blackInitialWalls", "whiteInitialWalls", "repetitionDrawCount"):
             if rules[k] != current[k]:
                 cmds.append("kata-set-rule %s %d" % (k, rules[k]))
         self.rules = None
         for cmd in cmds:
             ok, text = engine.send(cmd)
             if not ok:
-                raise RulesError("%s rejected %r: %s (engines without komi / walls support can only play the "
-                                 "standard game)" % (owner, cmd, text))
+                raise RulesError("%s rejected %r: %s (engines without komi / walls / repetition support can only "
+                                 "play the standard game)" % (owner, cmd, text))
         self.rules = dict(rules)
         self.starts = engine.starts
 
@@ -149,6 +159,10 @@ class Arbiter:
 
     def printsgf(self):
         return self._must("printsgf")
+
+    def draw_reason(self):
+        """Why the arbiter's game ended in a draw (its SGF DR: 'repetition', 'maxPlies', ...), or None."""
+        return sgf_root_prop(self.printsgf(), "DR")
 
 
 def sgf_root_prop(sgf, prop):
@@ -373,8 +387,11 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
             break
         if w is not None:
             # KataQuoridor >= 0.2 ends a game itself at its maxPlies (default 300, a game rule) and says "Draw";
-            # label it like the referee's own cutoff below.
-            result = (None, "draw%d" % len(moves), "arbiter says %s" % w)
+            # label it like the referee's own cutoff below. With the repetition rule, its SGF says DR[repetition].
+            if arbiter.draw_reason() == "repetition":
+                result = (None, "repetition", "arbiter says %s at ply %d" % (w, len(moves)))
+            else:
+                result = (None, "draw%d" % len(moves), "arbiter says %s" % w)
             break
         if len(moves) >= max_plies:
             result = (None, "draw%d" % max_plies, "")
@@ -456,6 +473,7 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
         "komi": rules["komi"],
         "black_walls": rules["blackInitialWalls"],
         "white_walls": rules["whiteInitialWalls"],
+        "repetition_draw_count": rules["repetitionDrawCount"],
         "plies": len(moves),
         "reason": reason,
         "detail": detail,

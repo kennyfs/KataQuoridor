@@ -51,7 +51,9 @@ function headerOf(line, i) {
 }
 
 // Komi and initial walls (docs/QuoridorIOv2.md): KM (missing, or KM[0] as 0.1.0 wrote it: the standard -0.5),
-// WB / WW (missing: 10). rulesLabel is "" for the standard game.
+// WB / WW (missing: 10). rulesLabel is "" for the standard game (the repetition rule is not in it: it is on in
+// every v2 self-play game). repetition: RU's repetitionDrawCount (0 = off, also for older files). drawReason: DR,
+// why a drawn game ended ("repetition", "maxPlies", "cutoff"; "" if not a draw or an older file).
 const STANDARD_KOMI = -0.5, STANDARD_WALLS = 10;
 function rulesOf(line) {
   const semi = line.indexOf(";", 2), root = semi < 0 ? line : line.slice(0, semi);
@@ -62,8 +64,12 @@ function rulesOf(line) {
   const parts = [];
   if (komi !== STANDARD_KOMI) parts.push(`komi ${fmtKomi(komi)}`);
   if (wb !== STANDARD_WALLS || ww !== STANDARD_WALLS) parts.push(`walls ${wb}/${ww}`);
-  return { komi, wb, ww, rulesLabel: parts.join(" · ") };
+  const rep = /repetitionDrawCount=(\d+)/.exec(prop("RU") || "");
+  return { komi, wb, ww, rulesLabel: parts.join(" · "), repetition: rep ? +rep[1] : 0, drawReason: prop("DR") || "" };
 }
+const DRAW_REASONS = { repetition: "repetition", maxPlies: "ply limit", cutoff: "cutoff" };
+// "0 (draw by repetition)" for a draw with a known reason, else the result.
+const resultLabel = h => h.drawReason ? `${h.result} (draw by ${DRAW_REASONS[h.drawReason] || h.drawReason})` : h.result;
 const fmtKomi = k => (k > 0 ? "+" : k < 0 ? "−" : "") + Math.abs(k);
 
 function parseGame(line) {

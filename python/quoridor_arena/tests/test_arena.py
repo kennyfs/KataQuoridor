@@ -167,3 +167,40 @@ def test_arbiter_rule_draw(tmp_path):
         assert r["result"] == "0" and r["lead"] == 0.0 and r["plies"] == 10
     assert "RE[0]" in read_sgfs(out, "m1_vs_m2.sgfs")[0]
     assert "draw rate 100.0%" in open(os.path.join(out, "report.md")).read()
+
+
+def test_repetition_draw(tmp_path):
+    """With the repetition rule (--repetition-draw-count, sent to the engines and the arbiter), shuffling engines draw
+    at the N-th occurrence of the start position; the report counts repetition draws apart from ply-limit draws.
+    Engines without rules support can't play such games."""
+    roster, out = str(tmp_path / "r.json"), str(tmp_path / "out")
+    write_roster(roster, [{"name": "s1", "command": sys.executable, "args": [MOCK, "--shuffle"], "supports_rules": True},
+                          {"name": "s2", "command": sys.executable, "args": [MOCK, "--shuffle"], "supports_rules": True},
+                          {"name": "plain", "command": sys.executable, "args": [MOCK, "--no-rules", "--shuffle"]}],
+                 arbiter_args=["--max-plies", "30"])
+    assert run(roster, out, "--games-per-pair", "2", "--pairs", "s1:s2", "--repetition-draw-count", "3") == 0
+    res = read_results(out)
+    assert {r["id"] for r in res} == {"s1_vs_s2_o000_ab_k-0.5_w10-10_r3", "s1_vs_s2_o000_ba_k-0.5_w10-10_r3"}
+    for r in res:
+        assert r["winner"] is None and r["reason"] == "repetition" and r["result"] == "0"
+        assert r["repetition_draw_count"] == 3
+        # The openings are toy walls (they reset the history), then the start position recurs every 4 plies.
+        assert r["plies"] >= 8
+    line = read_sgfs(out, "s1_vs_s2.sgfs")[0]
+    assert "RU[Quoridor:repetitionDrawCount=3]" in line and "RE[0]" in line and "DR[repetition]" in line
+    report = open(os.path.join(out, "report.md")).read()
+    assert "by repetition 100.0%" in report and "repetition 2" in report and "Anomalies" not in report
+    assert "komi -0.5, walls 10/10, repetition 3" in report
+
+    # Without the rule the same engines shuffle until the arbiter's ply limit.
+    out2 = str(tmp_path / "out2")
+    assert run(roster, out2, "--games-per-pair", "2", "--pairs", "s1:s2") == 0
+    for r in read_results(out2):
+        assert r["reason"] == "draw30" and r["repetition_draw_count"] == 0
+    assert "DR[maxPlies]" in read_sgfs(out2, "s1_vs_s2.sgfs")[0]
+
+    try:
+        run(roster, str(tmp_path / "out3"), "--games-per-pair", "2", "--pairs", "s1:plain", "--repetition-draw-count", "3")
+        assert False, "expected SystemExit"
+    except SystemExit as e:
+        assert "plain" in str(e)
