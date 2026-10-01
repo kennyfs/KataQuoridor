@@ -20,9 +20,10 @@ from export_model_pytorch import export_quoridor_onnx, QuoridorOnnxExportWrapper
 
 V1_CONFIGS = ["b2c64_quoridor", "tf2_b4c192_quoridor"]
 V2_CONFIGS = ["b2c64_quoridor_v2", "tf2_b4c192_quoridor_v2"]
+V3_CONFIGS = ["b2c64_quoridor_v3", "tf2_b4c192_quoridor_v3"]
 # Input channel counts by Quoridor I/O version (QuoridorNN in cpp/neuralnet/quoridornn.h).
-NUM_SPATIAL = {1: 17, 2: 19}
-NUM_GLOBAL = {1: 15, 2: 17}
+NUM_SPATIAL = {1: 17, 2: 19, 3: 21}
+NUM_GLOBAL = {1: 15, 2: 17, 3: 19}
 
 METRICS_ARGS = dict(
     soft_policy_weight_scale=1.0, disable_optimistic_policy=False, meta_kata_only_soft_policy=False,
@@ -40,7 +41,7 @@ def make_inputs(B, io_version, seed=0):
 
 
 def test_quoridor_config_properties():
-    for names, io_version in ((V1_CONFIGS, 1), (V2_CONFIGS, 2)):
+    for names, io_version in ((V1_CONFIGS, 1), (V2_CONFIGS, 2), (V3_CONFIGS, 3)):
         for name in names:
             assert name in modelconfigs.config_of_name
             cfg = modelconfigs.config_of_name[name]
@@ -48,10 +49,10 @@ def test_quoridor_config_properties():
             assert modelconfigs.get_quoridor_io_version(cfg) == io_version
             assert modelconfigs.get_num_bin_input_features(cfg) == NUM_SPATIAL[io_version]
             assert modelconfigs.get_num_global_input_features(cfg) == NUM_GLOBAL[io_version]
-    assert modelconfigs.QUORIDOR_TRAINING_IO_VERSION == 2
+    assert modelconfigs.QUORIDOR_TRAINING_IO_VERSION == 3
 
 
-@pytest.mark.parametrize("name", V1_CONFIGS + V2_CONFIGS)
+@pytest.mark.parametrize("name", V1_CONFIGS + V2_CONFIGS + V3_CONFIGS)
 def test_quoridor_forward_shapes(name):
     B = 2
     cfg = modelconfigs.base_config_of_name[name]
@@ -137,11 +138,11 @@ def run_metrics(model, batch, is_training=True, include_model_norms=False):
 
 def test_quoridor_backward_and_gradients():
     B = 2
-    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v2"]
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v3"]
     model = Model(cfg, pos_len=9)
     model.initialize()
     model.train()
-    results = run_metrics(model, outcome_batch(B, 2), include_model_norms=True)
+    results = run_metrics(model, outcome_batch(B, 3), include_model_norms=True)
 
     loss = results["loss_sum"]
     assert torch.isfinite(loss).item()
@@ -166,12 +167,12 @@ def test_quoridor_draw_rows_have_no_lead_loss():
     # A draw row (cpp/dataio/trainingwrite.cpp): value 0.5 / 0.5, u = 0 with its normal weight, lead weight 0,
     # plies left to maxPlies.
     torch.manual_seed(0)
-    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v2"]
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v3"]
     model = Model(cfg, pos_len=9)
     model.initialize()
     model.train()
 
-    batch = outcome_batch(2, 2)
+    batch = outcome_batch(2, 3)
     g = batch["globalTargetsNC"]
     g[1, 0:2] = 0.5   # draw
     g[1, 20] = 0.0    # u = 0
@@ -200,7 +201,7 @@ def test_quoridor_v1_models_cannot_train():
     cfg = modelconfigs.base_config_of_name["b2c64_quoridor"]
     model = Model(cfg, pos_len=9)
     model.initialize()
-    with pytest.raises(AssertionError, match="only Quoridor I/O v2"):
+    with pytest.raises(AssertionError, match="only Quoridor I/O v3"):
         run_metrics(model, outcome_batch(1, 1))
 
 
@@ -221,17 +222,17 @@ def test_quoridor_shortterm_optimistic_policy_weight_uses_short_horizon():
     # much better than expected the short-term TD target turned out: horizon index 2, globalTargetsNC[12:16],
     # whose nowFactor 1/(1 + 81*0.016) is the largest. globalTargetsNC[4:8] is the longest horizon.
     torch.manual_seed(0)
-    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v2"]
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v3"]
     model = Model(cfg, pos_len=9)
     model.initialize()
     model.eval()
     metrics = Metrics(world_size=1, raw_model=model)
 
     def shortopt_weight(short_win, long_win):
-        spatial = torch.zeros(1, 19, 9, 9)
+        spatial = torch.zeros(1, NUM_SPATIAL[3], 9, 9)
         spatial[:, 0, :, :] = 1.0
         with torch.no_grad():
-            post = model.postprocess_output(model(spatial, torch.zeros(1, 17)))
+            post = model.postprocess_output(model(spatial, torch.zeros(1, NUM_GLOBAL[3])))
         g = torch.zeros(1, 80)
         g[:, 0:2] = 0.5
         g[:, 4:6] = torch.tensor([long_win, 1.0 - long_win])
@@ -258,7 +259,7 @@ def test_quoridor_shortterm_optimistic_policy_weight_uses_short_horizon():
     assert shortopt_weight(short_win=0.0, long_win=1.0) < 0.1
 
 
-@pytest.mark.parametrize("io_version", [1, 2])
+@pytest.mark.parametrize("io_version", [1, 2, 3])
 def test_quoridor_symmetries(io_version):
     B = 3
     C = NUM_SPATIAL[io_version]
@@ -279,7 +280,7 @@ def test_quoridor_symmetries(io_version):
     for ch in wall_channels:
         assert torch.equal(symm_1[:, ch, :8, :8], torch.flip(spatial[:, ch, :8, :8], dims=[-1]))
         assert (symm_1[:, ch, 8, :] == 0).all() and (symm_1[:, ch, :, 8] == 0).all()
-    for ch in (0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13):
+    for ch in (0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13) + ((19, 20) if io_version >= 3 else ()):
         assert torch.equal(symm_1[:, ch], torch.flip(spatial[:, ch], dims=[-1]))
     assert torch.equal(symm_1[:, 5], torch.flip(spatial[:, 6], dims=[-1]))
 
@@ -305,7 +306,7 @@ def test_quoridor_symmetries(io_version):
     assert torch.allclose(vt_symm_2, val_targets, atol=1e-6)
 
 
-@pytest.mark.parametrize("name", ["b2c64_quoridor", "b2c64_quoridor_v2"])
+@pytest.mark.parametrize("name", ["b2c64_quoridor", "b2c64_quoridor_v2", "b2c64_quoridor_v3"])
 def test_quoridor_onnx_export(name):
     cfg = modelconfigs.base_config_of_name[name]
     io_version = modelconfigs.get_quoridor_io_version(cfg)

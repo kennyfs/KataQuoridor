@@ -2,7 +2,7 @@
  * nnparity.cpp
  * NN parity harness (docs/KataQuoridor_Review_and_Roadmap.md §5 Phase 0 step 4).
  *
- *   katago dumpnninputs -n 200 -seed parity -io-version 2 -output rows.npz
+ *   katago dumpnninputs -n 200 -seed parity -io-version 3 -output rows.npz
  *     Plays random games and writes, for a sample of non-terminal positions, the input rows of the given Quoridor
  *     I/O version (default: the latest) exactly as QuoridorNN::fillRow produces them, the legal moves in search
  *     space, and the raw board state and rules (so that Python can re-derive the features and the legal moves
@@ -63,6 +63,11 @@ static vector<ParityPosition> generatePositions(int numRows, const string& seed)
       rules.komi = (float)(rand.nextInt(-6, 5) + 0.5);
       rules.maxPlies = rand.nextInt(20, 300);
     }
+    // Every other game from game 2 on has the repetition rule (I/O v3 inputs), and its players often step back to
+    // where their pawn was two plies ago, so positions repeat.
+    const bool shuffles = game % 4 >= 2;
+    if(shuffles)
+      rules.repetitionDrawCount = rand.nextInt(2, 4);
     Board board;
     Player pla = P_BLACK;
     BoardHistory hist(board, pla, rules, 0, BoardHistoryModes());
@@ -86,7 +91,18 @@ static vector<ParityPosition> generatePositions(int numRows, const string& seed)
 
       Loc chosen;
       double u = rand.nextDouble();
-      if(style == 2 && u < 0.8) {
+      Loc stepBack = Board::NULL_LOC;
+      if(shuffles && hist.moveHistory.size() >= 2) {
+        const Board& twoAgo = hist.getRecentBoard(2);
+        Loc prev = pla == P_BLACK ? twoAgo.blackPawnLoc : twoAgo.whitePawnLoc;
+        if(Location::isPawnLoc(prev) && prev != (pla == P_BLACK ? board.blackPawnLoc : board.whitePawnLoc) && hist.isLegal(board, prev, pla))
+          stepBack = prev;
+      }
+      if(stepBack != Board::NULL_LOC && u < 0.85)
+        chosen = stepBack;
+      else if(shuffles)
+        chosen = pawnMoves[rand.nextUInt((uint32_t)pawnMoves.size())];
+      else if(style == 2 && u < 0.8) {
         vector<Loc> path = board.findShortestPath(pla);
         chosen = (path.size() >= 2 && board.isLegal(path[1], pla)) ? path[1] : pawnMoves[rand.nextUInt((uint32_t)pawnMoves.size())];
       }
@@ -165,6 +181,9 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   NumpyBuffer<uint8_t> vWalls({numRows, 8, 8});
   NumpyBuffer<int32_t> plyInfo({numRows, 2});     // ply (BoardHistory::getCurrentTurnNumber), Rules::maxPlies
   NumpyBuffer<float> komi({numRows, 1});          // Rules::komi (White's view)
+  NumpyBuffer<int32_t> repInfo({numRows, 2});     // Rules::repetitionDrawCount, current position's occurrence count
+  NumpyBuffer<int8_t> repMoves({numRows, 9, 9});  // [r][c] board coords: earlier occurrences of the position after
+                                                  // the side to move's pawn moves there (QuoridorNN::repeatingPawnMoves)
   // Same rows as TrainingWriteBuffers stores them (packed bits + raw S8-S11 distances + globals).
   const int packedArea = (X * Y + 7) / 8;
   NumpyBuffer<uint8_t> trainPacked({numRows, C, packedArea});
@@ -188,6 +207,15 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
     plyInfo.data[i * 2 + 0] = (int32_t)p.hist.getCurrentTurnNumber();
     plyInfo.data[i * 2 + 1] = (int32_t)p.hist.rules.maxPlies;
     komi.data[i] = p.hist.rules.komi;
+    repInfo.data[i * 2 + 0] = p.hist.rules.repetitionDrawCount;
+    repInfo.data[i * 2 + 1] = p.hist.currentPositionRepetitionCount();
+    std::fill(repMoves.data + (size_t)i * 81, repMoves.data + (size_t)(i + 1) * 81, (int8_t)0);
+    {
+      vector<pair<Loc,int>> rm;
+      QuoridorNN::repeatingPawnMoves(b, p.hist, p.pla, rm);
+      for(const pair<Loc,int>& m : rm)
+        repMoves.data[(size_t)i * 81 + (Location::getY(m.first, SEARCH_LEN) / 2) * 9 + Location::getX(m.first, SEARCH_LEN) / 2] = (int8_t)m.second;
+    }
 
     for(int pos = 0; pos < POLICY_SIZE; pos++) {
       Loc loc = NNPos::posToLoc(pos, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN, SEARCH_LEN);
@@ -222,6 +250,8 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   writeArray(zip, "vWalls", vWalls, numRows);
   writeArray(zip, "plyInfo", plyInfo, numRows);
   writeArray(zip, "komi", komi, numRows);
+  writeArray(zip, "repInfo", repInfo, numRows);
+  writeArray(zip, "repMoves", repMoves, numRows);
   if(writeTrainRows) {
     writeArray(zip, "trainBinaryInputNCHWPacked", trainPacked, numRows);
     writeArray(zip, "trainSpatialDistNCHW", trainDist, numRows);

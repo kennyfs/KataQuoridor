@@ -14,6 +14,8 @@ int QuoridorNN::numSpatialFeatures(int ioVersion) {
     return NUM_FEATURES_SPATIAL_V1;
   if(ioVersion == 2)
     return NUM_FEATURES_SPATIAL_V2;
+  if(ioVersion == 3)
+    return NUM_FEATURES_SPATIAL_V3;
   ASSERT_UNREACHABLE;
 }
 
@@ -22,7 +24,40 @@ int QuoridorNN::numGlobalFeatures(int ioVersion) {
     return NUM_FEATURES_GLOBAL_V1;
   if(ioVersion == 2)
     return NUM_FEATURES_GLOBAL_V2;
+  if(ioVersion == 3)
+    return NUM_FEATURES_GLOBAL_V3;
   ASSERT_UNREACHABLE;
+}
+
+float QuoridorNN::repetitionProgress(int count, int repetitionDrawCount) {
+  if(repetitionDrawCount <= 1)
+    return 0.0f;
+  if(repetitionDrawCount == 2)
+    return 1.0f;
+  return std::min(1.0f, (float)std::max(0, count - 1) / (float)(repetitionDrawCount - 2));
+}
+
+void QuoridorNN::repeatingPawnMoves(const Board& board, const BoardHistory& hist, Player pla, vector<pair<Loc,int>>& out) {
+  out.clear();
+  //A pawn move changes the position, so it can only repeat one of the earlier positions since the last wall.
+  if(hist.rules.repetitionDrawCount <= 0 || hist.positionsSinceLastWall.size() < 2)
+    return;
+  for(Loc to : board.getLegalPawnDestinations(pla)) {
+    int n = hist.numOccurrencesSinceLastWall(board.getSitHashAfterPawnMove(to, pla));
+    if(n > 0)
+      out.push_back(std::make_pair(to, n));
+  }
+}
+
+Hash128 QuoridorNN::repetitionInputsHash(const Board& board, const BoardHistory& hist, Player pla) {
+  if(hist.rules.repetitionDrawCount <= 0)
+    return Hash128();
+  vector<pair<Loc,int>> moves;
+  repeatingPawnMoves(board, hist, pla, moves);
+  uint64_t h = Hash::splitMix64(0x5245504554495431ULL ^ (uint64_t)hist.currentPositionRepetitionCount());
+  for(const pair<Loc,int>& m : moves)
+    h = Hash::splitMix64(h ^ ((uint64_t)(uint32_t)m.first << 20) ^ (uint64_t)(uint32_t)m.second);
+  return Hash128(h, Hash::nasam(h ^ 0x9E3779B97F4A7C15ULL));
 }
 
 static void setRowBin(float* rowBin, int pos, int feature, float value, int posStride, int featureStride) {
@@ -127,7 +162,7 @@ void QuoridorNN::fillRow(
   float* rowSpatial,
   float* rowGlobal
 ) {
-  testAssert(ioVersion == 1 || ioVersion == 2);
+  testAssert(ioVersion >= 1 && ioVersion <= MAX_SUPPORTED_IO_VERSION);
   const int numSpatial = numSpatialFeatures(ioVersion);
   const int nnXLen = MODEL_LEN;
   const int nnYLen = MODEL_LEN;
@@ -354,10 +389,30 @@ void QuoridorNN::fillRow(
     rowGlobal[GLOBAL_SELF_KOMI_V2] =
       (float)(boardHistory.currentSelfKomi(nextPlayer, nnInputParams.drawEquivalentWinsForWhite) / SELF_KOMI_SCALE);
   }
+
+  if(ioVersion >= 3) {
+    const int n = boardHistory.rules.repetitionDrawCount;
+    if(n > 0) {
+      rowGlobal[GLOBAL_REPETITION_ON_V3] = 1.0f;
+      rowGlobal[GLOBAL_REPETITION_COUNT_V3] = repetitionProgress(boardHistory.currentPositionRepetitionCount(), n);
+      vector<pair<Loc,int>> moves;
+      repeatingPawnMoves(board, boardHistory, nextPlayer, moves);
+      for(const pair<Loc,int>& m : moves) {
+        int c = Location::getX(m.first, board.x_size) / 2;
+        int rBoard = Location::getY(m.first, board.x_size) / 2;
+        int rCanon = (nextPlayer == P_WHITE) ? (8 - rBoard) : rBoard;
+        int pos = NNPos::xyToPos(c, rCanon, nnXLen);
+        //m.second earlier occurrences: the move makes occurrence m.second + 1 >= 2.
+        setRowBin(rowSpatial, pos, SPATIAL_REPEATING_MOVE_V3, 1.0f, posStride, featureStride);
+        if(m.second + 1 >= n)
+          setRowBin(rowSpatial, pos, SPATIAL_DRAWING_MOVE_V3, 1.0f, posStride, featureStride);
+      }
+    }
+  }
 }
 
 void QuoridorNN::applyInputSymmetry(float* rowSpatial, int ioVersion, bool useNHWC, int symmetry) {
-  testAssert(ioVersion == 1 || ioVersion == 2);
+  testAssert(ioVersion >= 1 && ioVersion <= MAX_SUPPORTED_IO_VERSION);
   bool flipX = (symmetry % 2 != 0);
   if(!flipX)
     return;
@@ -374,7 +429,11 @@ void QuoridorNN::applyInputSymmetry(float* rowSpatial, int ioVersion, bool useNH
 
   // Standard channels: pawn, blocked N/S, distances, goal mask, etc. Mirrored across the full
   // 9-wide pawn-cell domain.
-  static const int stdChannels[] = {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13};
+  vector<int> stdChannels = {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13};
+  if(ioVersion >= 3) {
+    stdChannels.push_back(SPATIAL_REPEATING_MOVE_V3);
+    stdChannels.push_back(SPATIAL_DRAWING_MOVE_V3);
+  }
   for(int ch : stdChannels) {
     for(int r = 0; r < H; r++) {
       for(int c = 0; c < W; c++) {

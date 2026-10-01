@@ -30,7 +30,8 @@ def pad_global_targets_nc(globalTargetsNC: np.ndarray) -> np.ndarray:
 # the npz carries them raw in spatialDistNCHW (uint8 [N,4,H,W], canonical orientation, 255 =
 # unreachable), and the loader rebuilds the channels from it.
 # Spatial input channels on the 8x8 wall-anchor grid (mirrored c -> 7 - c): placed V / H walls, the anchor domain
-# mask, and (I/O v2) the legal V / H wall placements.
+# mask, and (I/O v2) the legal V / H wall placements. The I/O v3 repetition planes 19, 20 are pawn-cell planes and
+# mirror like the pawns (c -> 8 - c).
 QUORIDOR_WALL_ANCHOR_CHANNELS = (14, 15, 16, 17, 18)
 QUORIDOR_DIST_FIRST_CHANNEL = 8
 QUORIDOR_DIST_NUM_CHANNELS = 4
@@ -133,10 +134,11 @@ def read_npz_training_data(
 
         binaryInputNCHW = decode_binary_input(binaryInputNCHWPacked, spatialDistNCHW, pos_len, npz_file)
 
-        # Quoridor I/O v1 data (17 / 15 input channels, other targets) cannot train an I/O v2 model.
+        # Data of another Quoridor I/O version (v1: 17 / 15, v2: 19 / 17 input channels) cannot train an I/O v3 model.
+        # v2 and v3 rows have the same targets but v2 rows lack the repetition inputs (their history is not stored).
         assert binaryInputNCHW.shape[1] == num_bin_features and globalInputNC.shape[1] == num_global_features, (
             f"{npz_file}: {binaryInputNCHW.shape[1]} spatial / {globalInputNC.shape[1]} global input channels, the model"
-            f" expects {num_bin_features} / {num_global_features} (old Quoridor I/O v1 training data?)")
+            f" expects {num_bin_features} / {num_global_features} (training data of an older Quoridor I/O version?)")
         return (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove)
 
     if not npz_files:

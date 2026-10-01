@@ -357,7 +357,7 @@ def main(args):
         else:
             writeln(0)
         # Model option D: Quoridor I/O version (0 = not a Quoridor network, i.e. a Go network; else the config's
-        # quoridor_io_version, 1 or 2). Options E-H are unused spare slots for future model options.
+        # quoridor_io_version, 1, 2 or 3). Options E-H are unused spare slots for future model options.
         writeln(modelconfigs.get_quoridor_io_version(model_config) if modelconfigs.is_quoridor(model_config) else 0)
         writeln(0)
         writeln(0)

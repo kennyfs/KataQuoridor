@@ -143,6 +143,9 @@ struct BoardHistory {
   bool isMaxPliesDraw() const;
   //How many times the current position has occurred so far (1 = first time). O(1).
   int currentPositionRepetitionCount() const { return currentRepetitionCount; }
+  //How many times the position with this Board::getSitHash has occurred since the last wall placement (so a move
+  //to it would make occurrence number this + 1). One pass over positionsSinceLastWall.
+  int numOccurrencesSinceLastWall(Hash128 sitHash) const;
 
   // Core Quoridor move execution and terminal check
   void makeBoardMoveAssumeLegal(Board& board, Loc moveLoc, Player movePla, const KoHashTable* rootKoHashTable, bool preventEncore = false);

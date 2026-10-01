@@ -244,6 +244,9 @@ struct Board {
   Hash128 getSitHash(Player pla) const;
   Hash128 getSitHashWithSimpleKo(Player pla) const { return getSitHash(pla); }
   Hash128 getPosHashAfterMove(Loc loc, Player pla) const;
+  // getSitHash(getOpp(pla)) of the board after pla's pawn moves to the empty pawn cell `to` (no copy, no legality
+  // check). Used for the repetition inputs (QuoridorNN).
+  Hash128 getSitHashAfterPawnMove(Loc to, Player pla) const;
 
   void clearSimpleKoLoc() {}
   void setSimpleKoLoc(Loc loc) { (void)loc; }

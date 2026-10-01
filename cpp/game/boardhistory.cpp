@@ -317,6 +317,15 @@ bool BoardHistory::isMaxPliesDraw() const {
   return isDraw() && !isRepetitionDrawFlag && getCurrentTurnNumber() >= rules.maxPlies;
 }
 
+int BoardHistory::numOccurrencesSinceLastWall(Hash128 sitHash) const {
+  int n = 0;
+  for(const Hash128& h : positionsSinceLastWall) {
+    if(h == sitHash)
+      n++;
+  }
+  return n;
+}
+
 void BoardHistory::resetRepetitions(const Board& board, Player pla) {
   positionsSinceLastWall.clear();
   positionsSinceLastWall.push_back(board.getSitHash(pla));

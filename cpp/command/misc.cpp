@@ -674,6 +674,7 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
   int nnYLen = QuoridorNN::MODEL_LEN;
   int numGames = 0;
   int numDrawnGames = 0;
+  int numRepetitionDrawnGames = 0;
 
   for(int f = 0; f < numFiles; f++) {
     TrainingWriteBuffers buffers(
@@ -690,6 +691,10 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
         rules.maxPlies = 12;
       if(rand.nextBool(0.3))
         rules.komi = rand.nextBool(0.5) ? 1.5f : -2.5f;
+      //Some games with the repetition rule, whose players step back and forth: draws by repetition (I/O v3 inputs).
+      const bool shuffleGame = rand.nextBool(0.25);
+      if(shuffleGame)
+        rules.repetitionDrawCount = 3;
       BoardHistory startHist(startBoard, startPla, rules, 0, BoardHistoryModes(false, false));
 
       vector<Board> posHist;
@@ -709,7 +714,15 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
         std::vector<Loc> pawnDests = currBoard.getLegalPawnDestinations(currPla);
         Loc chosenMove = Board::NULL_LOC;
         // Sometimes place a random legal wall, so rows exercise blocked edges and the BFS distance channels.
-        if(rand.nextBool(0.4)) {
+        if(shuffleGame && t >= 2 && rand.nextBool(0.8)) {
+          const Board& twoAgo = posHist[posHist.size() - 3];
+          Loc prev = currPla == P_BLACK ? twoAgo.blackPawnLoc : twoAgo.whitePawnLoc;
+          for(Loc dest : pawnDests) {
+            if(dest == prev)
+              chosenMove = dest;
+          }
+        }
+        if(chosenMove == Board::NULL_LOC && !shuffleGame && rand.nextBool(0.4)) {
           for(int tries = 0; tries < 20; tries++) {
             int c = rand.nextUInt(8);
             int r = rand.nextUInt(8);
@@ -748,6 +761,8 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
       numGames++;
       if(currHist.isDraw())
         numDrawnGames++;
+      if(currHist.isRepetitionDraw())
+        numRepetitionDrawnGames++;
 
       vector<ValueTargets> whiteValueTargets(turnsPlayed + 1);
       for(size_t i = 0; i <= (size_t)turnsPlayed; i++) {
@@ -803,7 +818,7 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
     buffers.writeToZipFile(fileName);
     cout << "Wrote " << buffers.curRows << " rows to " << fileName << endl;
   }
-  cout << "Games: " << numGames << ", of which draws: " << numDrawnGames << endl;
+  cout << "Games: " << numGames << ", of which draws: " << numDrawnGames << " (by repetition: " << numRepetitionDrawnGames << ")" << endl;
 
   ScoreValue::freeTables();
   return 0;

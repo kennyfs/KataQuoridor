@@ -1013,7 +1013,7 @@ class Metrics:
         io_version = modelconfigs.get_quoridor_io_version(raw_model.config)
         assert io_version == modelconfigs.QUORIDOR_TRAINING_IO_VERSION, (
             f"only Quoridor I/O v{modelconfigs.QUORIDOR_TRAINING_IO_VERSION} models can be trained, got v{io_version}"
-            " (use a *_quoridor_v2 model config)")
+            " (use a *_quoridor_v3 model config; quoridor_upgrade_v2_to_v3.py upgrades a v2 checkpoint)")
         (
             policy_logits,
             value_logits,

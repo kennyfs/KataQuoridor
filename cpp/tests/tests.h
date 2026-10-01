@@ -38,6 +38,8 @@ namespace Tests {
   void runQuoridorIOv2Tests();
   //testquoridorrepetition.cpp
   void runQuoridorRepetitionTests();
+  //testquoridoriov3.cpp
+  void runQuoridorIOv3Tests();
   //testquoridorselfplay.cpp
   void runQuoridorSelfplayTests();
 

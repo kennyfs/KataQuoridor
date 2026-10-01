@@ -2,9 +2,11 @@
 
 Pipeline, all driven from here:
   1. `katago dumpnninputs` plays random games (some with non-standard komi and maxPlies) and writes the input rows
-     of each Quoridor I/O version (v1 and v2), the legal moves (in search space, 17x17+1 slots) and the raw board
+     of each Quoridor I/O version (v1, v2, v3), the legal moves (in search space, 17x17+1 slots) and the raw board
      state and rules to an .npz.
-  2. The features and legal moves are re-derived here, independently, from the raw board state and compared.
+  2. The features and legal moves are re-derived here, independently, from the raw board state and compared. (The
+     v3 repetition inputs are derived from the dumped occurrence counts; the counting itself is checked against a
+     brute-force recount by `runtests quoridorv3`.)
   3. For a conv net and a transformer net of each I/O version (random init with fixed seeds, output heads scaled up
      so that the policy is far from uniform), a PyTorch reference policy/value is computed at symmetries 0 and 1,
      and the model is exported to .bin.gz with export_model_pytorch.py.
@@ -54,10 +56,12 @@ POLICY_SIZE = SEARCH_LEN * SEARCH_LEN + 1
 FP32_TOL = float(os.environ.get("NN_PARITY_TOL", "1e-4"))
 # $NN_PARITY_MODELS (comma-separated) restricts the nets, e.g. conv only for CUDA NCHW, which rejects transformers.
 MODEL_CONFIGS = os.environ.get(
-    "NN_PARITY_MODELS", "b2c64_quoridor,tf2_b4c192_quoridor,b2c64_quoridor_v2,tf2_b4c192_quoridor_v2").split(",")
-IO_VERSIONS = [1, 2]
-NUM_SPATIAL = {1: 17, 2: 19}
-NUM_GLOBAL = {1: 15, 2: 17}
+    "NN_PARITY_MODELS",
+    "b2c64_quoridor,tf2_b4c192_quoridor,b2c64_quoridor_v2,tf2_b4c192_quoridor_v2,b2c64_quoridor_v3,tf2_b4c192_quoridor_v3",
+).split(",")
+IO_VERSIONS = [1, 2, 3]
+NUM_SPATIAL = {1: 17, 2: 19, 3: 21}
+NUM_GLOBAL = {1: 15, 2: 17, 3: 19}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -156,7 +160,7 @@ def _dist_feature(d):
     return np.where(d < 0, 1.0, np.minimum(1.0, d / 32.0)).astype(np.float32)
 
 
-def python_features(pos, io_version, ply, max_plies, komi):
+def python_features(pos, io_version, ply, max_plies, komi, rep_info=None, rep_moves=None):
     me, opp, h, v = _canonical(pos)
     spatial = np.zeros((NUM_SPATIAL[io_version], 9, 9), dtype=np.float32)  # [channel][row][col], canonical rows
     spatial[0] = 1.0
@@ -212,6 +216,21 @@ def python_features(pos, io_version, ply, max_plies, komi):
     if io_version >= 2:
         glob_[15] = max(0, max_plies - ply) / 300.0
         glob_[16] = (komi if pos.to_move == rules.WHITE else -komi) / 5.0
+    if io_version >= 3:
+        # rep_info = (N, current count); rep_moves[r][c] = earlier occurrences of the position after the pawn move to
+        # (c, r), board coords. Only legal pawn moves can repeat.
+        n, count = (int(x) for x in rep_info)
+        legal_pawn = {cell for kind, cell in rules.legal_moves(pos) if kind == "p"}
+        if n > 0:
+            glob_[17] = 1.0
+            glob_[18] = 1.0 if n == 2 else min(1.0, (count - 1) / (n - 2))
+            for r, c in zip(*np.nonzero(rep_moves)):
+                assert (c, r) in legal_pawn, (c, r)
+                r_canon = 8 - r if pos.to_move == rules.WHITE else r
+                spatial[19, r_canon, c] = 1.0
+                spatial[20, r_canon, c] = 1.0 if rep_moves[r, c] + 1 >= n else 0.0
+        else:
+            assert count >= 1 and not rep_moves.any()
     return spatial, glob_
 
 
@@ -238,10 +257,15 @@ def test_dumped_features_match_python(rows_by_version, io_version):
     # The positions include games with other rules and ones close to their ply limit.
     assert (rows["komi"][:, 0] != -0.5).any() and (rows["plyInfo"][:, 1] != 300).any()
     assert ((rows["plyInfo"][:, 1] - rows["plyInfo"][:, 0]) < 10).any()
+    if io_version >= 3:
+        # ... and positions with the repetition rule, repeating and drawing moves.
+        assert (rows["repInfo"][:, 0] > 0).any() and (rows["repMoves"] > 0).any()
+        assert rows["binaryInputNCHW"][:, 20].any()
     bad = []
     for i in range(n):
         ply, max_plies = (int(x) for x in rows["plyInfo"][i])
-        spatial, glob_ = python_features(_position(rows, i), io_version, ply, max_plies, float(rows["komi"][i][0]))
+        spatial, glob_ = python_features(_position(rows, i), io_version, ply, max_plies, float(rows["komi"][i][0]),
+                                         rows["repInfo"][i], rows["repMoves"][i])
         ds = np.abs(rows["binaryInputNCHW"][i] - spatial)
         dg = np.abs(rows["globalInputNC"][i] - glob_)
         if ds.max() > 1e-6 or dg.max() > 1e-6:

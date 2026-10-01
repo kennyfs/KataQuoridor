@@ -52,11 +52,12 @@ def is_quoridor(config: ModelConfig) -> bool:
     return config.get("game") == "quoridor"
 
 # Quoridor I/O versions (docs/QuoridorIOv2.md; QuoridorNN in cpp/neuralnet/quoridornn.h): 1 = KataQuoridor 0.1.0
-# nets, 2 = I/O v2 (legal-wall planes, plies-until-draw and komi inputs; utility-score, lead and remaining-plies heads).
+# nets, 2 = I/O v2 (legal-wall planes, plies-until-draw and komi inputs; utility-score, lead and remaining-plies heads),
+# 3 = I/O v3 = v2 + the repetition inputs (docs/QuoridorIOv3.md; same heads as v2).
 # Written by the exporter as model option D. Training data only exists for QUORIDOR_TRAINING_IO_VERSION.
-QUORIDOR_TRAINING_IO_VERSION = 2
-QUORIDOR_NUM_BIN_INPUT_FEATURES = {1: 17, 2: 19}
-QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17}
+QUORIDOR_TRAINING_IO_VERSION = 3
+QUORIDOR_NUM_BIN_INPUT_FEATURES = {1: 17, 2: 19, 3: 21}
+QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17, 3: 19}
 
 def get_quoridor_io_version(config: ModelConfig) -> int:
     assert is_quoridor(config)
@@ -1906,10 +1907,17 @@ b2c64_quoridor = {
 # (KataQuoridor 0.1.0 nets); only v2 nets can be trained.
 tf2_b4c192_quoridor_v2 = dict(tf2_b4c192_quoridor, quoridor_io_version=2)
 b2c64_quoridor_v2 = dict(b2c64_quoridor, quoridor_io_version=2)
+# Quoridor I/O v3 presets: v2 + the repetition inputs (2 spatial, 2 global channels). Only v3 nets can be trained;
+# a v2 checkpoint becomes v3 with quoridor_upgrade_v2_to_v3.py.
+tf2_b4c192_quoridor_v3 = dict(tf2_b4c192_quoridor, quoridor_io_version=3)
+b2c64_quoridor_v3 = dict(b2c64_quoridor, quoridor_io_version=3)
 
 
 base_config_of_name = {
     # QUORIDOR MODELS =============================================================
+    "tf2_b4c192_quoridor_v3": tf2_b4c192_quoridor_v3,
+    "b2c64_quoridor_v3": b2c64_quoridor_v3,
+    # I/O v2 (inference and export of existing nets, and the source of quoridor_upgrade_v2_to_v3.py).
     "tf2_b4c192_quoridor_v2": tf2_b4c192_quoridor_v2,
     "b2c64_quoridor_v2": b2c64_quoridor_v2,
     # I/O v1 (inference and export of existing nets only).

@@ -1127,6 +1127,10 @@ void NNEvaluator::evaluate(
     nnInputParams.policyOptimism = 0.0;
 
   Hash128 nnHash = NNInputs::getHash(board, history, nextPlayer, nnInputParams);
+  //Quoridor I/O v3 nets also see the repetition state (the current position's count and which pawn moves repeat),
+  //which depends on the path, not only on the board, rules and ply that getHash covers.
+  if(inputsVersion >= 3)
+    nnHash ^= QuoridorNN::repetitionInputsHash(board, history, nextPlayer);
   if(numInputMetaChannels > 0) {
     if(sgfMeta == NULL)
       Global::fatalError("SGFMetadata is required for " + modelName + " but was not provided");

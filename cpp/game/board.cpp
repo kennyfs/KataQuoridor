@@ -1134,6 +1134,19 @@ Hash128 Board::getPosHashAfterMove(Loc loc, Player pla) const {
   return copy.pos_hash;
 }
 
+Hash128 Board::getSitHashAfterPawnMove(Loc to, Player pla) const {
+  assert(pla == P_BLACK || pla == P_WHITE);
+  Loc from = pla == P_BLACK ? blackPawnLoc : whitePawnLoc;
+  assert(colors[to] == C_EMPTY);
+  //As setStone: from pla -> empty, to empty -> pla.
+  Hash128 h = pos_hash;
+  h ^= ZOBRIST_BOARD_HASH[from][pla];
+  h ^= ZOBRIST_BOARD_HASH[from][C_EMPTY];
+  h ^= ZOBRIST_BOARD_HASH[to][C_EMPTY];
+  h ^= ZOBRIST_BOARD_HASH[to][pla];
+  return h ^ ZOBRIST_PLAYER_HASH[getOpp(pla)];
+}
+
 Board Board::getMirroredX() const {
   Board b(x_size, y_size);
   for(int y = 0; y < y_size; y++) {

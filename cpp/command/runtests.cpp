@@ -64,6 +64,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("quoridorrepetition"))
     Tests::runQuoridorRepetitionTests();
 
+  if(shouldRun("quoridorv3"))
+    Tests::runQuoridorIOv3Tests();
+
   if(shouldRun("quoridorselfplay"))
     Tests::runQuoridorSelfplayTests();
 

@@ -160,7 +160,7 @@ static void testUndoAndCopies() {
   Rules rules = rulesWithRepetition(3);
   //A shuffle, Black's wall on ply 5, and a shuffle until the position after the wall occurs a third time.
   vector<string> moves = shuffleMoves(4);
-  for(const string& m : {"a2h", "e2", "e8", "e1", "e9", "e2", "e8", "e1", "e9"})
+  for(const char* m : {"a2h", "e2", "e8", "e1", "e9", "e2", "e8", "e1", "e9"})
     moves.push_back(m);
   Game full(rules);
   vector<int> counts;

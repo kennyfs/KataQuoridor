@@ -15,6 +15,9 @@
 #include "../game/boardhistory.h"
 #include "../neuralnet/nninputs.h"
 
+#include <utility>
+#include <vector>
+
 namespace QuoridorNN {
   // ---------------------------------------------------------------------------------------------
   // THE QUORIDOR MARGIN AND KataGo's "SCORE".
@@ -56,10 +59,11 @@ namespace QuoridorNN {
   constexpr int MODEL_LEN = Board::MAX_PAWN_LEN;
   // policy / optimistic-policy variants, each with {pawn, vertical wall, horizontal wall} planes.
   constexpr int NUM_POLICY_PLANES = 3;
-  // I/O versions (model option D): 1 = KataQuoridor 0.1.0 nets, 2 = docs/QuoridorIOv2.md. Both are supported
-  // for inference; training data is only written for TRAINING_IO_VERSION.
-  constexpr int MAX_SUPPORTED_IO_VERSION = 2;
-  constexpr int TRAINING_IO_VERSION = 2;
+  // I/O versions (model option D): 1 = KataQuoridor 0.1.0 nets, 2 = docs/QuoridorIOv2.md, 3 = v2 + the
+  // repetition inputs (docs/QuoridorIOv3.md). All are supported for inference; training data is only written for
+  // TRAINING_IO_VERSION.
+  constexpr int MAX_SUPPORTED_IO_VERSION = 3;
+  constexpr int TRAINING_IO_VERSION = 3;
 
   // Quoridor I/O v1 feature counts.
   constexpr int NUM_FEATURES_SPATIAL_V1 = 17;
@@ -74,8 +78,27 @@ namespace QuoridorNN {
   // Absolute scales (not relative to Rules::maxPlies / MAX_KOMI), so an input keeps its meaning across rules.
   constexpr double PLIES_UNTIL_DRAW_SCALE = 300.0;
   constexpr double SELF_KOMI_SCALE = 5.0;
-  constexpr int MAX_NUM_FEATURES_SPATIAL = NUM_FEATURES_SPATIAL_V2;
-  constexpr int MAX_NUM_FEATURES_GLOBAL = NUM_FEATURES_GLOBAL_V2;
+  // Quoridor I/O v3 = v2 + these channels, appended (see fillRow).
+  constexpr int NUM_FEATURES_SPATIAL_V3 = 21;
+  constexpr int NUM_FEATURES_GLOBAL_V3 = 19;
+  constexpr int SPATIAL_REPEATING_MOVE_V3 = 19;
+  constexpr int SPATIAL_DRAWING_MOVE_V3 = 20;
+  constexpr int GLOBAL_REPETITION_ON_V3 = 17;
+  constexpr int GLOBAL_REPETITION_COUNT_V3 = 18;
+  constexpr int MAX_NUM_FEATURES_SPATIAL = NUM_FEATURES_SPATIAL_V3;
+  constexpr int MAX_NUM_FEATURES_GLOBAL = NUM_FEATURES_GLOBAL_V3;
+
+  // Global 18 of v3: how close the current position (occurred `count` times) is to "one more occurrence draws":
+  // (count - 1) / (N - 2), with N = rules.repetitionDrawCount, so 0 the first time and 1.0 at count N - 1 (for
+  // N = 2 always 1.0). 0 when the rule is off.
+  float repetitionProgress(int count, int repetitionDrawCount);
+  // The legal pawn destinations of `pla` (the side to move in `hist`) whose resulting position already occurred since
+  // the last wall placement, with how often (so moving there makes occurrence number count + 1). Empty when the rule
+  // is off. Wall placements never repeat a position.
+  void repeatingPawnMoves(const Board& board, const BoardHistory& hist, Player pla, std::vector<std::pair<Loc,int>>& out);
+  // Everything the v3 repetition inputs read beyond Board / rules / ply (the current count and repeatingPawnMoves),
+  // hashed; Hash128() when the rule is off. NNEvaluator folds it into the NN cache hash for v3 nets.
+  Hash128 repetitionInputsHash(const Board& board, const BoardHistory& hist, Player pla);
 
   int numSpatialFeatures(int ioVersion);
   int numGlobalFeatures(int ioVersion);
@@ -104,6 +127,14 @@ namespace QuoridorNN {
   //   global 15: BoardHistory::pliesUntilDraw() / PLIES_UNTIL_DRAW_SCALE;
   //   global 16: BoardHistory::currentSelfKomi(nextPlayer, ...) / SELF_KOMI_SCALE (the standard komi -0.5
   //     reads +0.1 for Black and -0.1 for White).
+  // v3 adds, after the 19 v2 spatial / 17 v2 global features:
+  //   spatial 19: 1 on each legal pawn destination whose move repeats a position (occurrence >= 2);
+  //   spatial 20: 1 on each legal pawn destination whose move draws by repetition (occurrence >= N);
+  //     both pawn-cell planes like channel 1, 0 elsewhere and when the rule is off. Binary, because training data
+  //     stores spatial planes as bits (a scaled plane would be truncated);
+  //   global 17: 1 if the repetition rule is on (rules.repetitionDrawCount > 0);
+  //   global 18: repetitionProgress(current position's occurrence count): 1.0 = one more occurrence of this
+  //     position draws.
   void fillRow(
     const Board& board,
     const BoardHistory& boardHistory,
