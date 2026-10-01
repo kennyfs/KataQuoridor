@@ -52,6 +52,25 @@ $("boardWrap").addEventListener("wheel", e => {
   if (steps) { wheelAcc -= steps; go(steps > 0 ? 1 : -1); }
 }, { passive: false });
 
+// phones / tablets (single column): the game list is a collapsible bar so it never pushes the board off screen
+const narrow = window.matchMedia("(max-width: 1100px)");
+$("gamesHead").addEventListener("click", () => { if (narrow.matches) $("gamesPanel").classList.toggle("open"); });
+$("gameList").addEventListener("click", () => { if (narrow.matches) $("gamesPanel").classList.remove("open"); });
+
+// swipe left / right on the board steps moves (touch only; vertical swipes still scroll the page)
+{
+  let x0 = null, y0 = 0;
+  const wrap = $("boardWrap");
+  wrap.addEventListener("pointerdown", e => { if (e.pointerType === "touch") { x0 = e.clientX; y0 = e.clientY; } });
+  wrap.addEventListener("pointerup", e => {
+    if (x0 === null || !cur) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > 1.5 * Math.abs(dy)) go(dx < 0 ? 1 : -1);
+  });
+  wrap.addEventListener("pointercancel", () => { x0 = null; });
+}
+
 // chart: click to jump, hover crosshair + tooltip
 $("chart").addEventListener("click", e => { if (cur) { stopPlay(); ply = chartPlyAt(e); update(); } });
 $("chart").addEventListener("mousemove", e => {

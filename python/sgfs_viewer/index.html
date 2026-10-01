@@ -11,15 +11,15 @@
   <h1><span class="dot" style="background:var(--b-acc)"></span><span class="dot" style="background:var(--w-acc)"></span> Quoridor SGFS Viewer</h1>
   <div class="tabs"><button id="tabView" class="on">Viewer</button><button id="tabStats">Statistics</button></div>
   <span id="fileName">No file loaded</span>
-  <label class="btn" for="fileInput">Open .sgfs…</label>
+  <label class="btn" for="fileInput">Open<span class="long"> .sgfs…</span></label>
   <input type="file" id="fileInput" accept=".sgfs,.sgf,.txt">
   <button id="pathBtn" class="toggle on" title="Show all shortest paths (P)">Paths</button>
   <button id="flipBtn" title="Flip board (F)">Flip</button>
 </header>
 
 <main>
-  <section class="panel">
-    <h2>Games</h2>
+  <section class="panel games" id="gamesPanel">
+    <h2 id="gamesHead">Games <span id="gamesHeadInfo"></span></h2>
     <div class="filters">
       <select id="fRes"><option value="">All results</option><option value="B">Black wins</option><option value="W">White wins</option></select>
       <select id="fType"><option value="">All types</option></select>
@@ -90,10 +90,10 @@
     <div class="hint vis" hidden>Scroll on board / ← → step · PgUp/PgDn ±10 · Home/End · ↑ ↓ prev/next game · Space autoplay · F flip · P paths · R random game</div>
   </section>
 
-  <section class="panel">
+  <section class="panel right">
     <h2>Game</h2>
     <dl id="info"></dl>
-    <h2 style="padding-top:4px">Search trace (White's view)</h2>
+    <h2 class="trace-h">Search trace (White's view)</h2>
     <div class="legend"><span style="--c:var(--w-acc)">White win%</span><span style="--c:var(--margin)" id="marLegend">Predicted lead</span></div>
     <svg id="chart"></svg>
     <div id="moveList"></div>

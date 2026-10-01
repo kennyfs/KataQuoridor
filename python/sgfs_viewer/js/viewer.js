@@ -237,6 +237,13 @@ function chartPlyAt(e) {
   return Math.max(0, Math.min(n, Math.round(((x - CH.l) / (w - CH.l - CH.r)) * n)));
 }
 
+// Scroll `row` into view inside its own list only: element.scrollIntoView would also scroll the page (single-column layout).
+function scrollWithin(box, row) {
+  const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
+  if (r.top < b.top) box.scrollTop -= b.top - r.top;
+  else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+}
+
 // ---- Main update -----------------------------------------------------------
 function update(scrollList = true) {
   if (!cur) return;
@@ -262,7 +269,7 @@ function update(scrollList = true) {
   renderEvalStrip();
   document.querySelectorAll("#moveList .m.cur").forEach(e => e.classList.remove("cur"));
   const row = document.querySelector(`#moveList .m[data-i="${ply}"]`);
-  if (row) { row.classList.add("cur"); if (scrollList) row.scrollIntoView({ block: "nearest" }); }
+  if (row) { row.classList.add("cur"); if (scrollList) scrollWithin($("moveList"), row); }
   renderChart();
 }
 
@@ -332,6 +339,7 @@ function applyFilters() {
     return `<div class="g${i === curGameIdx ? " sel" : ""}" data-g="${i}"><span class="idx">#${i + 1}</span><span class="res ${g.winner}">${escapeHtml(g.result)}</span><span class="meta">${g.nMoves} moves${tag}</span><span class="mval">${mval}</span></div>`;
   }).join("");
   $("listCount").textContent = `${filtered.length} / ${games.length} games`;
+  $("gamesHeadInfo").textContent = curGameIdx >= 0 ? `· #${curGameIdx + 1} of ${games.length}` : `· ${games.length}`;
 }
 
 function selectGame(i) {
@@ -342,7 +350,8 @@ function selectGame(i) {
   ply = cur.startTurnIdx;
   document.querySelectorAll("#gameList .g.sel").forEach(e => e.classList.remove("sel"));
   const row = document.querySelector(`#gameList .g[data-g="${i}"]`);
-  if (row) { row.classList.add("sel"); row.scrollIntoView({ block: "nearest" }); }
+  if (row) { row.classList.add("sel"); scrollWithin($("gameList"), row); }
+  $("gamesHeadInfo").textContent = `· #${i + 1} of ${games.length}`;
   renderInfo();
   renderMoveList();
   update();
@@ -373,6 +382,7 @@ function loadText(text, name) {
   $("empty").hidden = true;
   curGameIdx = -1;
   applyFilters();
+  $("gamesPanel").classList.remove("open");
   if (games.length) selectGame(0);
   computeSummaries();
 }

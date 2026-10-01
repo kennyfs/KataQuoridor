@@ -87,7 +87,7 @@
   .walls { display: flex; gap: 3px; margin-left: auto; }
   .walls i { width: 5px; height: 18px; border-radius: 2px; background: var(--acc); }
   .walls i.used { background: #e2ded4; }
-  #board { width: 100%; height: auto; display: block; touch-action: none; }
+  #board { width: 100%; height: auto; display: block; touch-action: pan-y; }
 
   /* eval strip right under the board */
   #evalStrip { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
@@ -167,9 +167,68 @@
   table.st th:first-child, table.st td:first-child { text-align: left; }
   table.st th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
 
+  #gamesHead .arrow, #gamesHeadInfo { text-transform: none; letter-spacing: 0; }
+
+  /* One responsive layout: below 1100px everything is a single column and the page scrolls. The panels dissolve
+     (display: contents) so the board, its controls and the search trace can be ordered freely: board -> controls ->
+     trace -> game info -> move list. The game list is a collapsed bar on top. */
   @media (max-width: 1100px) {
-    main { grid-template-columns: 1fr; }
-    #gameList { max-height: 240px; }
-    #moveList { max-height: 300px; }
+    html, body { height: auto; min-height: 100%; }
+    main { display: flex; flex-direction: column; gap: 10px; padding: 10px; flex: none; }
+    .panel.center, .panel.right { display: contents; }
+    .panel.games { order: 0; }
+    .empty { order: 1; margin: 0 auto; padding: 24px; }
+    .center > .players { order: 1; } #boardWrap { order: 2; } #evalStrip { order: 3; } #moveSlider { order: 4; } .controls { order: 5; } .hint { order: 6; display: none; }
+    .players, #evalStrip, #boardWrap, #moveSlider, .controls { margin-left: auto; margin-right: auto; }
+    .right > * { order: 20; }
+    .right > .trace-h { order: 10; } .right > .legend { order: 11; } .right > #chart { order: 12; }
+    .right > h2:first-child { order: 13; } .right > #info { order: 14; } .right > #moveList { order: 15; }
+    .right > h2, .right > .legend, .right > #info { background: var(--panel); margin: 0; }
+    .right > .legend { padding-top: 0; }
+    .right > #chart, .right > #moveList, .right > #info { background: var(--panel); }
+    .right > h2:first-child { border-radius: var(--radius) var(--radius) 0 0; margin-top: 4px; }
+    .right > #moveList { max-height: 300px; border-radius: 0 0 var(--radius) var(--radius); }
+    .right > .trace-h { border-radius: var(--radius) var(--radius) 0 0; }
+    .panel.games #gamesHead { cursor: pointer; padding: 12px 14px; }
+    #gamesHead::after { content: "▾"; float: right; }
+    .panel.games.open #gamesHead::after { content: "▴"; }
+    .panel.games:not(.open) > :not(h2) { display: none; }
+    #gameList { max-height: 50vh; }
     .cards { grid-template-columns: 1fr; }
+    .card { overflow-x: auto; }
+    .card svg { min-width: 480px; }
+    table.st { display: block; overflow-x: auto; white-space: nowrap; }
+    .wr-row { grid-template-columns: 1fr; gap: 3px; }
+    .controls { position: sticky; bottom: 0; z-index: 5; background: var(--bg); padding: 6px 0; flex-wrap: wrap; box-shadow: 0 -6px 8px -6px rgba(0,0,0,.15); }
+    .controls #moveInfo { order: -1; flex: 1 0 100%; min-width: 0; }
+  }
+
+  @media (max-width: 700px) {
+    body { font-size: 15px; }
+    header { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+    header h1 { font-size: 15px; flex: 1 0 100%; }
+    header .long { display: none; }
+    header button, header .btn { padding: 4px 10px; }
+    .tabs { flex: 1 1 130px; } .tabs button { flex: 1; min-height: 40px; padding: 4px 6px; }
+    #fileName { order: 10; flex: 1 0 100%; }
+    button, .btn, select { min-height: 40px; }
+    .btn { display: inline-flex; align-items: center; }
+    .filters input { width: 100px; min-height: 40px; }
+    select, .filters input { font-size: 14px; }
+    .players { gap: 8px; }
+    .pcard { padding: 6px 8px; gap: 6px; }
+    .pcard svg { display: none; }
+    .walls i { width: 4px; }
+    #evalStrip { gap: 6px; }
+    .ev-tile { padding: 5px 9px 6px; }
+    .ev-tile .v { font-size: 20px; }
+    #moveSlider { height: 28px; }
+    .controls { gap: 5px; }
+    .controls button { flex: 1; min-width: 40px; min-height: 46px; padding: 4px 2px; }
+    .controls button.primary { flex: 1.6; }
+    .m { padding: 6px 10px; grid-template-columns: 30px 16px 40px 1fr; }
+    .g { padding: 9px 12px; grid-template-columns: 44px 56px 1fr auto; }
+    #statsView { padding: 10px; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .tile .v { font-size: 20px; }
   }
