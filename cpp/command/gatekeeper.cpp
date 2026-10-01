@@ -59,8 +59,10 @@ namespace {
     int numGamesTallied;
     int numDecisiveGames;
     int numBlackWins;
-    // Games without a winner, each worth 0.5 to both sides: draws by Rules::maxPlies, and games cut off early.
+    // Games without a winner, each worth 0.5 to both sides: draws by Rules::maxPlies, by Rules::repetitionDrawCount,
+    // and games cut off early.
     int numRuleDraws;
+    int numRepetitionDraws;
     int numOtherDraws;
     int64_t totalMovesInGames;
     double numBaselineWinPoints;
@@ -97,6 +99,7 @@ namespace {
        numDecisiveGames(0),
        numBlackWins(0),
        numRuleDraws(0),
+       numRepetitionDraws(0),
        numOtherDraws(0),
        totalMovesInGames(0),
        numBaselineWinPoints(0.0),
@@ -136,10 +139,11 @@ namespace {
         if(!suc || data == NULL)
           break;
 
-        //Quoridor I/O v2: a game without a winner (the maxPlies draw rule, or a game cut off early) is exactly half a
+        //Quoridor I/O v2: a game without a winner (the maxPlies or repetition draw rule, or a game cut off early) is exactly half a
         //point for each side (docs/QuoridorIOv2.md section 5).
         BoardHistory hist(data->endHist);
-        const bool isRuleDraw = hist.isGameFinished && hist.isDraw();
+        const bool isRepetitionDraw = hist.isRepetitionDraw();
+        const bool isRuleDraw = hist.isMaxPliesDraw();
         if(!hist.isGameFinished)
           hist.endAndScoreGameNow(hist.getRecentBoard(0));
         const double whitePoints = PlayUtils::whitePointsOfGame(hist);
@@ -154,6 +158,10 @@ namespace {
             "Game " + Global::intToString(numGamesTallied) + ": winner " + (hist.winner == P_BLACK ? "black " + data->bName : "white " + data->wName) +
             " " + oresult.str()
           );
+        }
+        else if(isRepetitionDraw) {
+          numRepetitionDraws++;
+          logger.write("Game " + Global::intToString(numGamesTallied) + ": draw (repetition " + Global::intToString(hist.rules.repetitionDrawCount) + ") " + oresult.str());
         }
         else if(isRuleDraw) {
           numRuleDraws++;
@@ -585,13 +593,14 @@ int MainCmds::gatekeeper(const vector<string>& args) {
 
     logger.write(
       Global::strprintf(
-        "Game stats for %s vs %s: %d games, %d decisive (%d black wins), %d draws by maxPlies, %d cut off, avg game length %.1f",
+        "Game stats for %s vs %s: %d games, %d decisive (%d black wins), %d draws by maxPlies, %d draws by repetition, %d cut off, avg game length %.1f",
         netAndStuff->modelNameBaseline.c_str(),
         netAndStuff->modelNameCandidate.c_str(),
         netAndStuff->numGamesTallied,
         netAndStuff->numDecisiveGames,
         netAndStuff->numBlackWins,
         netAndStuff->numRuleDraws,
+        netAndStuff->numRepetitionDraws,
         netAndStuff->numOtherDraws,
         netAndStuff->numGamesTallied > 0 ? (double)netAndStuff->totalMovesInGames / netAndStuff->numGamesTallied : 0.0
       )

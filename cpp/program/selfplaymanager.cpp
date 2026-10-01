@@ -16,6 +16,7 @@ SelfplayManager::ModelData::ModelData(
   gamesFinishedCount(0),
   movesPlayedCount(0),
   gamesDrawnCount(0),
+  gamesRepetitionDrawnCount(0),
   gamesCutoffCount(0),
   movesPlayedCutoffCount(0),
   lastReleaseTime(initialTime),
@@ -350,6 +351,8 @@ void SelfplayManager::countQuoridorGameResult(NNEvaluator* nnEval, const Finishe
   std::lock_guard<std::mutex> statsLock(stats.mutex);
   stats.games += 1;
   stats.draws += isDecisive ? 0 : 1;
+  stats.repetitionDraws += hist.isRepetitionDraw() ? 1 : 0;
+  stats.maxPliesDraws += hist.isMaxPliesDraw() ? 1 : 0;
   stats.plies += hist.getCurrentTurnNumber();
   if(isNormal && standardWalls) {
     std::pair<int64_t,int64_t>& bucket = stats.byKomi[hist.rules.komi];
@@ -375,7 +378,9 @@ string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
   string s =
     "Quoridor stats for " + modelData->modelName +
     ": completed " + Global::int64ToString(stats.games) +
-    ", draws " + Global::int64ToString(stats.draws) + " (rate " + rate(stats.draws, stats.games) + ")" +
+    ", draws " + Global::int64ToString(stats.draws) + " (rate " + rate(stats.draws, stats.games) +
+    "; repetition " + Global::int64ToString(stats.repetitionDraws) + " (rate " + rate(stats.repetitionDraws, stats.games) + ")" +
+    ", maxPlies " + Global::int64ToString(stats.maxPliesDraws) + " (rate " + rate(stats.maxPliesDraws, stats.games) + "))" +
     ", avg plies " + Global::strprintf("%.1f", stats.games > 0 ? (double)stats.plies / (double)stats.games : 0.0) +
     ", black win rate in normal standard games " + rate(stats.standardBlackWins, stats.standardGames) +
     " (" + Global::int64ToString(stats.standardBlackWins) + "/" + Global::int64ToString(stats.standardGames) + ")" +
@@ -391,6 +396,7 @@ string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
 string SelfplayManager::gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount) {
   int64_t finished = modelData->gamesFinishedCount.load(std::memory_order_relaxed);
   int64_t drawn = modelData->gamesDrawnCount.load(std::memory_order_relaxed);
+  int64_t repetitionDrawn = modelData->gamesRepetitionDrawnCount.load(std::memory_order_relaxed);
   int64_t cutoff = modelData->gamesCutoffCount.load(std::memory_order_relaxed);
   int64_t moves = modelData->movesPlayedCount.load(std::memory_order_relaxed) + modelData->movesPlayedCutoffCount.load(std::memory_order_relaxed);
   int64_t completed = finished + cutoff;
@@ -401,7 +407,8 @@ string SelfplayManager::gameStatsSummary(const ModelData* modelData, int64_t gam
     "Game stats for " + modelData->modelName +
     ": started " + Global::int64ToString(gameStartedCount) +
     ", finished normally " + Global::int64ToString(finished) +
-    " (draws " + Global::int64ToString(drawn) + ", draw rate " + Global::doubleToString(drawRate) + ")" +
+    " (draws " + Global::int64ToString(drawn) + ", draw rate " + Global::doubleToString(drawRate) +
+    ", of which by repetition " + Global::int64ToString(repetitionDrawn) + ")" +
     ", hit cutoff " + Global::int64ToString(cutoff) +
     ", cutoff rate " + Global::doubleToString(cutoffRate) +
     ", avg game length " + Global::doubleToString(avgLength);
@@ -470,6 +477,8 @@ void SelfplayManager::runDataWriteLoopImpl(ModelData* modelData) {
     modelData->gamesFinishedCount.fetch_add(1, std::memory_order_relaxed);
     if(gameData->endHist.isDraw())
       modelData->gamesDrawnCount.fetch_add(1, std::memory_order_relaxed);
+    if(gameData->endHist.isRepetitionDraw())
+      modelData->gamesRepetitionDrawnCount.fetch_add(1, std::memory_order_relaxed);
     // Moves actually played by search this game (excludes any pre-placed opening/start-position moves).
     testAssert(gameData->startHist.moveHistory.size() <= gameData->endHist.moveHistory.size());
     modelData->movesPlayedCount.fetch_add(

@@ -98,8 +98,10 @@ class SelfplayManager {
     // Counted at game-finish in the data write loop (lock-free), read cross-thread for logging.
     std::atomic<int64_t> gamesFinishedCount;
     std::atomic<int64_t> movesPlayedCount;
-    // Of the finished games above, those drawn by Rules::maxPlies (written to training data like the others).
+    // Of the finished games above, those drawn by Rules::maxPlies or Rules::repetitionDrawCount (written to training
+    // data like the others), and of those, the repetition draws.
     std::atomic<int64_t> gamesDrawnCount;
+    std::atomic<int64_t> gamesRepetitionDrawnCount;
     // Games that hit the move cutoff, and the moves in them. These games are not written or counted above.
     std::atomic<int64_t> gamesCutoffCount;
     std::atomic<int64_t> movesPlayedCutoffCount;
@@ -108,6 +110,9 @@ class SelfplayManager {
       std::mutex mutex;
       int64_t games = 0;
       int64_t draws = 0;
+      // Of the draws: by repetition, by maxPlies (the rest were cut off).
+      int64_t repetitionDraws = 0;
+      int64_t maxPliesDraws = 0;
       int64_t plies = 0;
       // Normal games (not forks etc.) with the standard komi and 10/10 walls.
       int64_t standardGames = 0;
