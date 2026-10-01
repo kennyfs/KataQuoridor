@@ -60,7 +60,7 @@ $("chart").addEventListener("mousemove", e => {
   if (hv) { hv.setAttribute("x1", X(i)); hv.setAttribute("x2", X(i)); hv.setAttribute("visibility", "visible"); }
   const mv = cur.moves[i];
   let html = `<b>Position ${i}</b>` + (i < cur.moves.length ? ` · next ${mv.pla} ${notation(mv)}` : " · end");
-  if (hasEv(mv)) html += `<br>${sw("var(--w-acc)")}White win ${pct(mv.ev.wWin)}<br>${sw("var(--margin)")}${mv.ev.lead !== undefined ? `Lead ${fmtScore(mv.ev.lead)} · utility ${fmtScore(mv.ev.wScore)}` : `Margin ${fmtScore(mv.ev.wScore)}`}<br>visits ${mv.ev.v ?? "?"}`;
+  if (hasEv(mv)) html += `<br>${sw("var(--w-acc)")}White win ${pct(mv.ev.wWin)}<br>${sw("var(--margin)")}${mv.ev.hasLead ? "Lead" : "Margin (no lead)"} ${fmtScore(mv.ev.wMargin)}<br>visits ${mv.ev.v ?? "?"}`;
   else html += `<br>${i < cur.startTurnIdx ? "random init" : i >= cur.moves.length ? games[curGameIdx].result : "no search"}`;
   showTip(e, html);
 });

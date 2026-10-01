@@ -31,7 +31,7 @@ function summarize(line, h) {
       addWallToBlock(bl, k, mv.x, mv.y);
       for (const p of ["B", "W"]) if (wallAffects(dG[p], k, mv.x, mv.y)) dG[p] = goalDist(bl, p);
     }
-    if (hasEv(mv)) s.evs.push({ i, pla: mv.pla, p: mv.ev.wWin, score: mv.ev.wMargin, v: mv.ev.v, w: mv.ev.weight });
+    if (hasEv(mv)) s.evs.push({ i, pla: mv.pla, p: mv.ev.wWin, score: mv.ev.wMargin, lead: mv.ev.hasLead, v: mv.ev.v, w: mv.ev.weight });
     race();
   });
   if (!isFinite(s.raceDeficit)) s.raceDeficit = null;
@@ -40,6 +40,7 @@ function summarize(line, h) {
   const pw = e => s.winner === "W" ? e.p : 1 - e.p;
   const sw = e => s.winner === "W" ? e.score : -e.score;
   s.minWinnerP = has ? Math.min(...E.map(pw)) : null;
+  s.hasLead = has && E.every(e => e.lead);   // margin values below are the predicted lead (else the old score)
   s.minWinnerScore = has ? Math.min(...E.map(sw)) : null;
   let lastBelow = -1, lead = 0, vol = 0, swing = 0, brier = 0, prevSide = 0;
   E.forEach((e, k) => {

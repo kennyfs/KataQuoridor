@@ -7,8 +7,9 @@
 // Move comments (sgf.cpp) are the value targets of the search at the position BEFORE that
 // move, from White's perspective: "win loss noResult score v=.. [rv=..] weight=.. [result=..] [lead=..]".
 // score is the search's utility score u (with the time bonus: not comparable across nets trained with different
-// lambdas); lead (arena SGFs, scoreLead) is the predicted tempo lead s. ev.wMargin is the margin shown and used
-// as a prediction: lead when present, else score.
+// lambdas) and is never displayed when lead is present; lead (scoreLead) is the predicted tempo lead s. ev.wMargin
+// is the margin shown and used as a prediction: lead when present, else score (old files: ev.hasLead is false and the
+// viewer labels it "margin (no lead in file)").
 // So the eval of the position after `ply` moves is moves[ply].ev.
 const N = 9, WALLS_PER_PLAYER = 10;
 const CELL = 50, GAP = 12, PITCH = CELL + GAP, PAD = 30;
@@ -104,7 +105,8 @@ function parseEval(c) {
   if (ev.rv !== undefined) ev.rv = +ev.rv;
   if (ev.weight !== undefined) ev.weight = +ev.weight;
   if (ev.lead !== undefined) ev.lead = +ev.lead;
-  ev.wMargin = ev.lead !== undefined ? ev.lead : ev.wScore;
+  ev.hasLead = ev.lead !== undefined;
+  ev.wMargin = ev.hasLead ? ev.lead : ev.wScore;
   return ev;
 }
 const hasEv = mv => mv && mv.ev && !mv.ev.onlyResult;

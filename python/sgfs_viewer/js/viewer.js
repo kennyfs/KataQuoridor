@@ -123,9 +123,9 @@ function renderEvalStrip() {
   $("evWinV").textContent = pct(ev.wWin);
   $("evWinBar").style.flexBasis = (100 * ev.wWin).toFixed(1) + "%";
   $("evWinS").innerHTML = `B ${pct(ev.wLoss)}` + (ev.noRes > 0 ? ` · draw ${pct(ev.noRes)}` : "") + " ·" + dSpan(dW, x => (100 * x).toFixed(1) + "pt");
-  $("evMar").querySelector(".k").textContent = ev.lead !== undefined ? "Predicted lead (W)" : "Game margin (W)";
+  $("evMar").querySelector(".k").textContent = ev.hasLead ? "Predicted lead (W)" : "Margin (W) · no lead in file";
   $("evMarV").textContent = fmtScore(ev.wMargin);
-  $("evMarS").innerHTML = (ev.lead !== undefined ? `utility ${fmtScore(ev.wScore)} · ` : "") + (ev.wMargin >= 0 ? "White ahead" : "Black ahead") + (dS === null ? "" : " ·" + dSpan(dS, x => x.toFixed(1)));
+  $("evMarS").innerHTML = (ev.wMargin >= 0 ? "White ahead" : "Black ahead") + (dS === null ? "" : " ·" + dSpan(dS, x => x.toFixed(1)));
   $("evVisV").textContent = ev.v ?? "—";
   $("evVisS").innerHTML = [ev.rv !== undefined ? `reanalysis ${ev.rv}` : null, ev.weight !== undefined ? `weight ${ev.weight.toFixed(2)}` : null, `chose <b>${mv.pla} ${notation(mv)}</b>`].filter(Boolean).join(" · ");
 }
@@ -152,7 +152,7 @@ function renderMoveList() {
     if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">Random init · ${cur.startTurnIdx} moves</div>`);
     if (i === cur.startTurnIdx && i > 0) parts.push(`<div class="sep">Self-play search</div>`);
     const e = mv.ev;
-    const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}% · ${e.lead !== undefined ? `lead ${fmtScore(e.lead)} · u ${fmtScore(e.wScore)}` : fmtScore(e.wScore)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
+    const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}% · ${e.hasLead ? "lead" : "margin"} ${fmtScore(e.wMargin)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
     parts.push(`<div class="m${i < cur.startTurnIdx ? " init" : ""}" data-i="${i + 1}"><span class="n">${i + 1}</span><span class="who ${mv.pla}"></span><span class="mv">${notation(mv)}</span><span class="ev">${ev}</span></div>`);
   });
   $("moveList").innerHTML = parts.join("");
@@ -169,7 +169,10 @@ function chartGeom() {
   return { svg, w, n, X, top2 };
 }
 
+const curHasLead = () => cur.moves.some(mv => hasEv(mv) && mv.ev.hasLead);
+
 function renderChart() {
+  $("marLegend").textContent = curHasLead() ? "Predicted lead" : "Margin (no lead in file)";
   const { svg, w, n, X, top2 } = chartGeom();
   const H = top2 + CH.h2 + CH.b;
   svg.setAttribute("viewBox", `0 0 ${w} ${H}`);
@@ -204,7 +207,7 @@ function renderChart() {
   txt(svg, CH.l - 5, Ym(0) + 4, "0", { "text-anchor": "end" });
   txt(svg, CH.l - 5, Ym(-M), "−" + M, { "text-anchor": "end" });
   txt(svg, w - CH.r, CH.t + 10, "win%", { "text-anchor": "end", fill: "#6b7885" });
-  txt(svg, w - CH.r, top2 + 10, "margin", { "text-anchor": "end", fill: "#6b7885" });
+  txt(svg, w - CH.r, top2 + 10, curHasLead() ? "lead" : "margin", { "text-anchor": "end", fill: "#6b7885" });
 
   if (pts.length) {
     const line = (Y, key) => pts.map((p, k) => (k ? "L" : "M") + X(p.i).toFixed(1) + " " + Y(p.ev[key]).toFixed(1)).join("");
@@ -268,7 +271,7 @@ function update(scrollList = true) {
 const SORTS = [
   { key: "idx", label: "File order", desc: "Games in the order they appear in the file.", get: s => s.i, fmt: v => v + 1, dir: "asc" },
   { key: "comeback", label: "Comeback (win%)", desc: "Winner's lowest White/Black win% during search. Low = the winner was nearly lost.", get: s => s.minWinnerP, fmt: v => pct(v, 0), dir: "asc" },
-  { key: "scoreComeback", label: "Comeback (margin)", desc: "Winner's worst predicted game margin during search. Negative = the winner was predicted to lose by that much.", get: s => s.minWinnerScore, fmt: fmtScore, dir: "asc" },
+  { key: "scoreComeback", label: "Comeback (lead)", desc: "Winner's worst predicted lead during search. Negative = the winner was predicted to trail by that much.", get: s => leadOnly(s) ? s.minWinnerScore : null, fmt: fmtScore, dir: "asc" },
   { key: "raceDeficit", label: "Race comeback (path)", desc: "Winner's worst path-race deficit: max over positions of (winner's shortest path − loser's). High = the winner was far behind in the race.", get: s => s.raceDeficit, fmt: v => (v > 0 ? "+" : "") + v, dir: "desc" },
   { key: "leadChanges", label: "Lead changes", desc: "Times the win% crossed 50% during search.", get: s => s.leadChanges, fmt: v => v, dir: "desc" },
   { key: "volatility", label: "Volatility", desc: "Total win% movement: sum of |Δ win%| between consecutive searches.", get: s => s.volatility, fmt: v => (100 * v).toFixed(0), dir: "desc" },
@@ -281,6 +284,14 @@ const SORTS = [
   { key: "len", label: "Length", desc: "Total moves.", get: s => s.n, fmt: v => v, dir: "desc" },
 ];
 let sortDesc = false;
+// Lead-based metrics use only games that carry lead=; if none do (old files) the old score margin is used instead.
+const leadOnly = s => s.hasLead || !statsCache.some(t => t.hasLead);
+function sortNote(M) {
+  if (M.key !== "scoreComeback") return M.desc;
+  const nLead = statsCache.filter(t => t.hasLead).length, nEv = statsCache.filter(t => t.minWinnerScore !== null).length;
+  if (!nLead) return "Margin (no lead in file): " + M.desc.replace("predicted lead", "predicted margin (old score)").replace("trail", "lose");
+  return M.desc + (nLead < nEv ? ` ${nEv - nLead} games without lead= skipped.` : "");
+}
 function initSortSelect() {
   $("sortKey").innerHTML = SORTS.map(s => `<option value="${s.key}">${s.label}</option>`).join("");
 }
@@ -308,7 +319,8 @@ function applyFilters() {
       return sign * (va - vb) || a - b;
     });
   }
-  $("sortDesc").textContent = statsCache ? M.desc : "Computing game metrics…";
+  if (statsCache) $("sortKey").querySelector('option[value="scoreComeback"]').textContent = statsCache.some(t => t.hasLead) || !statsCache.length ? "Comeback (lead)" : "Comeback (margin, no lead)";
+  $("sortDesc").textContent = statsCache ? sortNote(M) : "Computing game metrics…";
   $("sortDir").textContent = sortDesc ? "↓" : "↑";
   $("gameList").innerHTML = filtered.map(i => {
     const g = games[i];
