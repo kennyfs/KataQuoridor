@@ -169,6 +169,7 @@ class Player:
                                 default_timeout=command_timeout)
         self.genmove_timeout = genmove_timeout
         self._has_legal = None
+        self._kata = spec.get("kata")  # None: auto-detect
         self.rules_state = RulesState()
 
     def new_game(self, rules=None):
@@ -196,13 +197,114 @@ class Player:
                 self._has_legal = False
         return self._has_legal
 
+    def is_kata(self):
+        """Whether to ask this engine for its search info with KATA_GENMOVE (roster "kata": true / false, else
+        auto-detected with known_command)."""
+        if self._kata is None:
+            try:
+                self._kata = self.engine.known_command(KATA_GENMOVE)
+            except QTPError:
+                self._kata = False
+        return self._kata
+
+    def genmove(self, color):
+        """Ask for a move. Returns (ok, move or error text, eval dict or None). For a KataQuoridor engine the
+        move comes from kata-genmove_analyze (the same search as genmove, the analysis is printed once at the
+        end) and the eval is its root info, see parse_kata_genmove."""
+        if not self.is_kata():
+            ok, text = self.engine.send("genmove %s" % color, timeout=self.genmove_timeout)
+            return ok, (text.strip().split()[0].lower() if (ok and text.strip()) else text), None
+        ok, text = self.engine.send(KATA_GENMOVE_CMD % color, timeout=self.genmove_timeout)
+        if not ok:
+            return ok, text, None
+        mv, ev = parse_kata_genmove(text, color, self.spec.get("kata_perspective", "sidetomove"))
+        return True, mv if mv is not None else text, ev
+
     def close(self):
         self.engine.close()
 
 
-def fix_sgf(sgf, black, white, result, opening_plies, extra_comment=""):
+# -- search info (KataQuoridor's kata-genmove_analyze) ---------------------------
+
+KATA_GENMOVE = "kata-genmove_analyze"
+# No interval: the analysis is printed once, for the final search, then "play <move>".
+KATA_GENMOVE_CMD = KATA_GENMOVE + " %s rootInfo true noResultValue true"
+
+
+def _kv_after(tokens, start):
+    out = {}
+    for i in range(start, len(tokens) - 1, 2):
+        out[tokens[i]] = tokens[i + 1]
+    return out
+
+
+def parse_kata_genmove(text, color, perspective="sidetomove"):
+    """Parse a kata-genmove_analyze response: "info move .. info move .. rootInfo k v ..." lines, then
+    "play <move>". Returns (move or None, eval or None); the eval is White's view of the search at the position
+    before the move: {"win", "loss", "noResult", "score" (scoreSelfplay: the utility score u, with the time bonus),
+    "lead" (scoreLead: the predicted lead s), "visits" (root)}.
+
+    `perspective` is the engine's reportAnalysisWinratesAs (KataQuoridor's default: the side to move). The root
+    info has no noResult value; it is taken from the played move's info (noResultValue), 0 if missing.
+    """
+    move = None
+    info_lines = []
+    for line in text.splitlines():
+        t = line.split()
+        if len(t) >= 2 and t[0] == "play":
+            move = t[1].lower()
+        elif t and t[0] == "info":
+            info_lines.append(line)
+    if move is None:
+        return None, None
+    # Several "info move" blocks may share one line; rootInfo is last.
+    blob = " ".join(info_lines)
+    root = None
+    no_result = 0.0
+    if " rootInfo " in blob + " ":
+        head, _, tail = blob.partition(" rootInfo ")
+        root = _kv_after(tail.split(), 0)
+    else:
+        head = blob
+    for chunk in head.split("info ")[1:]:
+        kv = _kv_after(chunk.split(), 0)
+        if kv.get("move", "").lower() == move and "noResultValue" in kv:
+            no_result = float(kv["noResultValue"])
+    if root is None or "winrate" not in root:
+        return move, None
+    winrate, score, lead = float(root["winrate"]), float(root["scoreSelfplay"]), float(root["scoreLead"])
+    persp = perspective.lower()
+    white_view = persp in ("w", "white") or (persp not in ("b", "black") and color == "w")
+    if not white_view:
+        winrate, score, lead = 1.0 - winrate, -score, -lead
+    win = min(1.0, max(0.0, winrate - no_result / 2))
+    loss = min(1.0, max(0.0, 1.0 - no_result - win))
+    return move, {"win": win, "loss": loss, "noResult": no_result, "score": score, "lead": lead,
+                  "visits": int(float(root.get("visits", 0)))}
+
+
+def eval_comment(ev):
+    """The self-play move comment (cpp/dataio/sgf.cpp: "win loss noResult score v=..", White's view) plus the
+    predicted lead as a named token, e.g. "0.48 0.52 0.00 -0.2 v=256 lead=-0.17"."""
+    return "%.2f %.2f %.2f %.1f v=%d lead=%.2f" % (ev["win"], ev["loss"], ev["noResult"], ev["score"],
+                                                   ev["visits"], ev["lead"])
+
+
+def add_move_comments(sgf, comments):
+    """Put comments[i] (or nothing for None) on the i-th move node of a one-line SGF."""
+    idx = [0]
+
+    def sub(m):
+        i = idx[0]
+        idx[0] += 1
+        c = comments[i] if i < len(comments) else None
+        return m.group(0) if not c else m.group(0) + "C[%s]" % c
+    return re.sub(r";[BW]\[[^\]]*\]", sub, sgf)
+
+
+def fix_sgf(sgf, black, white, result, opening_plies, extra_comment="", move_comments=None):
     """Turn the arbiter's printsgf output into a self-play style one-line SGF record. KM, WB, WW and RU come from
-    the arbiter; RE is `result`."""
+    the arbiter; RE is `result`. move_comments[i] (if not None) becomes the comment of the i-th move."""
     sgf = " ".join(sgf.split("\n")).strip()
     semi = sgf.find(";", 2)
     root = sgf if semi < 0 else sgf[:semi]
@@ -213,6 +315,8 @@ def fix_sgf(sgf, black, white, result, opening_plies, extra_comment=""):
     if extra_comment:
         comment += "," + extra_comment
     root += "PB[%s]PW[%s]RE[%s]C[%s]" % (black, white, result, comment)
+    if move_comments:
+        body = add_move_comments(body, move_comments)
     return root + body
 
 
@@ -225,6 +329,7 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
     players = {"b": black, "w": white}
     arbiter.clear(rules)
     moves = []
+    evals = []  # per move: the mover's search info (White's view) or None
     result = None  # (winner_color or None, reason, detail)
 
     def forfeit(loser_color, reason, detail):
@@ -258,6 +363,7 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
             if result is not None:
                 break
             moves.append(mv)
+            evals.append(None)
             color = other(color)
 
     while result is None:
@@ -289,14 +395,14 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
                        sorted(got - ref) if got is not None else "(error: %s)" % text,
                        sorted(ref - got) if got is not None else ""))
         try:
-            ok, text = mover.engine.send("genmove %s" % color, timeout=mover.genmove_timeout)
+            ok, mv, ev = mover.genmove(color)
         except QTPTimeout as e:
             result = forfeit(color, "timeout", str(e))
             break
         except QTPError as e:
             result = forfeit(color, "crash", str(e))
             break
-        mv = text.strip().split()[0].lower() if (ok and text.strip()) else ""
+        text = mv
         if not ok or mv in ("", "resign", "pass"):
             result = forfeit(color, "illegal", "genmove returned %r (ok=%s)" % (text, ok))
             break
@@ -304,6 +410,7 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
             result = forfeit(color, "illegal", "illegal move %s after %s" % (mv, " ".join(moves)))
             break
         opp = players[other(color)]
+        evals.append(ev)
         try:
             ok, text = opp.engine.send("play %s %s" % (color, mv))
         except QTPTimeout as e:
@@ -336,7 +443,8 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
     else:
         re_str, lead = "%s+F" % winner.upper(), None
         margin = max(1, wd if winner == "b" else bd)
-    sgf = fix_sgf(sgf, black.name, white.name, re_str, len(opening), "reason=%s" % reason)
+    sgf = fix_sgf(sgf, black.name, white.name, re_str, len(opening), "reason=%s" % reason,
+                  move_comments=[eval_comment(e) if e else None for e in evals])
     return {
         "black": black.name,
         "white": white.name,
@@ -352,6 +460,9 @@ def play_game(arbiter, black, white, opening, max_plies=300, verify=False, log=p
         "reason": reason,
         "detail": detail,
         "moves": moves,
+        # per move [White win, score (utility, with the time bonus), lead, visits] of the mover's search, or None
+        "evals": [None if e is None else [round(e["win"], 3), round(e["score"], 2), round(e["lead"], 2), e["visits"]]
+                  for e in evals] if any(evals) else None,
         "seconds": round(time.time() - t0, 2),
         "sgf": sgf,
     }

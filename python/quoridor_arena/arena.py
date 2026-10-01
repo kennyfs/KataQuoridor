@@ -63,6 +63,9 @@ def load_roster(path, out_dir):
     An entry's "supports_rules" (default: true for katago_model entries, false otherwise) says whether the engine
     understands QTP komi and kata-set-rule blackInitialWalls / whiteInitialWalls; engines that don't (SimpleQuoridor)
     can only play the standard game.
+    An entry's "kata" (default: auto-detected with known_command kata-genmove_analyze) says whether the engine is
+    asked for its moves with kata-genmove_analyze, which puts its search info on the move nodes of the SGF
+    (referee.parse_kata_genmove); "kata_perspective" is its reportAnalysisWinratesAs if not the side to move.
 
     Game rules (komi, blackInitialWalls, whiteInitialWalls; default the standard -0.5, 10, 10):
       "rules": {"komi": 1.5, ...}                          for all games

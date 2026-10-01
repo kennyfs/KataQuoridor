@@ -12,7 +12,9 @@ It speaks the same QTP subset the arena uses, including komi and kata-set-rule b
 (they only show in printsgf), so it can serve as both arbiter and player.
 Flags: --illegal (genmove answers "z9"), --crash-after N (exit after N genmoves),
 --hang-after N (stop answering after N genmoves), --no-legal (unknown legal_moves),
---no-rules (unknown komi / kata-set-rule, like SimpleQuoridor), --max-plies N.
+--no-rules (unknown komi / kata-set-rule, like SimpleQuoridor), --max-plies N,
+--kata (answers kata-genmove_analyze like KataQuoridor, from the side to move: winrate 0.7, scoreLead 2.5,
+scoreSelfplay 3 for Black to move; winrate 0.2, scoreLead -1.5, scoreSelfplay -2 for White).
 """
 import argparse
 import sys
@@ -93,6 +95,7 @@ def main():
     ap.add_argument("--no-rules", action="store_true")
     ap.add_argument("--max-plies", type=int, default=300)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--kata", action="store_true")
     args = ap.parse_args()
     rules = dict(STANDARD_RULES)
     g = Game(rules, args.max_plies)
@@ -117,6 +120,8 @@ def main():
                 known.add("legal_moves")
             if not args.no_rules:
                 known.update({"komi", "get_komi", "kata-set-rule"})
+            if args.kata:
+                known.add("kata-genmove_analyze")
             reply(True, "true" if rest and rest[0] in known else "false")
         elif cmd == "clear_board":
             # Like KataQuoridor, the rules persist across clear_board.
@@ -139,7 +144,7 @@ def main():
         elif cmd == "play":
             ok = len(rest) == 2 and g.play(rest[0].lower()[0], rest[1].lower())
             reply(ok, "" if ok else "illegal move")
-        elif cmd == "genmove":
+        elif cmd in ("genmove", "kata-genmove_analyze") and (cmd == "genmove" or args.kata):
             genmoves += 1
             if genmoves == args.crash_after:
                 sys.exit(3)
@@ -149,7 +154,20 @@ def main():
             mv = "z9" if args.illegal else g.legal(c)[0]
             if not args.illegal:
                 g.play(c, mv)
-            reply(True, mv)
+            if cmd == "genmove":
+                reply(True, mv)
+            else:
+                wr, lead, sp = (0.7, 2.5, 3.0) if c == "b" else (0.2, -1.5, -2.0)
+                other_mv = "a1h"
+                sys.stdout.write(
+                    "=\ninfo move %s visits 9 edgeVisits 9 utility 0.1 winrate %g scoreMean %g scoreStdev 2 "
+                    "scoreLead %g scoreSelfplay %g noResultValue 0 prior 0.5 lcb 0.5 utilityLcb 0 weight 9 order 0 "
+                    "pv %s info move %s visits 1 edgeVisits 1 utility 0 winrate 0.5 scoreMean 0 scoreStdev 2 "
+                    "scoreLead 0 scoreSelfplay 0 noResultValue 0.5 prior 0.1 lcb 0 utilityLcb 0 weight 1 order 1 "
+                    "pv %s rootInfo visits 10 utility 0.1 winrate %g scoreMean %g scoreStdev 2 scoreLead %g "
+                    "scoreSelfplay %g weight 10\nplay %s\n\n" % (
+                        mv, wr, lead, lead, sp, mv, other_mv, other_mv, wr, lead, lead, sp, mv))
+                sys.stdout.flush()
         elif cmd == "legal_moves" and not args.no_legal:
             reply(True, " ".join(g.legal()))
         elif cmd == "winner":
