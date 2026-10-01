@@ -116,8 +116,8 @@ optimizer and steps.)
    reset its train bucket, "Data was deleted or this network was transplanted"). Old `shuffleddata/` directories are
    regenerated each cycle and can be deleted.
 6. **Restart** with the v3 model kind: `./synchronous_loop.sh <NAMEPREFIX> $BASEDIR run3 tf2_b4c192_quoridor_v3
-   <USEGATING>`. The default configs are now `selfplay_quoridor_v2.cfg` / `gatekeeper_quoridor_v2.cfg` with
-   `repetitionDrawCount = 3`. The first cycle self-plays with the newest model in `models/`, a v2 net (it writes v3
+   <USEGATING>`. The default configs are now `selfplay_quoridor_v2.cfg` / `gatekeeper_quoridor_v2.cfg`: the
+   gatekeeper always plays with `repetitionDrawCount = 3`; self-play draws the rule per game (§6.2). The first cycle self-plays with the newest model in `models/`, a v2 net (it writes v3
    rows; for a v2 net the rule is still enforced by search, it just doesn't see the counts), then trains the upgraded
    checkpoint and exports the first v3 net. With gating, the gatekeeper plays the v3 candidate against the v2
    incumbent as usual.
@@ -137,6 +137,28 @@ move; 1 repetition draw). The smoke dir held only one model's data, so train.py 
 than the checkpoint had seen); I set `train_bucket_level_at_row` to the smoke dir's row count to stand in for the
 full directory. With the full `selfplay/` directory converted in place this does not happen.
 
+### 6.2 The rule per game in self-play (mix)
+
+Nets must play well with the rule (self-play, KataQuoridor-only matches) and without it (the arena against other
+engines and the standard GTP config, where only the 300-ply draw applies). v3 nets see whether it is on (global
+17), so self-play trains on a mix instead of only N = 3:
+
+| Config key (`GameInitializer`) | Default | `selfplay_quoridor_v2.cfg` |
+|---|---|---|
+| `quoridorRepetitionDrawProb` | not set: every game has the config's `repetitionDrawCount` | 0.75 (rule on in 75% of games) |
+| `quoridorRepetitionDrawCounts` | 3 | 3, 4 |
+| `quoridorRepetitionDrawCountWeights` | equal | 0.9, 0.1 |
+
+Drawn per game from the empty board, independently of the komi and fence randomization. Fork games keep their
+game's rule (they start from an `InitialPosition` with the game's history, or replay with its `startHist.rules`);
+side positions and reanalysis use the game's histories. SGF-start positions keep the config's `repetitionDrawCount`.
+Setting the key makes `mayCreateNonStandardGames` true, so the gatekeeper refuses it (its config has a fixed N = 3).
+`runtests quoridorselfplay` (40,000 games, fixed seed): rule on 0.7497 (expected 0.75), of which N = 3 0.8974
+(0.9), random komi among them 0.3014 (independent: 0.30), fence handicap 0.1014 (0.10); fork games keep N = 4 or
+off. Self-play stats split by rule:
+`by repetition rule: on 455 games draw rate 0.002 avg plies 73.5, off 145 games draw rate 0.000 avg plies 72.5`
+(600 games, run3-s7865856; SGF `RU`: 412 games with `repetitionDrawCount=3`, 43 with 4, 145 without).
+
 ## 7. The random phase of a from-scratch run
 
 Measured with the v2 self-play config and a random net (400 games each):
@@ -151,14 +173,18 @@ decisive, and those wins are the first value signal. With the rule, random walks
 and 86% of the games become draws (value 0.5 / 0.5, no lead target). The value head would mostly learn "draw", and
 the decisive-game signal per GPU-hour drops (fewer, shorter games, mostly draws).
 
-**Recommendation:** start a from-scratch run with the rule **off** (`repetitionDrawCount = 0` in the self-play
-config) and turn it on (3) once the nets play purposeful races, e.g. when the decisive rate with the rule on would be
-above ~90% (try a few hundred self-play games with `-override-config repetitionDrawCount=3`) or after the first few
-accepted models. v3 nets see the rule's state (global 17), so rows from both phases train one net consistently, and
-the gatekeeper should use the same setting as self-play at each phase. Not implemented as a config schedule: switching
-the key between cycles is enough. A per-game probability (e.g. 50% of games with the rule during a transition) would
-be a small `GameInitializer` addition if wanted later. run3 is far past this phase: with its nets the rule draws
-0.3–0.6% of games.
+With the 75% mix (§6.2) and a random net (600 games): draws 63.8% overall; rule on: 80.8% draws, 56 plies; rule
+off: 16.5% draws, 172 plies. The 25% rule-off games supply most of the decisive games (132 of 217) and, being long,
+most of the rows.
+
+**Recommendation:** don't turn the rule off entirely while the net is random; use a **lower on-probability early**,
+e.g. `quoridorRepetitionDrawProb = 0.25` for the first few models, then the 0.75 of the v2 config once the nets play
+purposeful races (decisive rate with the rule on above ~90%: check with a few hundred games and
+`-override-config quoridorRepetitionDrawProb=1`). With 0.25 roughly 3/4 of games are rule-off random walks that
+mostly end at a goal, which is where the early value signal comes from, while the net still sees rule-on rows from
+the start, so raising the probability later is a shift in the game mix, not new inputs. Fully off would also work but
+gains little over 0.25. Change the key between cycles; the gatekeeper keeps N = 3 (decisive games between real nets
+are unaffected). run3 is far past this phase: with its nets the rule draws 0.2–0.6% of games.
 
 ## 8. Where things live
 

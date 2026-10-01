@@ -354,6 +354,12 @@ void SelfplayManager::countQuoridorGameResult(NNEvaluator* nnEval, const Finishe
   stats.repetitionDraws += hist.isRepetitionDraw() ? 1 : 0;
   stats.maxPliesDraws += hist.isMaxPliesDraw() ? 1 : 0;
   stats.plies += hist.getCurrentTurnNumber();
+  {
+    const int r = hist.rules.repetitionDrawCount > 0 ? 1 : 0;
+    stats.gamesByRule[r] += 1;
+    stats.drawsByRule[r] += isDecisive ? 0 : 1;
+    stats.pliesByRule[r] += hist.getCurrentTurnNumber();
+  }
   if(isNormal && standardWalls) {
     std::pair<int64_t,int64_t>& bucket = stats.byKomi[hist.rules.komi];
     bucket.first += 1;
@@ -382,6 +388,12 @@ string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
     "; repetition " + Global::int64ToString(stats.repetitionDraws) + " (rate " + rate(stats.repetitionDraws, stats.games) + ")" +
     ", maxPlies " + Global::int64ToString(stats.maxPliesDraws) + " (rate " + rate(stats.maxPliesDraws, stats.games) + "))" +
     ", avg plies " + Global::strprintf("%.1f", stats.games > 0 ? (double)stats.plies / (double)stats.games : 0.0) +
+    ", by repetition rule:";
+  for(int r = 1; r >= 0; r--)
+    s += string(r ? " on " : ", off ") + Global::int64ToString(stats.gamesByRule[r]) + " games draw rate " +
+      rate(stats.drawsByRule[r], stats.gamesByRule[r]) + " avg plies " +
+      Global::strprintf("%.1f", stats.gamesByRule[r] > 0 ? (double)stats.pliesByRule[r] / (double)stats.gamesByRule[r] : 0.0);
+  s +=
     ", black win rate in normal standard games " + rate(stats.standardBlackWins, stats.standardGames) +
     " (" + Global::int64ToString(stats.standardBlackWins) + "/" + Global::int64ToString(stats.standardGames) + ")" +
     ", by komi (10/10 walls):";

@@ -30,6 +30,7 @@ struct SampledGame {
   int blackWalls;
   int whiteWalls;
   bool makeGameFair;
+  int repetitionDrawCount;
 };
 
 static SampledGame sampleGame(GameInitializer& gameInit, const InitialPosition* initialPosition = NULL) {
@@ -44,7 +45,8 @@ static SampledGame sampleGame(GameInitializer& gameInit, const InitialPosition* 
   testAssert(extraBlackAndKomi.komiMean == hist.rules.komi);
   //The initial walls are both in the rules and on the board.
   testAssert(board.blackFences == hist.rules.blackInitialFences && board.whiteFences == hist.rules.whiteInitialFences);
-  return SampledGame{hist.rules.komi, hist.rules.blackInitialFences, hist.rules.whiteInitialFences, extraBlackAndKomi.makeGameFair};
+  return SampledGame{hist.rules.komi, hist.rules.blackInitialFences, hist.rules.whiteInitialFences, extraBlackAndKomi.makeGameFair,
+                     hist.rules.repetitionDrawCount};
 }
 
 static void checkFraction(const string& what, int64_t num, int64_t denom, double expected, double tolerance) {
@@ -67,12 +69,20 @@ static void testDefaultsOff() {
   for(int i = 0; i < 500; i++) {
     SampledGame g = sampleGame(*gameInit);
     testAssert(g.komi == Rules::DEFAULT_KOMI && g.blackWalls == 10 && g.whiteWalls == 10 && !g.makeGameFair);
+    testAssert(g.repetitionDrawCount == 0);
+  }
+  //Without quoridorRepetitionDrawProb every game has the config's repetitionDrawCount.
+  {
+    std::unique_ptr<GameInitializer> g3(makeGameInit("repetitionDrawCount = 3\n", "testquoridorselfplay rep fixed"));
+    for(int i = 0; i < 200; i++)
+      testAssert(sampleGame(*g3).repetitionDrawCount == 3);
   }
 
   //Each setting that can make a game non-standard is seen by mayCreateNonStandardGames (the gatekeeper's check).
   for(const string& cfg : vector<string>{
     "quoridorKomiRandomProb = 0.3\n",
     "quoridorFenceHandicapProb = 0.1\n",
+    "quoridorRepetitionDrawProb = 0.75\n",
     "komiMean = 1.5\n",
     "komiStdev = 1\n",
     "komiBigStdevProb = 0.1\nkomiBigStdev = 3\n",
@@ -88,6 +98,8 @@ static void testDefaultsOff() {
     "quoridorKomiRandomWeights = 0,0\n",
     "quoridorFenceHandicapWeights = 1,1,1,1,1,1,1,1,1,1,1\n",
     "quoridorFenceHandicapWeights = 1,-1\n",
+    "quoridorRepetitionDrawProb = 0.5\nquoridorRepetitionDrawCounts = 3,4\nquoridorRepetitionDrawCountWeights = 1\n",
+    "quoridorRepetitionDrawProb = 0.5\nquoridorRepetitionDrawCounts = 1\n",
   }) {
     bool threw = false;
     try { std::unique_ptr<GameInitializer> g(makeGameInit(cfg, "testquoridorselfplay bad")); } catch(const StringError&) { threw = true; }
@@ -106,7 +118,11 @@ static void testDistributions() {
     "quoridorFenceHandicapProb = 0.1\n"
     "quoridorFenceHandicapWeights = 0.6,0.3,0.1\n"
     "handicapCompensateKomiProb = 0.5\n"
-    "forkCompensateKomiProb = 0.8\n",
+    "forkCompensateKomiProb = 0.8\n"
+    "repetitionDrawCount = 3\n"
+    "quoridorRepetitionDrawProb = 0.75\n"
+    "quoridorRepetitionDrawCounts = 3,4\n"
+    "quoridorRepetitionDrawCountWeights = 0.9,0.1\n",
     "testquoridorselfplay distributions"
   ));
   testAssert(gameInit->mayCreateNonStandardGames());
@@ -117,8 +133,16 @@ static void testDistributions() {
   int64_t fence = 0, fenceBlack = 0, both = 0;
   int64_t fenceN[4] = {0,0,0,0};
   int64_t fairAsked = 0, fairAskedWithoutFence = 0;
+  int64_t repOn = 0, rep3 = 0, repOnAndKomi = 0, repOnAndFence = 0;
   for(int64_t i = 0; i < numGames; i++) {
     SampledGame g = sampleGame(*gameInit);
+    testAssert(g.repetitionDrawCount == 0 || g.repetitionDrawCount == 3 || g.repetitionDrawCount == 4);
+    if(g.repetitionDrawCount > 0) {
+      repOn++;
+      rep3 += g.repetitionDrawCount == 3 ? 1 : 0;
+      repOnAndKomi += g.komi != Rules::DEFAULT_KOMI ? 1 : 0;
+      repOnAndFence += (g.blackWalls != 10 || g.whiteWalls != 10) ? 1 : 0;
+    }
     bool isKomiRandom = g.komi != Rules::DEFAULT_KOMI;
     bool isFence = g.blackWalls != 10 || g.whiteWalls != 10;
     if(isKomiRandom) {
@@ -159,6 +183,10 @@ static void testDistributions() {
   checkFraction("  of which ask for a fair komi", fairAsked, fence, 0.50, 0.03);
   checkFraction("games with both (independent: 0.03)", both, numGames, 0.03, 0.004);
   testAssert(fairAskedWithoutFence == 0);
+  checkFraction("games with the repetition rule", repOn, numGames, 0.75, 0.01);
+  checkFraction("  of which N = 3", rep3, repOn, 0.90, 0.01);
+  checkFraction("  of which random komi (independent: 0.30)", repOnAndKomi, repOn, 0.30, 0.015);
+  checkFraction("  of which fence handicap (independent: 0.10)", repOnAndFence, repOn, 0.10, 0.01);
 
   //Fork games keep the komi and walls of their position and ask for a fair komi with forkCompensateKomiProb.
   {
@@ -173,10 +201,21 @@ static void testDistributions() {
     for(int64_t i = 0; i < numForks; i++) {
       SampledGame g = sampleGame(*gameInit, &fork);
       testAssert(g.komi == 1.5f && g.blackWalls == 10 && g.whiteWalls == 8);
+      testAssert(g.repetitionDrawCount == 0);
       if(g.makeGameFair)
         numFair++;
     }
     checkFraction("fork games that ask for a fair komi", numFair, numForks, 0.80, 0.02);
+  }
+  //Fork games keep their game's repetition rule, whatever it was (on with N = 4 here, or off above).
+  {
+    Rules rules = Rules::getQuoridorRules();
+    rules.repetitionDrawCount = 4;
+    Board board;
+    BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
+    InitialPosition fork(board, hist, P_BLACK, true, false, false, 1.0);
+    for(int i = 0; i < 2000; i++)
+      testAssert(sampleGame(*gameInit, &fork).repetitionDrawCount == 4);
   }
 }
 

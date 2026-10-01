@@ -114,6 +114,10 @@ class SelfplayManager {
       int64_t repetitionDraws = 0;
       int64_t maxPliesDraws = 0;
       int64_t plies = 0;
+      // By repetition rule: [0] off, [1] on (any N): games, draws, plies.
+      int64_t gamesByRule[2] = {0,0};
+      int64_t drawsByRule[2] = {0,0};
+      int64_t pliesByRule[2] = {0,0};
       // Normal games (not forks etc.) with the standard komi and 10/10 walls.
       int64_t standardGames = 0;
       int64_t standardBlackWins = 0;

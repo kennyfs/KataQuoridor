@@ -168,6 +168,14 @@ class GameInitializer {
   std::vector<double> quoridorKomiRandomWeights;
   double quoridorFenceHandicapProb;
   std::vector<double> quoridorFenceHandicapWeights;
+  //Repetition draw rule per game (docs/QuoridorIOv3.md): if quoridorRepetitionDrawProb is given, each game from the
+  //empty board has the rule on with that probability, with N drawn from quoridorRepetitionDrawCounts with the relative
+  //weights quoridorRepetitionDrawCountWeights, and off (N = 0) otherwise. Not given (the default): every game has
+  //the config's repetitionDrawCount. Forks keep the rule of the game they come from.
+  bool quoridorRepetitionDrawRandom;
+  double quoridorRepetitionDrawProb;
+  std::vector<int> quoridorRepetitionDrawCounts;
+  std::vector<double> quoridorRepetitionDrawCountWeights;
   float komiStdev;
   double komiAllowIntegerProb;
   double handicapProb;

@@ -188,7 +188,12 @@ See [QuoridorIOv3.md](../QuoridorIOv3.md).
   SWA, optimizer state), so the upgraded net plays exactly like the v2 net (bit-identical on run3) and then learns
   the new inputs. `python/quoridor_convert_tdata_v2_to_v3.py -rule-was-off` converts the existing v2 rows of a run
   played without the repetition rule. Step-by-step switch-over in QuoridorIOv3.md §6.1.
-- **From-scratch runs:** start with `repetitionDrawCount = 0` and turn it on once the nets race purposefully. With
-  a random net the rule turns 86% of games into draws (vs 15% without it).
+- **The rule per self-play game:** new keys `quoridorRepetitionDrawProb`, `quoridorRepetitionDrawCounts`,
+  `quoridorRepetitionDrawCountWeights` (off by default: then every game has `repetitionDrawCount`). The v2 self-play
+  config plays 75% of games with the rule (N = 3: 90%, N = 4: 10%) and 25% without, so nets learn both the
+  KataQuoridor game and the standard one (arena vs other engines, standard GTP). Forks keep their game's rule; the
+  gatekeeper stays at N = 3. The `Quoridor stats` line reports draw rate and plies with the rule on and off.
+- **From-scratch runs:** use a lower on-probability early (e.g. `quoridorRepetitionDrawProb = 0.25`) and raise it
+  once the nets race purposefully. With a random net the rule turns 81–86% of games into draws (vs 15–17% without).
 - Tools: `dumpnninputs -io-version 3`, `writesampletrainquoridor` (now with repetition-draw games); new
   `runtests quoridorv3`.

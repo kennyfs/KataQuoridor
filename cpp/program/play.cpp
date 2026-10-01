@@ -221,6 +221,23 @@ void GameInitializer::initShared(ConfigParser& cfg, Logger& logger) {
   quoridorFenceHandicapProb = cfg.contains("quoridorFenceHandicapProb") ? cfg.getDouble("quoridorFenceHandicapProb",0.0,1.0) : 0.0;
   quoridorFenceHandicapWeights = loadOffsetWeights("quoridorFenceHandicapWeights", Board::MAX_FENCE_NUM);
 
+  quoridorRepetitionDrawRandom = cfg.contains("quoridorRepetitionDrawProb");
+  quoridorRepetitionDrawProb = quoridorRepetitionDrawRandom ? cfg.getDouble("quoridorRepetitionDrawProb",0.0,1.0) : 0.0;
+  quoridorRepetitionDrawCounts = cfg.contains("quoridorRepetitionDrawCounts") ?
+    cfg.getInts("quoridorRepetitionDrawCounts",2,Rules::MAX_REPETITION_DRAW_COUNT) : vector<int>({3});
+  quoridorRepetitionDrawCountWeights = cfg.contains("quoridorRepetitionDrawCountWeights") ?
+    cfg.getDoubles("quoridorRepetitionDrawCountWeights",0.0,1e10) : vector<double>(quoridorRepetitionDrawCounts.size(), 1.0);
+  {
+    double sum = 0.0;
+    for(double w : quoridorRepetitionDrawCountWeights)
+      sum += w;
+    if(quoridorRepetitionDrawCounts.size() <= 0 || quoridorRepetitionDrawCountWeights.size() != quoridorRepetitionDrawCounts.size() || !(sum > 0.0))
+      throw IOError(
+        "quoridorRepetitionDrawCountWeights must give one non-negative weight per quoridorRepetitionDrawCounts entry, "
+        "with a positive sum, in " + cfg.getFileName()
+      );
+  }
+
   handicapProb = cfg.contains("handicapProb") ? cfg.getDouble("handicapProb",0.0,1.0) : 0.0;
   handicapCompensateKomiProb = cfg.contains("handicapCompensateKomiProb") ? cfg.getDouble("handicapCompensateKomiProb",0.0,1.0) : 0.0;
   komiBigStdevProb = cfg.contains("komiBigStdevProb") ? cfg.getDouble("komiBigStdevProb",0.0,1.0) : 0.0;
@@ -415,6 +432,7 @@ bool GameInitializer::mayCreateNonStandardGames() const {
   return
     quoridorKomiRandomProb > 0.0 ||
     quoridorFenceHandicapProb > 0.0 ||
+    quoridorRepetitionDrawRandom ||
     komiMean != Rules::DEFAULT_KOMI ||
     komiStdev > 0.0f ||
     (komiBigStdevProb > 0.0 && komiBigStdev > 0.0f) ||
@@ -649,6 +667,15 @@ void GameInitializer::createGameSharedUnsynchronized(
       else
         rules.whiteInitialFences = std::max(0, rules.whiteInitialFences - n);
       isFenceHandicap = true;
+    }
+
+    //Repetition draw rule per game, independent of the fence handicap and komi.
+    if(quoridorRepetitionDrawRandom) {
+      if(rand.nextBool(quoridorRepetitionDrawProb))
+        rules.repetitionDrawCount = quoridorRepetitionDrawCounts[
+          rand.nextUInt(quoridorRepetitionDrawCountWeights.data(),quoridorRepetitionDrawCountWeights.size())];
+      else
+        rules.repetitionDrawCount = 0;
     }
 
     board = Board(xSize,ySize);
