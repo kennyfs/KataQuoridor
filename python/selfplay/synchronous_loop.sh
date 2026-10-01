@@ -45,8 +45,8 @@ mkdir -p "$BASEDIR"/gatekeepersgf
 
 # Parameters for the training run
 # NOTE: You may want to adjust the below numbers.
-# NOTE: You probably want to edit settings in cpp/configs/training/selfplay_quoridor.cfg
-# NOTE: You probably want to edit settings in cpp/configs/training/gatekeeper_quoridor.cfg
+# NOTE: You probably want to edit settings in cpp/configs/training/selfplay_quoridor_v2.cfg
+# NOTE: You probably want to edit settings in cpp/configs/training/gatekeeper_quoridor_v2.cfg
 # Such as what board sizes and rules, you want to learn, number of visits to use, etc.
 
 # Also, the parameters below are relatively small, and probably
@@ -67,12 +67,15 @@ TAPER_WINDOW_SCALE="${TAPER_WINDOW_SCALE:-500000}" # Parameter setting the scale
 SHUFFLE_KEEPROWS="${SHUFFLE_KEEPROWS:-1200000}" # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, so the shuffler samples enough rows each cycle for the training to use.
 EXPAND_WINDOW_PER_ROW="${EXPAND_WINDOW_PER_ROW:-0.6}" # Initial slope of the shuffle window growth (shuffle.sh default 0.4). Larger keeps more older data in the window.
 MAX_CYCLES="${MAX_CYCLES:-0}" # Stop after this many cycles (0 = run forever). Rerunning continues the run.
+GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs longer than this many seconds (it has hung
+# once in CUDA backend init); the candidate stays in modelstobetested/ and is tested again next cycle. 0 disables.
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
-# I/O v2 nets (the *_quoridor_v2 model kinds) need the *_quoridor_v2 configs. KATAGO_BIN overrides the executable.
-SELFPLAY_CONFIG="${SELFPLAY_CONFIG:-$GITROOTDIR/cpp/configs/training/selfplay_quoridor.cfg}"
-GATING_CONFIG="${GATING_CONFIG:-$GITROOTDIR/cpp/configs/training/gatekeeper_quoridor.cfg}"
+# Training is I/O v2 only (the *_quoridor_v2 model kinds), so the defaults are the *_quoridor_v2 configs.
+# KATAGO_BIN overrides the executable.
+SELFPLAY_CONFIG="${SELFPLAY_CONFIG:-$GITROOTDIR/cpp/configs/training/selfplay_quoridor_v2.cfg}"
+GATING_CONFIG="${GATING_CONFIG:-$GITROOTDIR/cpp/configs/training/gatekeeper_quoridor_v2.cfg}"
 KATAGO_BIN="${KATAGO_BIN:-$GITROOTDIR/cpp/katago}"
 
 # Copy all the relevant scripts and configs and the katago executable to a dated directory.
@@ -100,7 +103,8 @@ while [[ "$MAX_CYCLES" -le 0 || "$CYCLE" -lt "$MAX_CYCLES" ]]
 do
     CYCLE=$((CYCLE + 1))
     echo "Gatekeeper"
-    time ./bin/katago gatekeeper -rejected-models-dir "$BASEDIR"/rejectedmodels -accepted-models-dir "$BASEDIR"/models/ -sgf-output-dir "$BASEDIR"/gatekeepersgf/ -test-models-dir "$BASEDIR"/modelstobetested/ -config "$DATED_ARCHIVE"/gatekeeper.cfg -quit-if-no-nets-to-test | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt
+    time timeout -k 60 "$GATEKEEPER_TIMEOUT" ./bin/katago gatekeeper -rejected-models-dir "$BASEDIR"/rejectedmodels -accepted-models-dir "$BASEDIR"/models/ -sgf-output-dir "$BASEDIR"/gatekeepersgf/ -test-models-dir "$BASEDIR"/modelstobetested/ -config "$DATED_ARCHIVE"/gatekeeper.cfg -quit-if-no-nets-to-test | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt \
+        || echo "$(date '+%F %T') gatekeeper failed or timed out (status $?), continuing with the current model" | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt
 
     echo "Selfplay"
     time ./bin/katago selfplay -max-games-total "$NUM_GAMES_PER_CYCLE" -output-dir "$BASEDIR"/selfplay -models-dir "$BASEDIR"/models -config "$DATED_ARCHIVE"/selfplay.cfg | tee -a "$BASEDIR"/selfplay/stdout.txt
