@@ -144,6 +144,6 @@ existing configs create the same games as before.
   (`"supports_rules": false`) play standard games only. Arena SGFs now carry the arbiter's `KM`, `WB`, `WW` and
   `RE` (the lead, e.g. `W+0.5`; `B+F` / `W+F` for forfeits) instead of `KM[0]` and integer margins; results record
   `komi`, `black_walls`, `white_walls`, `lead` and `result`. See [Evaluation.md](../Evaluation.md).
-- **sgfs_viewer:** shows komi and initial walls when not standard, counts walls from the initial walls, and adds
+- **sgfs_viewer:** the margin everywhere is the predicted `lead=` (the utility `score` is no longer shown when `lead=` is present; old files fall back to `score`, labelled "no lead in file"); phone-friendly responsive layout (swipe to step, collapsible game list, sticky controls); `serve.py --host 0.0.0.0` prints a LAN URL. Shows komi and initial walls when not standard, counts walls from the initial walls, and adds
   win-rate slices by komi and fence handicap to the stats page.
 - New `runtests quoridorselfplay` test group; arena tests for komi, walls and arbiter draws.

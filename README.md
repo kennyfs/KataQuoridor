@@ -168,7 +168,8 @@ The self-play training loop is KataGo's, with Quoridor configs:
 [docs/Evaluation.md](docs/Evaluation.md) describes `python/quoridor_arena`, a referee that plays QTP engines
 against each other with a no-net KataQuoridor process as the arbiter, and fits a Bradley-Terry Elo ladder
 anchored at a uniformly random player. Self-play and arena games can be browsed with
-`python3 python/sgfs_viewer/serve.py <file>.sgfs`; [python/model_viewer](python/model_viewer/serve.py) shows
+`python3 python/sgfs_viewer/serve.py <file>.sgfs` (the page is responsive: for a phone on the same network add
+`--host 0.0.0.0` and open the printed LAN URL; swipe the board to step moves); [python/model_viewer](python/model_viewer/serve.py) shows
 per-net analyses (heads, feature importance, raw net vs search) written by `analyze_model.py`.
 
 ## Releases and versions

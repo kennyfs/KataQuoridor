@@ -119,7 +119,8 @@ predicted tempo lead `s`, comparable across nets. The root info has no noResult 
 `reportAnalysisWinratesAs`); set `"kata_perspective": "white"` / `"black"` in the roster entry if it is configured
 otherwise. Opening moves and moves of other engines (SimpleQuoridor) have no comment. `results.jsonl` has the
 same per move as `evals`: `[White win, score, lead, visits]` or null. `sgfs_viewer` shows `lead` (as the margin,
-in the eval graph and the stats) when present and the utility next to it; old SGFs without `lead=` look as before.
+in the eval graph and the stats) when present and never shows the utility `score` then; old SGFs without `lead=` fall back to `score`, labelled
+"margin (no lead in file)" (in the lead-based sort only games with `lead=` count when a file has both).
 Self-play and gatekeeper SGFs write the same `lead=` token (the root search's `scoreLead`, after `v=` / `weight=`).
 
 ## Komi and fence handicap
