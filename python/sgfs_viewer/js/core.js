@@ -5,7 +5,10 @@
 // SGF coords: x = letter - 'a', y = letter - 'a'. Notation matches Location::toString:
 // pawn "e8", walls "e2h"/"e2v" with col = x/2, row = y/2 + 1.
 // Move comments (sgf.cpp) are the value targets of the search at the position BEFORE that
-// move, from White's perspective: "win loss noResult score v=.. [rv=..] weight=.. [result=..]".
+// move, from White's perspective: "win loss noResult score v=.. [rv=..] weight=.. [result=..] [lead=..]".
+// score is the search's utility score u (with the time bonus: not comparable across nets trained with different
+// lambdas); lead (arena SGFs, scoreLead) is the predicted tempo lead s. ev.wMargin is the margin shown and used
+// as a prediction: lead when present, else score.
 // So the eval of the position after `ply` moves is moves[ply].ev.
 const N = 9, WALLS_PER_PLAYER = 10;
 const CELL = 50, GAP = 12, PITCH = CELL + GAP, PAD = 30;
@@ -100,6 +103,8 @@ function parseEval(c) {
   if (ev.v !== undefined) ev.v = +ev.v;
   if (ev.rv !== undefined) ev.rv = +ev.rv;
   if (ev.weight !== undefined) ev.weight = +ev.weight;
+  if (ev.lead !== undefined) ev.lead = +ev.lead;
+  ev.wMargin = ev.lead !== undefined ? ev.lead : ev.wScore;
   return ev;
 }
 const hasEv = mv => mv && mv.ev && !mv.ev.onlyResult;

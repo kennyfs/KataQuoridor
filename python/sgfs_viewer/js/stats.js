@@ -31,7 +31,7 @@ function summarize(line, h) {
       addWallToBlock(bl, k, mv.x, mv.y);
       for (const p of ["B", "W"]) if (wallAffects(dG[p], k, mv.x, mv.y)) dG[p] = goalDist(bl, p);
     }
-    if (hasEv(mv)) s.evs.push({ i, pla: mv.pla, p: mv.ev.wWin, score: mv.ev.wScore, v: mv.ev.v, w: mv.ev.weight });
+    if (hasEv(mv)) s.evs.push({ i, pla: mv.pla, p: mv.ev.wWin, score: mv.ev.wMargin, v: mv.ev.v, w: mv.ev.weight });
     race();
   });
   if (!isFinite(s.raceDeficit)) s.raceDeficit = null;

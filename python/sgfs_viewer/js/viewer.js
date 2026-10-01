@@ -118,13 +118,14 @@ function renderEvalStrip() {
   }
   tiles.forEach(t => $(t).classList.remove("dim"));
   const ev = mv.ev, pj = prevEvIdx(ply), pev = pj >= 0 ? cur.moves[pj].ev : null;
-  const dW = pev ? ev.wWin - pev.wWin : null, dS = pev ? ev.wScore - pev.wScore : null;
+  const dW = pev ? ev.wWin - pev.wWin : null, dS = pev ? ev.wMargin - pev.wMargin : null;
   const dSpan = (d, fmt) => d === null ? "" : ` <span class="delta">${d >= 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}</span> vs prev`;
   $("evWinV").textContent = pct(ev.wWin);
   $("evWinBar").style.flexBasis = (100 * ev.wWin).toFixed(1) + "%";
   $("evWinS").innerHTML = `B ${pct(ev.wLoss)}` + (ev.noRes > 0 ? ` · draw ${pct(ev.noRes)}` : "") + " ·" + dSpan(dW, x => (100 * x).toFixed(1) + "pt");
-  $("evMarV").textContent = fmtScore(ev.wScore);
-  $("evMarS").innerHTML = (ev.wScore >= 0 ? "White ahead" : "Black ahead") + (dS === null ? "" : " ·" + dSpan(dS, x => x.toFixed(1)));
+  $("evMar").querySelector(".k").textContent = ev.lead !== undefined ? "Predicted lead (W)" : "Game margin (W)";
+  $("evMarV").textContent = fmtScore(ev.wMargin);
+  $("evMarS").innerHTML = (ev.lead !== undefined ? `utility ${fmtScore(ev.wScore)} · ` : "") + (ev.wMargin >= 0 ? "White ahead" : "Black ahead") + (dS === null ? "" : " ·" + dSpan(dS, x => x.toFixed(1)));
   $("evVisV").textContent = ev.v ?? "—";
   $("evVisS").innerHTML = [ev.rv !== undefined ? `reanalysis ${ev.rv}` : null, ev.weight !== undefined ? `weight ${ev.weight.toFixed(2)}` : null, `chose <b>${mv.pla} ${notation(mv)}</b>`].filter(Boolean).join(" · ");
 }
@@ -151,7 +152,7 @@ function renderMoveList() {
     if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">Random init · ${cur.startTurnIdx} moves</div>`);
     if (i === cur.startTurnIdx && i > 0) parts.push(`<div class="sep">Self-play search</div>`);
     const e = mv.ev;
-    const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}% · ${fmtScore(e.wScore)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
+    const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}% · ${e.lead !== undefined ? `lead ${fmtScore(e.lead)} · u ${fmtScore(e.wScore)}` : fmtScore(e.wScore)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
     parts.push(`<div class="m${i < cur.startTurnIdx ? " init" : ""}" data-i="${i + 1}"><span class="n">${i + 1}</span><span class="who ${mv.pla}"></span><span class="mv">${notation(mv)}</span><span class="ev">${ev}</span></div>`);
   });
   $("moveList").innerHTML = parts.join("");
@@ -178,7 +179,7 @@ function renderChart() {
   const pts = [];
   cur.moves.forEach((mv, i) => { if (hasEv(mv)) pts.push({ i, ev: mv.ev }); });
   let M = 5;
-  for (const p of pts) M = Math.max(M, Math.abs(p.ev.wScore));
+  for (const p of pts) M = Math.max(M, Math.abs(p.ev.wMargin));
   M = Math.ceil(M / 5) * 5;
   const Ym = v => top2 + (1 - (v + M) / (2 * M)) * CH.h2;
 
@@ -207,7 +208,7 @@ function renderChart() {
 
   if (pts.length) {
     const line = (Y, key) => pts.map((p, k) => (k ? "L" : "M") + X(p.i).toFixed(1) + " " + Y(p.ev[key]).toFixed(1)).join("");
-    const dW = line(Yw, "wWin"), dM = line(Ym, "wScore");
+    const dW = line(Yw, "wWin"), dM = line(Ym, "wMargin");
     const x0 = X(pts[0].i), x1 = X(pts[pts.length - 1].i);
     el("path", { d: dW + `L${x1} ${Yw(0.5)}L${x0} ${Yw(0.5)}Z`, fill: "var(--w-acc)", opacity: 0.1 }, svg);
     el("path", { d: dW, fill: "none", stroke: "var(--w-acc)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
@@ -219,7 +220,7 @@ function renderChart() {
   const ev = hasEv(cur.moves[ply]) ? cur.moves[ply].ev : null;
   if (ev) {
     el("circle", { cx: X(ply), cy: Yw(ev.wWin), r: 4, fill: "var(--w-acc)", stroke: "#fff", "stroke-width": 2 }, svg);
-    el("circle", { cx: X(ply), cy: Ym(ev.wScore), r: 4, fill: "var(--margin)", stroke: "#fff", "stroke-width": 2 }, svg);
+    el("circle", { cx: X(ply), cy: Ym(ev.wMargin), r: 4, fill: "var(--margin)", stroke: "#fff", "stroke-width": 2 }, svg);
   }
   // hover crosshair layer
   const hover = el("line", { y1: 2, y2: top2 + CH.h2 + 2, stroke: "#9aa5b1", "stroke-width": 1, visibility: "hidden" }, svg);
