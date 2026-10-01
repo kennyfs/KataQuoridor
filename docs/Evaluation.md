@@ -121,8 +121,9 @@ otherwise. Opening moves and moves of other engines (SimpleQuoridor) have no com
 same per move as `evals`: `[White win, score, lead, visits]` or null. `sgfs_viewer` shows `lead` (as the margin,
 in the eval graph and the stats) when present and the utility next to it; old SGFs without `lead=` look as before.
 Self-play and gatekeeper SGFs don't write `lead=` yet: it would go in `WriteSgf::writeSgf`
-(`cpp/dataio/sgf.cpp`, after `v=` / `weight=`) from `ValueTargets::lead` in `whiteValueTargetsByTurn`, which is
-already filled per turn (`cpp/program/play.cpp`, `extractValueTargets`).
+(`cpp/dataio/sgf.cpp`, after `v=` / `weight=`), from the root search's lead (`getRootValues().lead`) recorded per
+turn in `cpp/program/play.cpp` next to `extractValueTargets` (a new field: `ValueTargets::lead` is only the sampled
+`computeLead` estimate, set for an `estimateLeadProb` share of the turns).
 
 ## Komi and fence handicap
 
