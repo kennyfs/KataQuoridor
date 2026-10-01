@@ -13,7 +13,9 @@ ValueTargets::ValueTargets()
    noResult(0),
    score(0),
    hasLead(false),
-   lead(0)
+   lead(0),
+   hasSearchLead(false),
+   searchLead(0)
 {}
 ValueTargets::~ValueTargets()
 {}

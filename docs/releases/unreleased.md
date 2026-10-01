@@ -79,7 +79,7 @@ were not trained with a time bonus.
 
 - Arena SGFs carry the search info of KataQuoridor engines on each move (`kata-genmove_analyze`): the self-play
   comment `win loss noResult score v=..` from White's view plus `lead=<scoreLead>`; `results.jsonl` has a per-move
-  `evals` list. `sgfs_viewer` shows and prefers `lead=` as the margin when present ([Evaluation.md](../Evaluation.md)).
+  `evals` list. Self-play and gatekeeper SGFs also write `lead=`. `sgfs_viewer` shows and prefers `lead=` as the margin when present ([Evaluation.md](../Evaluation.md)).
 
 - The arbiter now reports `Draw` itself at 300 plies; the referee records it as `draw300` as before. Keep
   `--max-plies` equal to the arbiter's `maxPlies`.

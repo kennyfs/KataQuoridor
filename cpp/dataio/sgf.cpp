@@ -2215,6 +2215,15 @@ void WriteSgf::writeSgf(
         comment += "weight=";
         comment += weightBuf;
       }
+      if(turnAfterStart < gameData->whiteValueTargetsByTurn.size() &&
+         gameData->whiteValueTargetsByTurn[turnAfterStart].hasSearchLead) {
+        char leadBuf[32];
+        sprintf(leadBuf,"%.2f",gameData->whiteValueTargetsByTurn[turnAfterStart].searchLead);
+        if(comment.length() > 0)
+          comment += " ";
+        comment += "lead=";
+        comment += leadBuf;
+      }
     }
 
     if(endHist.isGameFinished && i+1 == endHist.moveHistory.size()) {

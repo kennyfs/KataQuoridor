@@ -120,10 +120,7 @@ predicted tempo lead `s`, comparable across nets. The root info has no noResult 
 otherwise. Opening moves and moves of other engines (SimpleQuoridor) have no comment. `results.jsonl` has the
 same per move as `evals`: `[White win, score, lead, visits]` or null. `sgfs_viewer` shows `lead` (as the margin,
 in the eval graph and the stats) when present and the utility next to it; old SGFs without `lead=` look as before.
-Self-play and gatekeeper SGFs don't write `lead=` yet: it would go in `WriteSgf::writeSgf`
-(`cpp/dataio/sgf.cpp`, after `v=` / `weight=`), from the root search's lead (`getRootValues().lead`) recorded per
-turn in `cpp/program/play.cpp` next to `extractValueTargets` (a new field: `ValueTargets::lead` is only the sampled
-`computeLead` estimate, set for an `estimateLeadProb` share of the turns).
+Self-play and gatekeeper SGFs write the same `lead=` token (the root search's `scoreLead`, after `v=` / `weight=`).
 
 ## Komi and fence handicap
 

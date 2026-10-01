@@ -28,6 +28,9 @@ struct ValueTargets {
   float score;
   bool hasLead;
   float lead;
+  //The search's own lead (scoreLead) at this turn, only for the sgf comments (lead=), not a training target.
+  bool hasSearchLead;
+  float searchLead;
 
   ValueTargets();
   ~ValueTargets();

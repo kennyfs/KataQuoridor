@@ -916,6 +916,8 @@ static void extractValueTargets(ValueTargets& buf, const Search* toMoveBot, cons
   buf.loss = (float)values.lossValue;
   buf.noResult = (float)values.noResultValue;
   buf.score = (float)values.expectedScore;
+  buf.hasSearchLead = true;
+  buf.searchLead = (float)values.lead;
 }
 
 static void extractQValueTargets(
