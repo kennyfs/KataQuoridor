@@ -8,7 +8,8 @@
 3. *self-play randomization and experiments.*
 
 *Added later: the optional **repetition draw** rule (`repetitionDrawCount`), see
-[§2.10](#210-draw-by-repetition-optional) and [§10](#10-repetition-draw-design-and-where-things-live).*
+[§2.10](#210-draw-by-repetition-optional) and [§10](#10-repetition-draw-design-and-where-things-live), and
+**Quoridor I/O v3** (v2 + repetition inputs; training is v3 only since then), see [QuoridorIOv3.md](QuoridorIOv3.md).*
 
 *Steps 2 and 3 are sketched here and will be refined when they start. Where this document and the older
 [roadmap](KataQuoridor_Review_and_Roadmap.md) (§5 Phase 6, "margin komi `k`") disagree, this document wins.*
@@ -237,6 +238,8 @@ anchors, and only a wall that cuts a cached path runs a BFS.
 | 13, 14 | my / the opponent's shortest distance / 32 |
 | **15** | **v2: plies until the draw**, `BoardHistory::pliesUntilDraw() / 300` |
 | **16** | **v2: komi from the side to move's view**, `BoardHistory::currentSelfKomi(pla, …) / 5` |
+
+I/O v3 appends spatial 19, 20 and global 17, 18 (the repetition inputs), see [QuoridorIOv3.md](QuoridorIOv3.md) §2.
 
 - Global 15 is on an **absolute scale** (`/ 300`, not `/ maxPlies`), so the input keeps meaning "plies left" when
   `maxPlies` changes. It is 1.0 at the start of a standard game and 0 at or past the limit.
@@ -688,6 +691,9 @@ counting down to 1 on the last row. With a random net, 89% of games ended by rep
 legal-move mismatch; all games were decided at the goal (no repetition draws occurred).
 
 ### 10.6 For Quoridor I/O v3 (repetition-count input)
+
+*Done: see [QuoridorIOv3.md](QuoridorIOv3.md) for what was implemented (two binary spatial planes and two globals,
+the NN-cache change, and the v2 → v3 upgrade). The notes below were the plan.*
 
 - The current position's count is `BoardHistory::currentPositionRepetitionCount()`: O(1), maintained on every move
   (also with the rule off) and copied with every search thread's history. The input filler gets the history

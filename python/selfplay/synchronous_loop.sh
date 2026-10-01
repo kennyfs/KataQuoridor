@@ -73,7 +73,9 @@ GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs l
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
-# Training is I/O v2 only (the *_quoridor_v2 model kinds), so the defaults are the *_quoridor_v2 configs.
+# Training is Quoridor I/O v3 only (the *_quoridor_v3 model kinds; a v2 run is continued with
+# quoridor_upgrade_v2_to_v3.py, see docs/QuoridorIOv3.md). The *_quoridor_v2 configs are the current self-play and
+# gatekeeper configs (the name is the rules / self-play setup, not the net's I/O version).
 # KATAGO_BIN overrides the executable.
 SELFPLAY_CONFIG="${SELFPLAY_CONFIG:-$GITROOTDIR/cpp/configs/training/selfplay_quoridor_v2.cfg}"
 GATING_CONFIG="${GATING_CONFIG:-$GITROOTDIR/cpp/configs/training/gatekeeper_quoridor_v2.cfg}"

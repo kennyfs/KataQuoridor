@@ -174,3 +174,21 @@ engines and old configs behave as before.
   repetition draws get reason `repetition` and are counted in the report.
 - **sgfs_viewer:** shows why a draw ended ("0 (draw by repetition)", a list tag) and the rule when on.
 - New `runtests quoridorrepetition` test group.
+
+## Neural net I/O v3 (repetition inputs)
+
+See [QuoridorIOv3.md](../QuoridorIOv3.md).
+
+- **I/O v3 = v2 + the repetition inputs:** two binary planes marking the pawn moves that repeat a position and those
+  that draw by repetition, and two globals (rule on; how close the current position is to "one more occurrence
+  draws"). All zero when the rule is off. The NN cache of v3 nets keys on this repetition state too.
+- **Training is v3 only:** self-play writes v3 rows (with any net), new presets `b2c64_quoridor_v3` and
+  `tf2_b4c192_quoridor_v3`. v1 and v2 nets keep working for inference everywhere.
+- **Continue a v2 run as v3:** `python/quoridor_upgrade_v2_to_v3.py` adds the new input weights as zeros (model,
+  SWA, optimizer state), so the upgraded net plays exactly like the v2 net (bit-identical on run3) and then learns
+  the new inputs. `python/quoridor_convert_tdata_v2_to_v3.py -rule-was-off` converts the existing v2 rows of a run
+  played without the repetition rule. Step-by-step switch-over in QuoridorIOv3.md §6.1.
+- **From-scratch runs:** start with `repetitionDrawCount = 0` and turn it on once the nets race purposefully. With
+  a random net the rule turns 86% of games into draws (vs 15% without it).
+- Tools: `dumpnninputs -io-version 3`, `writesampletrainquoridor` (now with repetition-draw games); new
+  `runtests quoridorv3`.
