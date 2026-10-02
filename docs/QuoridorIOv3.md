@@ -197,5 +197,68 @@ are unaffected). run3 is far past this phase: with its nets the rule draws 0.2�
 | Tools | `cpp/command/nnparity.cpp` (`dumpnninputs`, `evalnnparity`), `writesampletrainquoridor` (`cpp/command/misc.cpp`) |
 | C++ tests | `cpp/tests/testquoridoriov3.cpp` (`runtests quoridorv3`): brute-force recount over the whole game on 80 random games (3349 rows, walls, N = 0, 2..5) incl. 366 undo-by-replay checks; mirror; cache hash; training-row encoding of a repetition-draw game |
 | Python | `modelconfigs.py` (presets, counts), `data_processing_pytorch.py` (count check, symmetry note), `metrics_pytorch.py` (v3-only training) |
-| Upgrade / conversion | `python/quoridor_upgrade_v2_to_v3.py`, `python/quoridor_convert_tdata_v2_to_v3.py` |
+| Upgrade / conversion | `python/quoridor_upgrade_v2_to_v3.py`, `python/quoridor_convert_tdata_v2_to_v3.py`, `python/quoridor_convert_tdata_lambda0.py` (§9) |
 | Python tests | `tests/test_nn_parity.py` (v1/v2/v3 features and parity, conv + transformer, symmetries 0 and 1), `tests/test_quoridor_model.py`, `tests/test_quoridor_upgrade_v3.py`, `tests/test_end_to_end_training.py` |
+
+## 9. λ = 0 (2026-10-02)
+
+The time bonus is dropped: `timeBonusPerPly = 0` in `selfplay_quoridor_v2.cfg` and `gatekeeper_quoridor_v2.cfg`
+(it was 0.05, the placeholder of [QuoridorIOv2.md §5.3](QuoridorIOv2.md#53-the-v2-configs)). Why: the repetition
+draw (§6.2) now ends the cycling games early, and the 300-ply draw still makes a winner progress; with λ = 0 the
+utility score `u` (`scoreMean`) is the lead `s`, comparable across nets, and the short-term score error is no longer
+inflated by the bonus. run3 nets up to `run3-s21886976-d3911658` were trained with λ = 0.05. The gatekeeper also
+plays 256 visits now (was 150), and self-play writes files of 10,000 rows (we train without validation; use 1000
+with validation, the split is per file).
+
+### 9.1 Columns derived from `u`, and the converter
+
+`python/quoridor_convert_tdata_lambda0.py` rewrites λ > 0 rows (`-lambda-old`, default 0.05) in place, atomically,
+keeping each file's compression and **mtime** (shuffle.py picks the window by mtime). `-dry-run` counts; files
+already converted (C70 = 1) are skipped. It refuses (writes nothing for that file) anything but v3 inputs with 80
+global target columns and C63 = 3, rows with a lead weight but no outcome weight (search lead estimates), non-zero
+C20 without a lead weight, and decisive rows that don't satisfy `u − s = sign(s)·λ·k` with an integer `k` in
+[0, maxPlies].
+
+| Column (`globalTargetsNC`) | Content | Read by the loss | Converter |
+|---|---|---|---|
+| C20 | final `u`, weight C27 | utility score + its stdev | decisive rows (C29 > 0, exactly the main rows of a game with a winner; verified on run3's data) := C21 (`u = s`); draws keep 0 |
+| C3 | final value targets' score; = C20 on main rows, the side search's `u` on side rows | no | main rows := new C20; side rows unchanged |
+| C15 | short-term TD score: a mix of the following searches' `u` and the final `u` | short-term score error loss, short-term optimistic policy weight | **can't be recomputed** (a search's bonus depends on its expected game length): new weight column **C70** := 1 |
+| C7, C11, C19 | the other TD score targets (C19 = this row's search `u`) | no | unchanged |
+| C58 | the net's raw score (metadata) | no | unchanged |
+| policy targets | searches with λ = 0.05 | yes | unchanged (off-policy, like any older data) |
+
+**C70** is new: 1 minus the weight of the short-term score target C15 (the C++ writer writes 0, i.e. full weight;
+it zero-filled C70 before, so all new data is unaffected). `metrics_pytorch.py` multiplies the short-term score
+error loss by `1 − C70` and drops the score term of the short-term optimistic policy weight on such rows. Zeroing
+C24 instead would also have dropped the TD value targets C4–C14, which don't depend on λ; leaving C15 to age out of
+the window would have trained the short-term score error head (used by search, `useUncertainty`) on inflated
+errors for ~1.5M rows.
+
+Tests: `tests/test_quoridor_convert_lambda0.py` (synthetic round trip with decisive, draw and side rows, stored and
+deflated files, mtime, idempotence, refusals; and on real run3 files that only C3, C20, C70 change).
+
+**run3's data** (backup: `~/q1_run/run3/selfplay.lambda005.bak`): 1776 files, 3,911,658 rows before and after
+(3,341,719 decisive, 150,606 draw rows, 419,333 side rows); all decisive rows had an integer `k`. Old
+`shuffleddata/` deleted.
+
+### 9.2 Restarting run3 with λ = 0
+
+No rebuild is needed (λ is a config value; C70 was already zero-filled). The new configs and the C70 loss change
+must be in the checkout the loop runs from (`synchronous_loop.sh` copies `python/` and the configs into
+`scripts/dated/<date>` at start):
+
+1. Merge the branch into the checkout the loop runs from.
+2. Convert run3's `selfplay/` (done, §9.1) and delete `shuffleddata/`.
+3. Restart: `./synchronous_loop.sh <NAMEPREFIX> ~/q1_run/run3 run3 tf2_b4c192_quoridor_v3 <USEGATING>` (with the
+   env as before, e.g. `VALIDATE=0`). The row count is unchanged, so the train bucket carries on. The first cycle
+   self-plays with `run3-s21886976-d3911658` (a λ = 0.05 net) under λ = 0 rules: its rows have exact λ = 0 targets
+   (they come from the game), only its search used a score head with the bonus. With gating, the gatekeeper compares
+   the first λ = 0 net with it at λ = 0.
+
+### 9.3 Capacity test: `tf2_b8c256_quoridor_v3`
+
+New preset: 8 blocks, 256 trunk, `mid` 128, FFN 384, 4 heads of 32, heads 48/48/96/96; **4,082,801** parameters
+(3.2× `tf2_b4c192`'s 1,290,513). Parity (`tests/test_nn_parity.py`, random net): Eigen FP32 max diff 9e-7, CUDA FP32
+5e-7, CUDA FP16 9e-4 (b4c192: 8e-4), symmetries 0 and 1. On the 3070: self-play NN evals/s 15.9k vs 26.6k for
+b4c192 (**1.68× slower**, 256 game threads, FP16); training 498 vs 1045 samples/s (2.1×).

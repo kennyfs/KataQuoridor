@@ -116,6 +116,8 @@ at game end (counted as above),
   search must use the same λ, or leaf evaluations and terminal values disagree. That's why λ lives in `Rules`
   (like komi), where search and the training-data writer see the same value. Don't change λ for a net that was
   trained with another λ.
+- **History:** the v2 configs used λ = 0.05 (a placeholder) until 2026-10-02 (run3 up to `run3-s21886976-d3911658`);
+  since then λ = 0 in all configs, so `u = s` ([QuoridorIOv3.md §9](QuoridorIOv3.md#9-λ--0-2026-10-02)).
 
 ### 2.7 Fence handicap
 
@@ -394,7 +396,8 @@ When step 2 raises that to 2, the same test runs the real compensation with the 
 
 - `maxPlies = 300`;
 - `timeBonusPerPly = 0.05`, a **placeholder**: λ is a property of the training run and will be chosen by experiment
-  (0 / 0.05 / 0.15 on a small net);
+  (0 / 0.05 / 0.15 on a small net). **Now 0** (2026-10-02, [QuoridorIOv3.md §9](QuoridorIOv3.md#9-λ--0-2026-10-02)):
+  the repetition draw ends cycling games, and with λ = 0 `scoreMean` is the lead;
 - `staticScoreUtilityFactor = 0` (dynamic score utility only; `dynamicScoreUtilityFactor = 0.30` as before): with
   λ > 0, `u` at the start is about λ·maxPlies (+15 for 0.05), which the dynamic utility re-centres;
 - the randomizations and compensations of §5.1 and §5.2.

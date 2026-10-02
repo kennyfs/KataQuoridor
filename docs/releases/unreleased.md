@@ -197,3 +197,16 @@ See [QuoridorIOv3.md](../QuoridorIOv3.md).
   once the nets race purposefully. With a random net the rule turns 81–86% of games into draws (vs 15–17% without).
 - Tools: `dumpnninputs -io-version 3`, `writesampletrainquoridor` (now with repetition-draw games); new
   `runtests quoridorv3`.
+
+## Time bonus off (λ = 0), bigger net preset
+
+See [QuoridorIOv3.md §9](../QuoridorIOv3.md#9-λ--0-2026-10-02).
+
+- **`timeBonusPerPly = 0`** in the self-play and gatekeeper configs (was 0.05): `scoreMean` is now the lead. Nets
+  trained before (run3 up to `run3-s21886976-d3911658`) used 0.05. Gatekeeper `maxVisits = 256`; self-play
+  `maxRowsPerTrainFile = 10000`.
+- **`python/quoridor_convert_tdata_lambda0.py`** converts λ > 0 training data: final utility score := lead on
+  decisive rows, and the non-convertible short-term score target is switched off by the new weight column **C70**
+  (read by the loss; written 0).
+- **`tf2_b8c256_quoridor_v3`** preset (4.08M parameters, 8 transformer blocks, 256 trunk).
+- `kq_ladder`: `extra_pairs` for pairs such as two nets at equal search time.
