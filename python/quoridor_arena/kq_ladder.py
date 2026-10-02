@@ -97,7 +97,20 @@ def make_roster(cfg, model_lister=list_models):
             name = bot_name(n["prefix"], n["samples"], v)
             if name not in bots:
                 bots[name] = dict(n, name=name, visits=v)
+    for ep in cfg.get("extra_pairs", []):
+        for spec in (ep["a"], ep["b"]):
+            n, v = parse_bot_spec(nets, spec)
+            name = bot_name(n["prefix"], n["samples"], v)
+            if name not in bots:
+                bots[name] = dict(n, name=name, visits=v)
     return nets, bots
+
+
+def parse_bot_spec(nets, spec):
+    """"SERIES:NET@VISITS" (NET: latest, oldest or a sample count) -> (net, visits)."""
+    sn, v = spec.rsplit("@", 1)
+    series, which = sn.split(":", 1)
+    return pick_net(nets, series, which), int(v)
 
 
 def pick_net(nets, series, which):
@@ -162,6 +175,14 @@ def make_pairs(cfg, nets, bots):
         for v in vs["visits"]:
             if v != visits:
                 pairs[(name(n), name(n, v))] = (vs["games"], "visits")
+    # extra_pairs: [{"a": "SERIES:NET@VISITS", "b": ..., "games": N}], e.g. two series' latest nets at visit counts
+    # with equal search time. Replaces the games of an existing pair with the same bots.
+    for ep in cfg.get("extra_pairs", []):
+        (na, va), (nb, vb) = parse_bot_spec(nets, ep["a"]), parse_bot_spec(nets, ep["b"])
+        a, b = name(na, va), name(nb, vb)
+        if (b, a) in pairs:
+            a, b = b, a
+        pairs[(a, b)] = (ep["games"] + ep["games"] % 2, "extra")
     out = [(a, b, n, kind) for (a, b), (n, kind) in pairs.items()]
     for a, b, _, _ in out:
         assert a in bots and b in bots, (a, b)

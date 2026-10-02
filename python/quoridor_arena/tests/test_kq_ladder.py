@@ -205,3 +205,21 @@ def test_organize_sgfs(tmp_path):
     lines = (out / "gen1" / "a_vs_b.sgfs").read_text().splitlines()
     assert [l.split("gameId=")[1].split("]")[0] for l in lines] == ["a_vs_b_o000_ab", "a_vs_b_o000_ba",
                                                                      "a_vs_b_o001_ab"]
+
+
+def test_extra_pairs():
+    cfg = make_cfg()
+    cfg["extra_pairs"] = [{"a": "run3:latest@256", "b": "q0:latest@150", "games": 399},
+                          {"a": "run3:latest@256", "b": "q0:latest@256", "games": 400}]
+    nets, bots = roster(cfg)
+    r3, q0 = nets["run3"][-1]["samples"], nets["q0"][-1]["samples"]
+    assert bots["q0-s%d-v150" % q0]["visits"] == 150
+    pairs = {(a, b): (n, kind) for a, b, n, kind in kq_ladder.make_pairs(cfg, nets, bots)}
+    assert pairs[("r3-s%d-v256" % r3, "q0-s%d-v150" % q0)] == (400, "extra")
+    # replaces the games of the existing latest-latest cross pair, keeping its order
+    key = ("q0-s%d-v256" % q0, "r3-s%d-v256" % r3)
+    key = key if key in pairs else key[::-1]
+    assert pairs[key] == (400, "extra")
+    with pytest.raises(SystemExit):
+        cfg["extra_pairs"] = [{"a": "run3:123@256", "b": "q0:latest@256", "games": 2}]
+        roster(cfg)

@@ -264,7 +264,10 @@ samples from the `-s<N>-` in the name). All play at one visit count (`visits`). 
 - within a series, nets at generation distance `links.generation_distances` (e.g. 1, 2, 3, 6, 12);
 - across series (`links.cross`), each net of a later series against the nearest net of the first series in log
   samples, plus oldest–oldest and latest–latest;
-- visit scaling (`visit_scaling`): one net at other visit counts against itself at `visits`.
+- visit scaling (`visit_scaling`): one net at other visit counts against itself at `visits`;
+- extra pairs (`extra_pairs`, optional): `[{"a": "run3:latest@256", "b": "run4:latest@150", "games": 400}]`,
+  bots given as `SERIES:NET@VISITS` (`NET` = `latest`, `oldest` or a sample count), e.g. two architectures at equal
+  search time. The bots are added to the roster; an existing pair with the same bots gets these games instead.
 
 Games per pair follow a Gaussian in log-samples distance, `max(min, max_games · exp(−d²/(2σ²)))`,
 `d = |ln s_a − ln s_b|`, rounded up to even. Rationale: Elo is roughly linear in log samples, and a game between
@@ -282,7 +285,7 @@ schedule, and the arena's per-pair table. `elo_vs_samples.png`: Elo vs samples p
 
 **Config** (`kq_ladder_example.json`): `katago`, `gtp_config` (for the arbiter that samples openings), `series`,
 `visits`, `reference`, `compare_ladder`, `links`, `games` (`max`, `min`, `sigma_log_samples`), `visit_scaling`,
-`openings`, `rules`, `search` (match search keys), `match` (`numGameThreads`, `nnMaxBatchSize`, NN cache…).
+`extra_pairs`, `openings`, `rules`, `search` (match search keys), `match` (`numGameThreads`, `nnMaxBatchSize`, NN cache…).
 Resume: `run` skips game ids already in `DIR/match/results.jsonl`; `adapt` stores its additions in
 `DIR/extra_games.json`.
 
