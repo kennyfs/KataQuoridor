@@ -34,7 +34,8 @@ Usage:
   python quoridor_convert_tdata_lambda0.py DIR [DIR ...]             # convert in place
 
 Every *.npz under the DIRs (recursively) is rewritten atomically (tmp file + rename), with the same zip compression
-as the original (C++ writes deflated files, quoridor_convert_tdata_v2_to_v3.py stored ones).
+as the original (C++ writes deflated files, quoridor_convert_tdata_v2_to_v3.py stored ones) and the original mtime
+(shuffle.py picks the training window by file mtime).
 """
 import argparse
 import os
@@ -115,8 +116,11 @@ def process_file(path: str, lambda_old: float, max_plies: int, dry_run: bool):
     except Exception as e:
         return path, "error", {"error": str(e)}
     if status == "convert" and not dry_run:
+        st = os.stat(path)
         tmp = path + ".tmp.npz"
         (np.savez_compressed if is_compressed(path) else np.savez)(tmp, **out)
+        # Keep the original mtime: shuffle.py orders files by mtime to pick the most recent window.
+        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
         os.replace(tmp, path)
     return path, status, stats
 

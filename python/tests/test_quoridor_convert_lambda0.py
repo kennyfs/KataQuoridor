@@ -58,11 +58,13 @@ def test_synthetic_round_trip(tmp_path, compressed):
     arrs, kind = synthetic_arrays(rng)
     path = str(tmp_path / "a.npz")
     write(path, arrs, compressed)
+    os.utime(path, ns=(1_600_000_000_000_000_000, 1_600_000_000_123_456_789))
 
     assert conv.main(["-dry-run", str(tmp_path)]) == 0
     assert np.array_equal(load(path)["globalTargetsNC"], arrs["globalTargetsNC"])
 
     assert conv.main([str(tmp_path)]) == 0
+    assert os.stat(path).st_mtime_ns == 1_600_000_000_123_456_789
     out = load(path)
     assert sorted(out) == sorted(arrs)
     for k in arrs:
