@@ -4460,8 +4460,11 @@ class Model(torch.nn.Module):
         return changed
 
     def supports_per_block_compile(self) -> bool:
+        # The per-block path (_per_block_finish) only knows the Go heads, so Quoridor models are
+        # compiled as one graph, as before the upstream merge.
         return (
-            all(bk[1] in _TRANSFORMER_SEQ_LAYOUT_KINDS for bk in self.block_kind)
+            not modelconfigs.is_quoridor(self.config)
+            and all(bk[1] in _TRANSFORMER_SEQ_LAYOUT_KINDS for bk in self.block_kind)
             and not self.has_intermediate_head
             and not self.use_trunk_channel_gate
             and not self.use_trunk_residual_backout

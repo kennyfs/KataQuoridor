@@ -343,3 +343,12 @@ def test_quoridor_onnx_export(name):
         assert "InputGlobal" in in_names
         assert "OutputPolicy" in out_names
         assert "OutputValue" in out_names
+
+
+def test_quoridor_models_not_per_block_compiled():
+    # Upstream's per-block compiled trunk only knows the Go heads; Quoridor must fall back to a single graph.
+    from katago.train import modelconfigs
+    from katago.train.model_pytorch import Model
+    for name in ("tf2_b4c192_quoridor_v3", "tf2_b8c256_quoridor_v3"):
+        model = Model(modelconfigs.config_of_name[name], 9)
+        assert not model.supports_per_block_compile(), name
