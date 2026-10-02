@@ -68,6 +68,7 @@ SHUFFLE_KEEPROWS="${SHUFFLE_KEEPROWS:-1200000}" # Needs to be larger than MAX_TR
 EXPAND_WINDOW_PER_ROW="${EXPAND_WINDOW_PER_ROW:-0.6}" # Initial slope of the shuffle window growth (shuffle.sh default 0.4). Larger keeps more older data in the window.
 MAX_CYCLES="${MAX_CYCLES:-0}" # Stop after this many cycles (0 = run forever). Rerunning continues the run.
 VALIDATE="${VALIDATE:-1}" # 1: shuffle peels off ~5% of the selfplay files (by path md5) as validation data; 0: no validation.
+TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}" # Extra train.py args, e.g. "-use-aurora -wd-floor-frac 0.5 -lr-scale 2 -max-val-samples 5000"
 GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs longer than this many seconds (it has hung
 # once in CUDA backend init); the candidate stays in modelstobetested/ and is tested again next cycle. 0 disables.
 
@@ -120,7 +121,7 @@ do
     )
 
     echo "Train"
-    time ./train.sh "$BASEDIR" "$TRAININGNAME" "$MODELKIND" "$BATCHSIZE" main -samples-per-epoch "$NUM_TRAIN_SAMPLES_PER_EPOCH" -swa-period-samples "$NUM_TRAIN_SAMPLES_PER_SWA" -quit-if-no-data -stop-when-train-bucket-limited -export-only-at-end -max-train-bucket-per-new-data "$MAX_TRAIN_PER_DATA" -max-train-bucket-size "$MAX_TRAIN_SAMPLES_PER_CYCLE"
+    time ./train.sh "$BASEDIR" "$TRAININGNAME" "$MODELKIND" "$BATCHSIZE" main -samples-per-epoch "$NUM_TRAIN_SAMPLES_PER_EPOCH" -swa-period-samples "$NUM_TRAIN_SAMPLES_PER_SWA" -quit-if-no-data -stop-when-train-bucket-limited -export-only-at-end -max-train-bucket-per-new-data "$MAX_TRAIN_PER_DATA" -max-train-bucket-size "$MAX_TRAIN_SAMPLES_PER_CYCLE" $TRAIN_EXTRA_ARGS
 
     echo "Export"
     (
