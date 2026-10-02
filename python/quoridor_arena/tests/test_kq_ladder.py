@@ -187,3 +187,21 @@ def test_widest_pairs_and_diff_ci():
     pairs = [("a", "b", 10, "gen1"), ("b", "c", 10, "gen1")]
     top = kq_ladder.widest_pairs(pairs, names, point, boot, 1)
     assert top[0][1:] == ("b", "c")
+
+
+def test_organize_sgfs(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    sgf = lambda gid: "(;FF[4]C[startTurnIdx=4,gameHash=X gameId=%s];B[ie])" % gid
+    (raw / "T1.sgfs").write_text(sgf("a_vs_b_o001_ab") + "\n" + sgf("a_vs_c_o000_ab") + "\n")
+    (raw / "T2.sgfs").write_text(sgf("a_vs_b_o000_ba") + "\n" + sgf("a_vs_b_o000_ab") + "\n" +
+                                 sgf("a_vs_b_o001_ab") + "\n" + sgf("x_vs_y_o000_ab") + "\n\n")
+    pairs = [("a", "b", 4, "gen1"), ("a", "c", 2, "cross")]
+    out = tmp_path / "sgfs"
+    for _ in range(2):  # idempotent
+        counts = kq_ladder.organize_sgfs(str(raw), str(out), pairs)
+    assert counts == {str(out / "gen1" / "a_vs_b.sgfs"): 3, str(out / "cross" / "a_vs_c.sgfs"): 1,
+                      str(out / "other" / "x_vs_y.sgfs"): 1}
+    lines = (out / "gen1" / "a_vs_b.sgfs").read_text().splitlines()
+    assert [l.split("gameId=")[1].split("]")[0] for l in lines] == ["a_vs_b_o000_ab", "a_vs_b_o000_ba",
+                                                                     "a_vs_b_o001_ab"]

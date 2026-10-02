@@ -238,13 +238,17 @@ python -m quoridor_arena.kq_ladder run    --config C --out DIR [--limit N]
 # Optional second pass: add games to the pairs whose Elo difference has the widest CI, then `run` again:
 python -m quoridor_arena.kq_ladder adapt  --config C --out DIR --pairs 10 --games 40
 python -m quoridor_arena.kq_ladder report --config C --out DIR
+python -m quoridor_arena.kq_ladder sgfs   --config C --out DIR   # only re-sort the SGFs per pair
 ```
 
 **Engine.** `katago match` with two KataQuoridor keys (`cpp/configs/match_example.cfg`): `gameListFile`, one game
 per line (`<id> <blackBot> <whiteBot> <opening moves…>`), played once each from the position after its opening
 (GameRunner's start-position path), instead of random pairings; and `gameResultsFile`, one JSON line per finished
-game (winner, `RE`, draw reason, plies, rules, times). Without them `match` behaves as upstream. The SGFs
-(`DIR/match/sgfs/*.sgfs`, one file per game thread) have the self-play move comments with `lead=`, the root comment
+game (winner, `RE`, draw reason, plies, rules, times). Without them `match` behaves as upstream. `match` writes
+the SGFs per game thread (`DIR/match/sgfs/*.sgfs`, the raw copy); after each run `kq_ladder` sorts them into one
+file per pair, `DIR/sgfs/<link kind>/<a>_vs_<b>.sgfs` (kinds `gen1`, `gen2`, …, `cross`, `cross-ends`, `visits`;
+games in opening order, both colours together), rebuilt from the raw files each time (`kq_ladder sgfs` does only
+this). The SGFs have the self-play move comments with `lead=`, the root comment
 has `startTurnIdx=<opening plies>` and `gameId=<id>`. Nets of every Quoridor I/O version (v1, v2, v3) can play in
 one process. The generated `DIR/match/match.cfg` sets the rules (standard komi −0.5, walls 10/10, `maxPlies` 300,
 repetition rule off, `timeBonusPerPly` from the config: a rule, so one value for all games; I/O v1 nets don't

@@ -10,9 +10,10 @@ Usage (from the python/ directory):
     python -m quoridor_arena.kq_ladder plan   --config C --out DIR      # schedule only, no games
     python -m quoridor_arena.kq_ladder adapt  --config C --out DIR --pairs 10 --games 40   # add games, then `run`
     python -m quoridor_arena.kq_ladder report --config C --out DIR
+    python -m quoridor_arena.kq_ladder sgfs   --config C --out DIR     # only re-sort the SGFs per pair
 
-`run` plays every scheduled game whose id is not yet in DIR/match/results.jsonl (so it resumes), then writes
-DIR/results.jsonl (arena format, for elo.py), DIR/report.md and DIR/elo_vs_samples.png. See docs/Evaluation.md.
+`run` plays every scheduled game whose id is not yet in DIR/match/results.jsonl (so it resumes), then sorts the SGFs into
+DIR/sgfs/<link kind>/<a>_vs_<b>.sgfs and writes DIR/results.jsonl (arena format, for elo.py), DIR/report.md and DIR/elo_vs_samples.png. See docs/Evaluation.md.
 """
 import argparse
 import collections
@@ -281,6 +282,43 @@ def convert_all(raw, schedule, opening_list, komi=-0.5):
         seen.add(gid)
         out.append(convert_result(r, info[gid], opening_list[info[gid][3]], komi))
     return out
+
+
+# -- SGFs -----------------------------------------------------------------------
+
+_GAME_ID_RE = re.compile(r"gameId=([^\]\s,]+)")
+
+
+def organize_sgfs(raw_dir, out_dir, pairs):
+    """Sorts the SGFs that `katago match` writes per game thread (raw_dir/*.sgfs, one game per line, root comment
+    gameId=<id>) into one file per pair: out_dir/<link kind>/<a>_vs_<b>.sgfs, games in id order (opening, then
+    colours). The files are rebuilt from raw_dir each time (first record per id wins), so this is idempotent.
+    Games whose pair is not scheduled go to out_dir/other/. Returns {path: number of games}."""
+    kind_of = {(a, b): kind for a, b, _, kind in pairs}
+    games = {}
+    for path in sorted(glob.glob(os.path.join(raw_dir, "*.sgfs"))):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                m = _GAME_ID_RE.search(line)
+                if not line or not m or m.group(1) in games:
+                    continue
+                games[m.group(1)] = line
+    by_file = collections.defaultdict(list)
+    for gid, sgf in games.items():
+        head = re.sub(r"_o\d+_(ab|ba)$", "", gid)
+        a, sep, b = head.partition("_vs_")
+        kind = kind_of.get((a, b), "other") if sep else "other"
+        name = "%s_vs_%s.sgfs" % (a, b) if sep else "unknown.sgfs"
+        by_file[os.path.join(out_dir, kind, name)].append((gid, sgf))
+    for path, lst in by_file.items():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            for _, sgf in sorted(lst):
+                f.write(sgf + "\n")
+        os.replace(tmp, path)
+    return {p: len(v) for p, v in by_file.items()}
 
 
 # -- ratings --------------------------------------------------------------------
@@ -588,7 +626,14 @@ class Ladder:
                 rc, n1 - n0, secs / 60, (n1 - n0) / max(secs, 1e-9)), flush=True)
             if rc != 0:
                 print("!!! see %s" % os.path.join(self.out, "match", "match.log"), flush=True)
+        self.sgfs()
         return self.report()
+
+    def sgfs(self):
+        counts = organize_sgfs(os.path.join(self.out, "match", "sgfs"), os.path.join(self.out, "sgfs"), self.pairs)
+        print("SGFs: %d games in %d pair files under %s" % (
+            sum(counts.values()), len(counts), os.path.join(self.out, "sgfs")), flush=True)
+        return 0
 
     def report(self, resamples=1000):
         opening_list = self.openings()
@@ -628,7 +673,7 @@ class Ladder:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["plan", "run", "report", "adapt"])
+    ap.add_argument("command", choices=["plan", "run", "report", "adapt", "sgfs"])
     ap.add_argument("--config", default=os.path.join(HERE, "kq_ladder_example.json"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, help="run: play at most this many of the remaining games (pilot)")
@@ -644,6 +689,8 @@ def main(argv=None):
         return 0
     if args.command == "run":
         return lad.run(args.limit)
+    if args.command == "sgfs":
+        return lad.sgfs()
     if args.command == "report":
         return lad.report(args.bootstrap)
     return lad.adapt(args.pairs, args.games)
