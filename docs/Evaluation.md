@@ -35,6 +35,7 @@ python -m pytest -o addopts="" quoridor_arena/tests
 | `arena.py` | Roster, schedule, parallel workers, resume, adaptive skip, SGF output. |
 | `elo.py` | Bradley-Terry fit, bootstrap CIs, `report.md`. |
 | `roster_default.json` | The default ladder. |
+| `kq_ladder.py` | KataQuoridor-only ladder in one `katago match` process, sparse pairs ([below](#kataquoridor-only-ladder-kq_ladderpy)). |
 
 ### Arbiter
 
@@ -220,6 +221,66 @@ The default roster (`roster_default.json`) contains:
   `maxVisits` 1 (policy only) and 256, plus the latest snapshot (s16141056) at 16, 64 and 800 visits.
 
 The names are `kq-<samples>-v<visits>`.
+
+## KataQuoridor-only ladder (`kq_ladder.py`)
+
+The arena runs each player as its own QTP process with one search thread, so NN batches are tiny and a ladder of
+many nets at 256 visits is slow. `kq_ladder.py` rates many KataQuoridor nets with **one `katago match` process**:
+one NN evaluator per model file shared by all its bots and games, many game threads, so each model sees large
+batches. It is for KataQuoridor nets only (no SimpleQuoridor).
+
+```bash
+cd python
+# Schedule only:
+python -m quoridor_arena.kq_ladder plan   --config quoridor_arena/kq_ladder_example.json --out ~/arena/kq_ladder1
+# Play the remaining games (resumable), then write results.jsonl, report.md, elo_vs_samples.png:
+python -m quoridor_arena.kq_ladder run    --config C --out DIR [--limit N]
+# Optional second pass: add games to the pairs whose Elo difference has the widest CI, then `run` again:
+python -m quoridor_arena.kq_ladder adapt  --config C --out DIR --pairs 10 --games 40
+python -m quoridor_arena.kq_ladder report --config C --out DIR
+```
+
+**Engine.** `katago match` with two KataQuoridor keys (`cpp/configs/match_example.cfg`): `gameListFile`, one game
+per line (`<id> <blackBot> <whiteBot> <opening moves…>`), played once each from the position after its opening
+(GameRunner's start-position path), instead of random pairings; and `gameResultsFile`, one JSON line per finished
+game (winner, `RE`, draw reason, plies, rules, times). Without them `match` behaves as upstream. The SGFs
+(`DIR/match/sgfs/*.sgfs`, one file per game thread) have the self-play move comments with `lead=`, the root comment
+has `startTurnIdx=<opening plies>` and `gameId=<id>`. Nets of every Quoridor I/O version (v1, v2, v3) can play in
+one process. The generated `DIR/match/match.cfg` sets the rules (standard komi −0.5, walls 10/10, `maxPlies` 300,
+repetition rule off, `timeBonusPerPly` from the config: a rule, so one value for all games; I/O v1 nets don't
+model it), no resignation, no komi compensation, 1 search thread per bot, and copies the search parameters of
+`gtp_quoridor.cfg` (the arena's), so a bot plays as the arena's `katago_model` entry with the same visits.
+
+**Openings.** The arena's (`openings.py`, `DIR/openings.json`): every opening is played twice per pair with colours
+swapped, and opening k is the same for all pairs.
+
+**Schedule.** Nets are ordered by training samples within each series (a glob or list of model directories;
+samples from the `-s<N>-` in the name). All play at one visit count (`visits`). Pairs, not a round robin:
+
+- within a series, nets at generation distance `links.generation_distances` (e.g. 1, 2, 3, 6, 12);
+- across series (`links.cross`), each net of a later series against the nearest net of the first series in log
+  samples, plus oldest–oldest and latest–latest;
+- visit scaling (`visit_scaling`): one net at other visit counts against itself at `visits`.
+
+Games per pair follow a Gaussian in log-samples distance, `max(min, max_games · exp(−d²/(2σ²)))`,
+`d = |ln s_a − ln s_b|`, rounded up to even. Rationale: Elo is roughly linear in log samples, and a game between
+players Δ Elo apart carries information ∝ p(1−p), which falls quickly with Δ; distant pairs mainly serve to tie the
+chain together (so errors don't accumulate along it), for which a few games suffice. The game list is ordered by
+pair, so at any time the game threads play a few pairs and each model's batches stay large.
+
+**Ratings.** Match results are converted to arena records (`DIR/results.jsonl`; draws count half) and fitted with
+`elo.py` (Bradley–Terry, bootstrap over paired-game units). The anchor is the oldest net of the first series
+(`anchor` to override); `reference` adds Elo relative to another bot, with the CI of the difference;
+`compare_ladder` adds that bot-relative Elo from an arena ladder (names `kq-s<N>-v<V>` mapped to the series
+prefix). `report.md`: summary (Black win rate, draws, plies, runs and games/s), rating table (series, samples,
+visits, Elo, CI, games, score, Black win rate, draws, avg plies), visit scaling, Elo per doubling of samples,
+schedule, and the arena's per-pair table. `elo_vs_samples.png`: Elo vs samples per series (linear and log x).
+
+**Config** (`kq_ladder_example.json`): `katago`, `gtp_config` (for the arbiter that samples openings), `series`,
+`visits`, `reference`, `compare_ladder`, `links`, `games` (`max`, `min`, `sigma_log_samples`), `visit_scaling`,
+`openings`, `rules`, `search` (match search keys), `match` (`numGameThreads`, `nnMaxBatchSize`, NN cache…).
+Resume: `run` skips game ids already in `DIR/match/results.jsonl`; `adapt` stores its additions in
+`DIR/extra_games.json`.
 
 ## Notes
 

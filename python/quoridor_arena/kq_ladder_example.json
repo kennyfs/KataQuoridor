@@ -1,0 +1,31 @@
+{
+ "katago": "{repo}/cpp/build-cuda/katago",
+ "gtp_config": "{repo}/cpp/configs/gtp_quoridor.cfg",
+ "series": [
+  {"name": "run3", "prefix": "r3", "models": "~/q1_run/run3/models/run3-*"},
+  {"name": "q0", "prefix": "q0", "models": [
+   "~/q0_run/models/run1-s1220864-d543465",
+   "~/q0_run/models/run1-s3497984-d1032212",
+   "~/q0_run/models/run1-s6290688-d1527957",
+   "~/q0_run/models/run1-s9327872-d1959082",
+   "~/q0_run/models/run1-s16141056-d2846694"]}
+ ],
+ "visits": 256,
+ "reference": "q0-s16141056-v256",
+ "compare_ladder": "~/arena/ladder1",
+ "links": {"generation_distances": [1, 2, 3, 6, 12], "cross": true},
+ "games": {"max": 80, "min": 16, "sigma_log_samples": 0.7},
+ "visit_scaling": {"series": "run3", "net": "latest", "visits": [64, 1024], "games": 80},
+ "openings": {"plies": 4, "wall_frac": 0.2, "seed": 1},
+ "rules": {"komi": -0.5, "maxPlies": 300, "timeBonusPerPly": 0.05, "repetitionDrawCount": 0},
+ "search": {
+  "winLossUtilityFactor": 1.0, "staticScoreUtilityFactor": 0.10, "dynamicScoreUtilityFactor": 0.30,
+  "dynamicScoreCenterZeroWeight": 0.25, "dynamicScoreCenterScale": 0.50, "policyOptimism": 1.0,
+  "rootPolicyOptimism": 0.0, "useUncertainty": true, "uncertaintyExponent": 1.0, "uncertaintyCoeff": 0.25,
+  "rootSymmetryPruning": true
+ },
+ "match": {
+  "numGameThreads": 256, "nnMaxBatchSize": 128, "numNNServerThreadsPerModel": 1,
+  "nnCacheSizePowerOfTwo": 18, "nnMutexPoolSizePowerOfTwo": 14
+ }
+}
