@@ -1882,6 +1882,35 @@ tf2_b4c192_quoridor = {
     "pos_len": 9,
 }
 
+# Twice the depth and a wider trunk than tf2_b4c192_quoridor: 8 blocks, 256 trunk channels, 4,082,801 params.
+# Same attention head dims (32: the CUDA flash-attention kernel supports 16/32/64 only), FFN 1.5x the trunk.
+tf2_b8c256_quoridor = {
+    "game": "quoridor",
+    "version": 17,
+    "norm_kind": "fixup",
+    "bnorm_epsilon": 1e-4,
+    "bnorm_running_avg_momentum": 0.001,
+    "initial_conv_1x1": False,
+    "gamma_weight_decay_center_1": True,
+    "trunk_num_channels": 256,
+    "mid_num_channels": 128,
+    "gpool_num_channels": 32,
+    "transformer_ffn_channels": 384,
+    "transformer_heads": 4,
+    "transformer_kv_heads": 4,
+    "attention_query_head_dim": 32,
+    "attention_value_head_dim": 32,
+    "learnable_rope": True,
+    "block_kind": [[f"block{i}", "bottlenest2transformerropesg"] for i in range(1, 9)],
+    "p1_num_channels": 48,
+    "g1_num_channels": 48,
+    "v1_num_channels": 96,
+    "v2_size": 96,
+    "num_policy_outputs": 18,
+    "num_value_outputs": 2,
+    "pos_len": 9,
+}
+
 b2c64_quoridor = {
     "game": "quoridor",
     "version": 17,
@@ -1910,12 +1939,14 @@ b2c64_quoridor_v2 = dict(b2c64_quoridor, quoridor_io_version=2)
 # Quoridor I/O v3 presets: v2 + the repetition inputs (2 spatial, 2 global channels). Only v3 nets can be trained;
 # a v2 checkpoint becomes v3 with quoridor_upgrade_v2_to_v3.py.
 tf2_b4c192_quoridor_v3 = dict(tf2_b4c192_quoridor, quoridor_io_version=3)
+tf2_b8c256_quoridor_v3 = dict(tf2_b8c256_quoridor, quoridor_io_version=3)
 b2c64_quoridor_v3 = dict(b2c64_quoridor, quoridor_io_version=3)
 
 
 base_config_of_name = {
     # QUORIDOR MODELS =============================================================
     "tf2_b4c192_quoridor_v3": tf2_b4c192_quoridor_v3,
+    "tf2_b8c256_quoridor_v3": tf2_b8c256_quoridor_v3,
     "b2c64_quoridor_v3": b2c64_quoridor_v3,
     # I/O v2 (inference and export of existing nets, and the source of quoridor_upgrade_v2_to_v3.py).
     "tf2_b4c192_quoridor_v2": tf2_b4c192_quoridor_v2,
