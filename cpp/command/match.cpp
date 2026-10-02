@@ -17,6 +17,74 @@
 using namespace std;
 
 
+//KataQuoridor: a fixed list of games (gameListFile), each with its bots and opening moves.
+//Line format: <gameId> <blackBotIdx> <whiteBotIdx> [opening move ...], '#' starts a comment.
+struct ListedGame {
+  string id;
+  int botB;
+  int botW;
+  vector<string> moveStrs;
+  Sgf::PositionSample startPos;
+};
+
+static vector<ListedGame> readGameList(const string& file, int numBots) {
+  vector<ListedGame> games;
+  vector<string> lines = FileUtils::readFileLines(file,'\n');
+  for(size_t i = 0; i<lines.size(); i++) {
+    string line = Global::trim(Global::stripComments(lines[i]));
+    if(line.length() <= 0)
+      continue;
+    vector<string> pieces = Global::split(line,' ');
+    vector<string> words;
+    for(const string& p: pieces)
+      if(Global::trim(p).length() > 0)
+        words.push_back(Global::trim(p));
+    ListedGame g;
+    if(words.size() < 3 || !Global::tryStringToInt(words[1],g.botB) || !Global::tryStringToInt(words[2],g.botW) ||
+       g.botB < 0 || g.botB >= numBots || g.botW < 0 || g.botW >= numBots)
+      throw StringError("gameListFile " + file + " line " + Global::uint64ToString(i+1) +
+                        ": expected <gameId> <blackBotIdx> <whiteBotIdx> [moves...] with bot indices < numBots, got: " + line);
+    g.id = words[0];
+    g.moveStrs.assign(words.begin()+3,words.end());
+    games.push_back(g);
+  }
+  if(games.size() <= 0)
+    throw StringError("gameListFile " + file + " has no games");
+  return games;
+}
+
+//Turn the opening moves into a start position, checking that they are legal under the configured rules.
+static void setStartPositions(vector<ListedGame>& games, int xSize, int ySize, const Rules& rules) {
+  for(ListedGame& g: games) {
+    Board board(xSize,ySize);
+    board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
+    g.startPos.board = board;
+    g.startPos.nextPla = P_BLACK;
+    g.startPos.initialTurnNumber = 0;
+    g.startPos.hintLoc = Board::NULL_LOC;
+    g.startPos.weight = 1.0;
+    BoardHistory hist(board,P_BLACK,rules,0,BoardHistoryModes());
+    Player pla = P_BLACK;
+    for(const string& s: g.moveStrs) {
+      Loc loc;
+      if(!Location::tryOfString(s,board,pla,loc) || !hist.isLegal(board,loc,pla) || hist.isGameFinished)
+        throw StringError("gameListFile: illegal opening move " + s + " in game " + g.id);
+      g.startPos.moves.push_back(Move(loc,pla));
+      hist.makeBoardMoveAssumeLegal(board,loc,pla,NULL);
+      pla = getOpp(pla);
+    }
+  }
+}
+
+static string jsonEscape(const string& s) {
+  string out;
+  for(char c: s) {
+    if(c == '"' || c == '\\') out += '\\';
+    out += c;
+  }
+  return out;
+}
+
 static std::atomic<bool> sigReceived(false);
 static std::atomic<bool> shouldStop(false);
 static void signalHandler(int signal)
@@ -125,6 +193,13 @@ int MainCmds::match(const vector<string>& args) {
     }
   }
 
+  //KataQuoridor: with gameListFile, play exactly the listed games (in order, each once, from its opening) instead of
+  //random pairings; numGamesTotal and the pairing keys are then unused. gameResultsFile gets one JSON line per game.
+  vector<ListedGame> listedGames;
+  if(cfg.contains("gameListFile"))
+    listedGames = readGameList(cfg.getString("gameListFile"),numBots);
+  const string gameResultsFile = cfg.contains("gameResultsFile") ? cfg.getString("gameResultsFile") : string();
+
   //Load the names of the bots and which model each bot is using
   vector<string> nnModelFilesByBot(numBots);
   vector<string> botNames(numBots);
@@ -148,6 +223,13 @@ int MainCmds::match(const vector<string>& args) {
   for(const std::pair<int,int>& pair : matchupsPerRound) {
     botIsUsed[pair.first] = true;
     botIsUsed[pair.second] = true;
+  }
+  if(listedGames.size() > 0) {
+    std::fill(botIsUsed.begin(),botIsUsed.end(),false);
+    for(const ListedGame& g: listedGames) {
+      botIsUsed[g.botB] = true;
+      botIsUsed[g.botW] = true;
+    }
   }
 
   //Dedup and load each necessary model exactly once
@@ -196,6 +278,14 @@ int MainCmds::match(const vector<string>& args) {
   const int minBoardYSizeUsed = gameRunner->getGameInitializer()->getMinBoardYSize();
   const int maxBoardXSizeUsed = gameRunner->getGameInitializer()->getMaxBoardXSize();
   const int maxBoardYSizeUsed = gameRunner->getGameInitializer()->getMaxBoardYSize();
+  if(listedGames.size() > 0) {
+    if(minBoardXSizeUsed != maxBoardXSizeUsed || minBoardYSizeUsed != maxBoardYSizeUsed)
+      throw StringError("gameListFile needs a single board size");
+    Rules listRules = Rules::getQuoridorRules();
+    Setup::loadQuoridorRuleKeys(cfg, listRules);
+    setStartPositions(listedGames, maxBoardXSizeUsed, maxBoardYSizeUsed, listRules);
+    logger.write("Loaded " + Global::uint64ToString(listedGames.size()) + " games from gameListFile");
+  }
 
   //Initialize neural net inference engine globals, and load models
   Setup::initializeSession(cfg);
@@ -221,7 +311,7 @@ int MainCmds::match(const vector<string>& args) {
   testAssert(patternBonusTables.size() == numBots);
 
   //Initialize object for randomly pairing bots
-  int64_t numGamesTotal = cfg.getInt64("numGamesTotal",1,((int64_t)1) << 62);
+  int64_t numGamesTotal = listedGames.size() > 0 ? (int64_t)listedGames.size() : cfg.getInt64("numGamesTotal",1,((int64_t)1) << 62);
   MatchPairer* matchPairer = new MatchPairer(cfg,numBots,botNames,nnEvalsByBot,paramss,matchupsPerRound,numGamesTotal);
 
   //Check for unused config keys
@@ -259,9 +349,18 @@ int MainCmds::match(const vector<string>& args) {
   };
   std::map<string,BotStats> botStatsMap;
 
+  std::atomic<size_t> nextListedGame(0);
+  ofstream* gameResultsOut = NULL;
+  if(gameResultsFile != string()) {
+    gameResultsOut = new ofstream();
+    FileUtils::open(*gameResultsOut, gameResultsFile, std::ios::out | std::ios::app);
+  }
+  vector<NNEvaluator*> nnEvalsByBotForList = nnEvalsByBot;
+
   auto runMatchLoop = [
     &gameRunner,&matchPairer,&sgfOutputDir,&logger,&gameSeedBase,&patternBonusTables,
-    &statsMutex, &gameCount, &timeUsedByBotMap, &movesByBotMap, &botStatsMap
+    &statsMutex, &gameCount, &timeUsedByBotMap, &movesByBotMap, &botStatsMap,
+    &listedGames, &nextListedGame, &gameResultsOut, &nnEvalsByBotForList, &paramss, &botNames
   ](
     uint64_t threadHash
   ) {
@@ -284,14 +383,33 @@ int MainCmds::match(const vector<string>& args) {
 
       MatchPairer::BotSpec botSpecB;
       MatchPairer::BotSpec botSpecW;
-      if(matchPairer->getMatchup(botSpecB, botSpecW, logger)) {
+      const ListedGame* listedGame = NULL;
+      bool haveMatchup;
+      if(listedGames.size() > 0) {
+        size_t idx = nextListedGame.fetch_add(1);
+        haveMatchup = idx < listedGames.size();
+        if(haveMatchup) {
+          listedGame = &listedGames[idx];
+          auto makeSpec = [&](int botIdx, MatchPairer::BotSpec& spec) {
+            spec.botIdx = botIdx;
+            spec.botName = botNames[botIdx];
+            spec.nnEval = nnEvalsByBotForList[botIdx];
+            spec.baseParams = paramss[botIdx];
+          };
+          makeSpec(listedGame->botB, botSpecB);
+          makeSpec(listedGame->botW, botSpecW);
+        }
+      }
+      else
+        haveMatchup = matchPairer->getMatchup(botSpecB, botSpecW, logger);
+      if(haveMatchup) {
         string seed = gameSeedBase + ":" + Global::uint64ToHexString(thisLoopSeedRand.nextUInt64());
         std::function<void(const MatchPairer::BotSpec&, Search*)> afterInitialization = [&patternBonusTables](const MatchPairer::BotSpec& spec, Search* search) {
           assert(spec.botIdx < patternBonusTables.size());
           search->setCopyOfExternalPatternBonusTable(patternBonusTables[spec.botIdx]);
         };
         gameData = gameRunner->runGame(
-          seed, botSpecB, botSpecW, NULL, NULL, logger,
+          seed, botSpecB, botSpecW, NULL, listedGame != NULL ? &listedGame->startPos : NULL, logger,
           shouldStopFunc, shouldPause, nullptr, afterInitialization, nullptr
         );
       }
@@ -299,12 +417,39 @@ int MainCmds::match(const vector<string>& args) {
       bool shouldContinue = gameData != NULL;
       if(gameData != NULL) {
         if(sgfOut != NULL) {
-          WriteSgf::writeSgf(*sgfOut,gameData->bName,gameData->wName,gameData->endHist,gameData,false,true);
+          if(listedGame != NULL)
+            WriteSgf::writeSgf(*sgfOut,gameData->bName,gameData->wName,gameData->endHist,gameData,false,true,
+                               std::numeric_limits<double>::quiet_NaN(),vector<string>({"gameId=" + listedGame->id}));
+          else
+            WriteSgf::writeSgf(*sgfOut,gameData->bName,gameData->wName,gameData->endHist,gameData,false,true);
           (*sgfOut) << endl;
         }
 
         {
           std::lock_guard<std::mutex> lock(statsMutex);
+          if(gameResultsOut != NULL) {
+            const BoardHistory& h = gameData->endHist;
+            //A game cut off by a stop signal is not finished and is not recorded.
+            if(h.isGameFinished) {
+              string winner = h.winner == C_BLACK ? "\"b\"" : h.winner == C_WHITE ? "\"w\"" : "null";
+              (*gameResultsOut)
+                << "{\"id\":\"" << jsonEscape(listedGame != NULL ? listedGame->id : string()) << "\""
+                << ",\"black\":\"" << jsonEscape(gameData->bName) << "\""
+                << ",\"white\":\"" << jsonEscape(gameData->wName) << "\""
+                << ",\"winner\":" << winner
+                << ",\"result\":\"" << WriteSgf::gameResultNoSgfTag(h) << "\""
+                << ",\"draw_reason\":\"" << WriteSgf::drawReason(h) << "\""
+                << ",\"plies\":" << h.moveHistory.size()
+                << ",\"opening_plies\":" << gameData->startHist.moveHistory.size()
+                << ",\"rules\":\"" << jsonEscape(h.rules.toString()) << "\""
+                << ",\"black_walls\":" << h.initialBoard.blackFences
+                << ",\"white_walls\":" << h.initialBoard.whiteFences
+                << ",\"b_time\":" << gameData->bTimeUsed
+                << ",\"w_time\":" << gameData->wTimeUsed
+                << "}" << endl;
+              gameResultsOut->flush();
+            }
+          }
           gameCount += 1;
           timeUsedByBotMap[gameData->bName] += gameData->bTimeUsed;
           timeUsedByBotMap[gameData->wName] += gameData->wTimeUsed;
@@ -401,6 +546,10 @@ int MainCmds::match(const vector<string>& args) {
       cout << finalMsg << endl;
   }
 
+  if(gameResultsOut != NULL) {
+    gameResultsOut->close();
+    delete gameResultsOut;
+  }
   delete matchPairer;
   delete gameRunner;
 
