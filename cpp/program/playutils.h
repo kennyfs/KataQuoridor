@@ -189,7 +189,8 @@ namespace PlayUtils {
     Loc moveLoc,
     double timeTaken,
     Player perspective,
-    bool logSearchInfoForChosenMove
+    bool logSearchInfoForChosenMove,
+    const PrintTreeOptions& treeOptions
   );
 
   Rules genRandomRules(Rand& rand);

@@ -752,6 +752,7 @@ struct GTPEngine {
     double resignMinMovesPerBoardArea;
     bool logSearchInfo;
     bool logSearchInfoForChosenMove;
+    PrintTreeOptions logSearchTreeOptions;
     bool debug;
   };
 
@@ -772,6 +773,9 @@ struct GTPEngine {
     double secondsPerReport = TimeControls::UNLIMITED_TIME_DEFAULT;
     vector<int> avoidMoveUntilByLocBlack;
     vector<int> avoidMoveUntilByLocWhite;
+    vector<Loc> focusMoves;
+    vector<double> focusWeights;
+    double focusProb = 0.0;
   };
 
   void filterZeroVisitMoves(const AnalyzeArgs& args, vector<AnalysisData> buf) {
@@ -1165,6 +1169,7 @@ struct GTPEngine {
     lastSearchFactor = searchFactor;
 
     bot->setAvoidMoveUntilByLoc(args.avoidMoveUntilByLocBlack,args.avoidMoveUntilByLocWhite);
+    bot->setRootFocus(args.focusMoves,args.focusWeights,args.focusProb);
 
     //So that we can tell by the end of the search whether we still care for the result.
     int expectedSearchId = (genmoveExpectedId.load() + 1) & 0x3FFFFFFF;
@@ -1289,11 +1294,11 @@ struct GTPEngine {
 
     if(gargs.logSearchInfo) {
       ostringstream sout;
-      PlayUtils::printGenmoveLog(sout,search,nnEval,moveLoc,timeTaken,perspective,gargs.logSearchInfoForChosenMove);
+      PlayUtils::printGenmoveLog(sout,search,nnEval,moveLoc,timeTaken,perspective,gargs.logSearchInfoForChosenMove,gargs.logSearchTreeOptions);
       logger.write(sout.str());
     }
     if(gargs.debug) {
-      PlayUtils::printGenmoveLog(cerr,search,nnEval,moveLoc,timeTaken,perspective,gargs.logSearchInfoForChosenMove);
+      PlayUtils::printGenmoveLog(cerr,search,nnEval,moveLoc,timeTaken,perspective,gargs.logSearchInfoForChosenMove,gargs.logSearchTreeOptions);
     }
 
     //Hacks--------------------------------------------------
@@ -1437,6 +1442,7 @@ struct GTPEngine {
 
     std::function<void(const Search* search)> callback = getAnalyzeCallback(pla,args);
     bot->setAvoidMoveUntilByLoc(args.avoidMoveUntilByLocBlack,args.avoidMoveUntilByLocWhite);
+    bot->setRootFocus(args.focusMoves,args.focusWeights,args.focusProb);
     if(args.showOwnership || args.showOwnershipStdev || args.showMovesOwnership || args.showMovesOwnershipStdev)
       bot->setAlwaysIncludeOwnerMap(true);
     else
@@ -1449,11 +1455,12 @@ struct GTPEngine {
   void computeAnticipatedWinnerAndScore(Player& winner, double& finalWhiteMinusBlackScore) {
     stopAndWait();
 
-    //No playoutDoublingAdvantage to avoid bias
+    //No playoutDoublingAdvantage or visitCapContempt to avoid bias
     //Also never assume the game will end abruptly due to pass
     {
       SearchParams tmpParams = genmoveParams;
       tmpParams.playoutDoublingAdvantage = 0.0;
+      tmpParams.visitCapContempt = 0;
       tmpParams.conservativePass = true;
       tmpParams.humanSLChosenMoveProp = 0.0;
       tmpParams.humanSLRootExploreProbWeightful = 0.0;
@@ -1512,11 +1519,12 @@ struct GTPEngine {
   vector<bool> computeAnticipatedStatuses() {
     stopAndWait();
 
-    //No playoutDoublingAdvantage to avoid bias
+    //No playoutDoublingAdvantage or visitCapContempt to avoid bias
     //Also never assume the game will end abruptly due to pass
     {
       SearchParams tmpParams = genmoveParams;
       tmpParams.playoutDoublingAdvantage = 0.0;
+      tmpParams.visitCapContempt = 0;
       tmpParams.conservativePass = true;
       tmpParams.humanSLChosenMoveProp = 0.0;
       tmpParams.humanSLRootExploreProbWeightful = 0.0;
@@ -1779,6 +1787,10 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
   bool gotAllowMovesBlack = false;
   bool gotAvoidMovesWhite = false;
   bool gotAllowMovesWhite = false;
+  vector<Loc> focusMoves;
+  vector<double> focusWeights;
+  double focusProb = 0.0;
+  bool gotFocus = false;
 
   parseFailed = false;
 
@@ -1788,6 +1800,7 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
 
   //interval <float interval in centiseconds>
   //avoid <player> <comma-separated moves> <until movenum>
+  //focus <comma-separated moves, each optionally suffixed with :weight> <probability>
   //minmoves <int min number of moves to show>
   //maxmoves <int max number of moves to show>
   //ownership <bool whether to show ownership or not>
@@ -1884,6 +1897,48 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
 
       continue;
     }
+    else if(key == "focus") {
+      //Can only be specified once. Parse one more argument.
+      if(gotFocus || pieces.size() < numArgsParsed+1) {
+        parseFailed = true;
+        break;
+      }
+      gotFocus = true;
+      const string& probStr = pieces[numArgsParsed];
+      numArgsParsed += 1;
+
+      if(!Global::tryStringToDouble(probStr,focusProb) || isnan(focusProb) || focusProb < 0.0 || focusProb > 1.0) {
+        parseFailed = true;
+        break;
+      }
+      vector<string> locPieces = Global::split(value,',');
+      for(size_t i = 0; i<locPieces.size(); i++) {
+        string s = Global::trim(locPieces[i]);
+        if(s.size() <= 0)
+          continue;
+        //Each move may carry a weight after a colon, such as C3:2. Missing weights default to 1.
+        double weight = 1.0;
+        size_t colonPos = s.find(':');
+        if(colonPos != string::npos) {
+          string weightStr = s.substr(colonPos+1);
+          s = s.substr(0,colonPos);
+          if(!Global::tryStringToDouble(weightStr,weight) || !isfinite(weight) || weight <= 0.0) {
+            parseFailed = true;
+            break;
+          }
+        }
+        Loc loc;
+        if(!tryParseLoc(s,engine->bot->getRootBoard(),loc)) {
+          parseFailed = true;
+          break;
+        }
+        focusMoves.push_back(loc);
+        focusWeights.push_back(weight);
+      }
+      if(parseFailed)
+        break;
+      continue;
+    }
     else if(key == "minmoves" && Global::tryStringToInt(value,minMoves) &&
             minMoves >= 0 && minMoves < 1000000000) {
       continue;
@@ -1939,6 +1994,9 @@ static GTPEngine::AnalyzeArgs parseAnalyzeCommand(
   args.showNoResultValue = showNoResultValue;
   args.avoidMoveUntilByLocBlack = avoidMoveUntilByLocBlack;
   args.avoidMoveUntilByLocWhite = avoidMoveUntilByLocWhite;
+  args.focusMoves = focusMoves;
+  args.focusWeights = focusWeights;
+  args.focusProb = focusProb;
   return args;
 }
 
@@ -2044,6 +2102,7 @@ int MainCmds::gtp(const vector<string>& args) {
   const bool logAllGTPCommunication = cfg.getBool("logAllGTPCommunication");
   const bool logSearchInfo = cfg.getBool("logSearchInfo");
   const bool logSearchInfoForChosenMove = cfg.contains("logSearchInfoForChosenMove") ? cfg.getBool("logSearchInfoForChosenMove") : false;
+  const PrintTreeOptions logSearchTreeOptions = Setup::loadLogSearchTreeOptions(cfg);
 
   bool startupPrintMessageToStderr = true;
   if(cfg.contains("startupPrintMessageToStderr"))
@@ -3170,6 +3229,7 @@ int MainCmds::gtp(const vector<string>& args) {
         gargs.resignMinMovesPerBoardArea = resignMinMovesPerBoardArea;
         gargs.logSearchInfo = logSearchInfo;
         gargs.logSearchInfoForChosenMove = logSearchInfoForChosenMove;
+        gargs.logSearchTreeOptions = logSearchTreeOptions;
         gargs.debug = debug;
 
         if(command == "kata-search_cancellable") {
@@ -3233,6 +3293,7 @@ int MainCmds::gtp(const vector<string>& args) {
         gargs.resignMinMovesPerBoardArea = resignMinMovesPerBoardArea;
         gargs.logSearchInfo = logSearchInfo;
         gargs.logSearchInfoForChosenMove = logSearchInfoForChosenMove;
+        gargs.logSearchTreeOptions = logSearchTreeOptions;
         gargs.debug = debug;
 
         //Make sure the "equals" for GTP is printed out prior to the first analyze line, regardless of thread racing
