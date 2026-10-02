@@ -1124,8 +1124,11 @@ class Metrics:
             shortterm_value_pred = shortterm_value_pred[:, 0] - shortterm_value_pred[:, 1]
             shortterm_value_stdevs_excess = (shortterm_value_actual - shortterm_value_pred) / torch.sqrt(pred_shortterm_value_error.detach() + 0.0001)
             shortterm_score_stdevs_excess = (target_global_nc[:, 15] - pred_utility_score.detach()) / torch.sqrt(pred_shortterm_score_error.detach() + 0.25)
+            # Rows whose C15 is not usable (C70 = 1, converted lambda > 0 data) contribute only the value term.
+            target_weight_shortterm_score = 1.0 - target_global_nc[:, 70]
             target_weight_shortoptimistic_policy = torch.clamp(
-                torch.sigmoid((shortterm_value_stdevs_excess - 1.5) * 3.0) + torch.sigmoid((shortterm_score_stdevs_excess - 1.5) * 3.0),
+                torch.sigmoid((shortterm_value_stdevs_excess - 1.5) * 3.0)
+                + target_weight_shortterm_score * torch.sigmoid((shortterm_score_stdevs_excess - 1.5) * 3.0),
                 min=0.0,
                 max=1.0,
             )
@@ -1210,9 +1213,11 @@ class Metrics:
             * huber_loss(pred_shortterm_value_error, shortterm_value_sqerror, delta=0.4)
         ).sum()
         # Upstream: 0.00002, delta 100 on squared points -> squared units /9: 0.0016, delta 11.
+        # C70 is 1 minus the weight of the short-term score target C15 (0 when written; 1 on rows converted from data
+        # with a time bonus lambda > 0, where C15 holds the searches' old utility scores, quoridor_convert_tdata_lambda0.py).
         shortterm_score_sqerror = torch.square(pred_utility_score.detach() - target_global_nc[:, 15]) + 1.0e-4
         loss_shortterm_score_error = (
-            0.0016 * global_weight * target_weight_td_value
+            0.0016 * global_weight * target_weight_td_value * (1.0 - target_global_nc[:, 70])
             * huber_loss(pred_shortterm_score_error, shortterm_score_sqerror, delta=11.0)
         ).sum()
 

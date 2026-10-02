@@ -717,7 +717,7 @@ void TrainingWriteBuffers::addRow(
   //excluding empty points adjacent to chains in atari (rules version 3).
   rowGlobal[69] = hist.modes.excludeTerritoryAdjacentToAtari ? 1.0f : 0.0f;
 
-  //Unused
+  //C70: 1 minus the short-term score target weight, 0 = full weight (only converted data sets it). C71-79 unused.
   for(int i = 70; i<80; i++)
     rowGlobal[i] = 0.0f;
 

@@ -274,7 +274,11 @@ struct TrainingWriteBuffers {
   //configured (see PlaySettings::useSearchValueSurprise). Both C65 and C66 are the stats that drove the
   //probability of this position being selected for reanalysis, recorded for statistical purposes.
   //C67: If C64, the number of visits of the original cheap search (the reanalysis search's visits are in C60).
-  //C68-79: Unused, zero-filled.
+  //C68-69: see addRow (Go rules modes; 0 for Quoridor).
+  //C70: Quoridor: 1.0 minus the weight of the short-term score target C15 (the score part of C12-15). Written 0 (full
+  //weight); python/quoridor_convert_tdata_lambda0.py sets 1 on rows written with a time bonus lambda > 0, whose C15
+  //(the searches' utility scores) can't be converted to lambda = 0. C12-14 and the other TD targets keep weight C24.
+  //C71-79: Unused, zero-filled.
 
   NumpyBuffer<float> globalTargetsNC;
 
