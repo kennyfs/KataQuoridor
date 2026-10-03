@@ -24,6 +24,7 @@
   --radius: 14px;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; min-height: 100%; }
 body {
   background: var(--bg); color: var(--ink);
@@ -57,7 +58,7 @@ button.toggle.on { background: var(--board); color: #fff; border-color: var(--bo
 #banner pre { margin: 4px 0 0; font-size: 12px; white-space: pre-wrap; max-height: 110px; overflow: auto; color: #8b3a3d; }
 #banner button { background: var(--bad); border-color: var(--bad); color: #fff; }
 
-main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; padding: 14px; min-height: 0; }
+main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 14px; padding: 14px; min-height: 0; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
 .center { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 12px; }
 .center > * { width: 100%; max-width: min(640px, calc(100vh - 310px)); min-width: min(100%, 330px); }
@@ -112,12 +113,31 @@ body.noeval #moveList .ev { visibility: hidden; }
 .ev-src { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 #chart { width: 100%; height: 84px; display: block; margin-top: 8px; cursor: pointer; }
 
-.hrow { display: grid; grid-template-columns: 20px 40px auto 1fr; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
-.hrow:hover { background: #f4f0fb; }
-.hn { width: 18px; height: 18px; border-radius: 50%; background: var(--hint); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.hrow .mv { font-weight: 700; }
-.hrow .hv { font-size: 13px; }
-.hrow .pv { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* analysis controls */
+.ana-ctl { display: inline-flex; gap: 6px; align-items: center; }
+.ana-ctl[hidden] { display: none; }
+.maxv { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12.5px; }
+.maxv input { font: inherit; width: 84px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px; background: #fbfaf7; color: var(--ink); }
+
+/* candidate list (analysis / hint) */
+.pol-only { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.cand-root { font-size: 12.5px; font-variant-numeric: tabular-nums; margin-bottom: 6px; }
+.cand-root .muted { color: var(--muted); font-size: 12px; }
+.cand-list { max-height: 42vh; overflow-y: auto; margin: 0 -14px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.crow { display: grid; grid-template-columns: 34px 40px 44px 46px 70px 56px 40px; column-gap: 4px; align-items: center; padding: 2px 14px; cursor: pointer; }
+.crow > span:nth-child(n+3) { text-align: right; }
+.crow:hover:not(.chead) { background: #eef7f9; }
+.crow.chead { cursor: default; color: var(--muted); font-size: 11px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); z-index: 1; }
+.crow .ci { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.crow .ci i { width: 11px; height: 11px; border-radius: 50%; background: var(--dot, transparent); opacity: var(--dot-a, 0); border: 1px solid rgba(0,0,0,.25); flex: none; }
+.crow .mv { font-weight: 700; }
+.crow.top .mv { color: #0b6c7c; }
+.crow.chosen .mv::after { content: " ★"; color: var(--b-acc); font-size: 10px; }
+.crow.unv { color: var(--muted); }
+.crow.unv .mv { font-weight: 500; }
+.crow small { color: var(--muted); font-size: 10.5px; }
+.crow .cpv { grid-column: 2 / -1; text-align: left !important; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: -2px; }
+
 .note { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
 
 #reviewBar { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--sel); border-radius: 8px; padding: 5px 8px; margin-bottom: 6px; font-size: 13px; }
@@ -134,6 +154,8 @@ body.noeval #moveList .ev { visibility: hidden; }
 .m .mv.wall { color: var(--ink2); }
 .m .mv.muted { color: var(--muted); font-weight: 400; }
 .m .ev { color: var(--muted); font-size: 12px; }
+.m.redo { opacity: .45; }
+.m.redo .mv { font-style: italic; }
 .keys { color: var(--muted); font-size: 11.5px; padding: 8px 14px; border-top: 1px solid var(--line); }
 
 /* new game dialog */

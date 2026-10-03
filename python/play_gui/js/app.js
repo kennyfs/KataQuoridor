@@ -19,6 +19,8 @@ let autoStarted = false;
 let connLost = false;
 let pollTimer = null;
 let movesKey = "";
+let pvHover = null;       // {color, moves}: a candidate's line shown on the board instead of the candidates
+let candKey = "";
 
 const board = new Board($("board"));
 
@@ -30,6 +32,7 @@ function saveSettings(o) {
   try { localStorage.setItem(LS_KEY, JSON.stringify({ ...loadSettings(), ...o })); } catch (e) { /* ignore */ }
 }
 let showEval = loadSettings().showEval !== false;
+let polOnly = !!loadSettings().polOnly;
 
 // ---- server -----------------------------------------------------------------------------------------------
 async function api(path, body) {
@@ -53,7 +56,7 @@ async function poll() {
   } catch (e) {
     if (!connLost) { connLost = true; render(); }
   }
-  const fast = S && (S.thinking || S.busy || S.engine.status === "starting");
+  const fast = S && (S.thinking || S.busy || S.engine.status === "starting" || S.analysis.running);
   schedulePoll(fast ? 250 : 1000);
 }
 
@@ -75,6 +78,7 @@ function setState(s) {
 }
 
 function orient() {
+  if (S.mode === "analysis" && orientedFor !== null) { orientedFor = S.game_id; return; }
   bottom = S.settings.human || "w";
   orientedFor = S.game_id;
 }
@@ -101,9 +105,10 @@ function visitsOf(st) {
 }
 
 function startGame(side, visits) {
-  viewPly = null; selected = false; dismissedOver = null;
+  viewPly = null; selected = false; dismissedOver = null; pvHover = null;
   return act(async () => {
-    const s = await api("api/new", { human: side, visits });
+    let s = await api("api/new", { human: side, visits });
+    if (side === "analysis") s = await api("api/analyze", { on: true, max_visits: maxVisitsSetting() });
     S = null; lastJson = "";
     setState(s);
     orient();
@@ -112,18 +117,67 @@ function startGame(side, visits) {
 }
 
 function playMove(move) {
-  selected = false;
+  selected = false; pvHover = null;
   board.setHover(null);
   return act(() => api("api/move", { move }));
 }
 
+// analysis mode
+function maxVisitsSetting() {
+  const v = parseInt(loadSettings().maxVisits, 10);
+  return v > 0 ? v : 0;
+}
+function enterAnalysis() {
+  viewPly = null; selected = false; pvHover = null;
+  return act(async () => {
+    await api("api/analysis_mode", {});
+    return api("api/analyze", { on: true, max_visits: maxVisitsSetting() });
+  });
+}
+function toggleAnalysis() {
+  if (!isAnalysis()) return;
+  act(() => api("api/analyze", { on: !S.analysis.on, max_visits: maxVisitsSetting() }));
+}
+function gotoPly(p) {
+  if (!S || !isAnalysis()) return;
+  const total = S.moves.length + S.redo.length;
+  p = Math.max(0, Math.min(total, p));
+  if (p === S.moves.length || S.busy || pending) return;
+  selected = false; pvHover = null;
+  board.setHover(null);
+  act(() => api("api/goto", { ply: p }));
+}
+
 // ---- derived state ------------------------------------------------------------------------------------------
 function curPly() { return viewPly === null ? S.moves.length : viewPly; }
+function isAnalysis() { return !!S && S.mode === "analysis"; }
+// the colour the board takes moves for: the human, or the side to move in analysis mode
+function mover() { return isAnalysis() ? S.to_move : S.settings.human; }
 function myTurn() {
-  return !!S && S.started && viewPly === null && !S.winner && S.settings.human && S.to_move === S.settings.human &&
-    !S.thinking && !S.busy && !pending && S.engine.status === "ready";
+  if (!S || !S.started || viewPly !== null || S.winner || S.busy || pending || S.engine.status !== "ready") return false;
+  if (isAnalysis()) return true;
+  return !!S.settings.human && S.to_move === S.settings.human && !S.thinking;
+}
+// the candidate list for the current position: the live analysis, else a hint
+function currentCands() {
+  if (!S || !S.started || viewPly !== null || S.winner) return null;
+  const a = S.analysis.current;
+  if (isAnalysis() && a && a.ply === S.moves.length && a.moves.length)
+    return { src: "analysis", color: a.color, moves: a.moves, root: a.root };
+  const h = S.hint;
+  if (h && h.ply === S.moves.length) return { src: "hint", color: h.color, moves: h.moves, root: h.root };
+  return null;
+}
+// the candidates drawn on the board: searched moves with a fair share of the visits, best first
+function boardCands(c) {
+  if (!c) return null;
+  const searched = c.moves.filter(m => m.visits > 0).sort((a, b) => a.order - b.order);
+  const top = searched.length ? Math.max(...searched.map(m => m.visits)) : 0;
+  const moves = searched.filter((m, i) => i === 0 || m.visits >= Math.max(2, top * 0.002)).slice(0, 16);
+  return { color: c.color, moves };
 }
 function playerLabel(c) {
+  if (isAnalysis()) return NAME[c];
   const h = S.settings.human;
   if (!h) return "KataQuoridor";
   return c === h ? "You" : "KataQuoridor";
@@ -153,19 +207,22 @@ function render() {
   const lastMove = ply > 0 ? S.moves[ply - 1] : null;
   const legal = interactive ? new Set(S.legal_moves) : null;
   if (board.hover) board.hover.legal = !!(legal && legal.has(board.hover.move));
+  const cands = currentCands();
+  if (!cands) pvHover = null;
   board.bottom = bottom;
   board.draw({
     pos, lastMove, legal, interactive,
     prevPawn: lastMove ? S.positions[ply - 1].pawns[lastMove.color] : null,
-    human: S.settings.human,
-    hints: viewPly === null && S.hint && S.hint.ply === S.moves.length ? S.hint.moves : [],
+    mover: mover(),
+    cands: boardCands(cands),
+    pv: pvHover,
     selected: selected && interactive,
   });
   renderCard($("cardTop"), opp(bottom), pos);
   renderCard($("cardBottom"), bottom, pos);
   renderStatus();
   renderEval(ply);
-  renderHint();
+  renderCands(cands);
   renderMoves(ply);
   renderOverlay();
   renderButtons();
@@ -177,7 +234,8 @@ function renderEngineInfo() {
     const e = S.engine;
     if (e.status === "starting") t = "Loading the engine…";
     else if (e.status === "error") t = "Engine stopped";
-    else t = [e.name && e.name.replace(/\s*\(based on.*\)/, ""), e.model, S.started && S.settings.visits + (S.settings.visits === 1 ? " visit" : " visits")].filter(Boolean).join(" · ");
+    else t = [e.name && e.name.replace(/\s*\(based on.*\)/, ""), e.model,
+      S.started && (isAnalysis() ? "analysis mode" : S.settings.visits + (S.settings.visits === 1 ? " visit" : " visits"))].filter(Boolean).join(" · ");
   }
   $("engineInfo").textContent = t;
 }
@@ -208,7 +266,7 @@ function pips(left) {
 function renderCard(box, c, pos) {
   const toMove = viewPly === null ? S.to_move : (curPly() % 2 === 0 ? "b" : "w");
   const over = viewPly === null ? !!S.winner : false;
-  const isAi = S.settings.human !== c;
+  const isAi = !isAnalysis() && S.settings.human !== c;
   const thinking = isAi && S.thinking && viewPly === null && S.to_move === c;
   const d = pos.dist ? pos.dist[c] : null;
   const left = pos.walls_left ? pos.walls_left[c] : 10;
@@ -229,6 +287,7 @@ function renderStatus() {
   else if (S.engine.status === "error") html = "The engine stopped: use <b>Restart engine</b> above.";
   else if (!S.started) html = "Choose <b>New game</b> to start.";
   else if (viewPly !== null) html = `Reviewing the position after move ${viewPly} of ${S.moves.length} (read-only). <a href="#" id="stBack">Back to current</a>`;
+  else if (isAnalysis()) html = analysisStatus();
   else if (S.winner) html = `<b>Game over:</b> ${NAME[S.winner]} wins by ${S.margin} move${S.margin === 1 ? "" : "s"}.`;
   else if (S.busy === "hint") html = `<span class="spin"></span>Searching for a hint (${S.settings.hint_visits} visits)…`;
   else if (S.thinking) html = `<span class="spin"></span>KataQuoridor is thinking… (${S.settings.visits} visit${S.settings.visits === 1 ? "" : "s"})` + (S.settings.human ? "" : " · AI vs AI demo");
@@ -242,6 +301,20 @@ function renderStatus() {
   const back = $("stBack");
   if (back) back.onclick = e => { e.preventDefault(); review(null); };
   $("moveInput").disabled = !myTurn();
+}
+
+function analysisStatus() {
+  if (S.winner) return `<b>Game over:</b> ${NAME[S.winner]} wins by ${S.margin} move${S.margin === 1 ? "" : "s"}. ← to step back.`;
+  if (S.busy === "hint") return `<span class="spin"></span>Searching (${S.settings.hint_visits} visits)…`;
+  if (pending || S.busy) return `<span class="spin"></span>Working…`;
+  const a = S.analysis, cur = a.current, v = cur && cur.root ? cur.root.visits : 0;
+  const cap = a.max_visits ? fmtVisits(a.max_visits) : "∞";
+  let eng;
+  if (!S.engine.can_analyze) eng = "this engine has no kata-analyze; use Hint";
+  else if (a.running) eng = `<span class="spin"></span>analyzing · ${fmtVisits(v)} / ${cap} visits · Space pauses`;
+  else if (a.on && cur && cur.done) eng = `analysis done · ${fmtVisits(v)} / ${cap} visits`;
+  else eng = `analysis paused${v ? " · " + fmtVisits(v) + " visits" : ""} · Space starts`;
+  return `<b>${NAME[S.to_move]} to move</b> · ${eng}`;
 }
 
 function renderEval(ply) {
@@ -263,6 +336,9 @@ function renderEval(ply) {
     if (e.pv && e.pv.length) src += ` · best line ${e.pv.slice(0, 6).join(" ")}${e.pv.length > 6 ? " …" : ""}`;
     $("evSrc").textContent = src;
   }
+  const net = S.positions[ply].net;
+  $("evNet").textContent = net && e && e.source !== "net"
+    ? `Net alone: Black ${pct(net.black_win)} · ${leadText(net)}` : "";
   renderChart(ply);
 }
 
@@ -295,22 +371,64 @@ function renderChart(ply) {
   };
 }
 
-function renderHint() {
-  const h = S.hint, card = $("hintCard");
-  if (!h || h.ply !== S.moves.length || viewPly !== null || S.winner) { card.hidden = true; return; }
+function signed(x, d = 1) { return (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d); }
+const pct1 = x => x == null ? "—" : (100 * x).toFixed(1);
+
+function renderCands(c) {
+  const card = $("candCard");
+  $("polOnly").checked = polOnly;
+  if (!c) { card.hidden = true; candKey = ""; return; }
   card.hidden = false;
-  const c = h.color;
-  $("hintSub").textContent = `${h.visits} visits`;
-  $("hintList").innerHTML = h.moves.map((m, i) => {
-    const win = c === "b" ? m.black_win : m.white_win, lead = c === "b" ? m.black_lead : -m.black_lead;
-    return `<div class="hrow" data-move="${m.move}" title="Play ${m.move}"><span class="hn">${i + 1}</span><span class="mv">${m.move}</span>` +
-      `<span class="hv">${pct(win)} · ${lead >= 0 ? "+" : "−"}${Math.abs(lead).toFixed(1)}</span>` +
-      `<span class="pv">${(m.pv || []).slice(1, 5).join(" ")}</span></div>`;
-  }).join("") + `<div class="note">Win chance and lead for you. Click a line to play its move.</div>`;
+  const col = c.color, r = c.root;
+  $("candTitle").textContent = c.src === "analysis" ? "Analysis" : "Hint";
+  $("candSub").textContent = `${NAME[col]} to move` + (r ? ` · ${fmtVisits(r.visits)} visits` : "");
+  // root summary
+  let root = "";
+  if (r) {
+    root += `<div><b>${NAME[col]} ${pct1(r.winrate)}%</b> · lead ${signed(r.lead)} · utility ${signed(r.utility, 3)} · σ ${r.score_stdev == null ? "—" : r.score_stdev.toFixed(2)}</div>`;
+    if (r.raw_wr_error != null)
+      root += `<div class="muted">net uncertainty: winrate ±${r.raw_wr_error.toFixed(3)} · score ±${(r.raw_score_error || 0).toFixed(2)}` +
+        (r.raw_time_left != null ? ` · time left ${r.raw_time_left.toFixed(1)}` : "") + `</div>`;
+  }
+  const net = S.positions[S.moves.length].net;
+  if (net) {
+    const nw = col === "b" ? net.black_win : net.white_win, nl = col === "b" ? net.black_lead : -net.black_lead;
+    root += `<div class="muted">net value: ${NAME[col]} ${pct1(nw)}% · lead ${signed(nl)}</div>`;
+  }
+  $("candRoot").innerHTML = root;
+
+  const searched = c.moves.filter(m => m.visits > 0).sort((a, b) => a.order - b.order);
+  const total = searched.reduce((t, m) => t + m.visits, 0) || 1;
+  let rows = searched;
+  if (polOnly) rows = rows.concat(c.moves.filter(m => !(m.visits > 0)).sort((a, b) => (b.prior || 0) - (a.prior || 0)));
+  const key = c.src + "|" + polOnly + "|" + rows.map(m => m.move + m.visits).join(",") ;
+  if (key === candKey) return;
+  candKey = key;
+  const head = `<div class="crow chead"><span>#</span><span>move</span><span title="Win chance for ${NAME[col]} (side to move)">win%</span>` +
+    `<span title="Expected margin in moves for ${NAME[col]}">lead</span><span title="Visits (share of all child visits)">visits</span>` +
+    `<span title="Raw policy prior of the net">policy</span><span title="Lower confidence bound of the winrate">lcb</span></div>`;
+  $("candList").innerHTML = head + rows.map(m => {
+    const v = m.visits > 0;
+    const cls = !v ? "unv" : m.order === 0 ? "top" : "";
+    const pvs = v && m.pv ? m.pv.slice(1, 12).join(" ") : "";
+    return `<div class="crow ${cls}${m.chosen ? " chosen" : ""}" data-move="${m.move}">` +
+      `<span class="ci"><i></i>${v ? m.order + 1 : ""}</span><span class="mv">${m.move}</span>` +
+      `<span>${v ? pct1(m.winrate) : "—"}</span><span>${v ? signed(m.lead) : "—"}</span>` +
+      `<span>${v ? fmtVisits(m.visits) + ` <small>${(100 * m.visits / total).toFixed(0)}%</small>` : "0"}</span>` +
+      `<span>${m.prior == null ? "—" : (100 * m.prior).toFixed(m.prior < 0.001 ? 3 : 1) + "%"}</span>` +
+      `<span>${v && m.lcb != null ? pct1(Math.max(0, m.lcb)) : "—"}</span>` +
+      (pvs ? `<span class="cpv">${pvs}</span>` : "") + `</div>`;
+  }).join("") + `<div class="note">Values for ${NAME[col]}, the side to move. Hover a line to see its continuation; click to play it.</div>`;
+  card.querySelectorAll(".crow:not(.chead)").forEach(row => {
+    const m = c.moves.find(x => x.move === row.dataset.move);
+    const alpha = m && m.visits > 0 ? (m.order === 0 ? 1 : candAlpha(m.visits, searched[0] ? Math.max(...searched.map(x => x.visits)) : 0)) : 0;
+    row.style.setProperty("--dot", m && m.order === 0 && m.visits > 0 ? CAND_TOP : CAND_OFF);
+    row.style.setProperty("--dot-a", alpha);
+  });
 }
 
 function renderMoves(ply) {
-  const key = [S.game_id, S.moves.length, showEval, S.positions.map(p => p.eval ? p.eval.black_win.toFixed(3) : "-").join(",")].join("|");
+  const key = [S.game_id, S.moves.length, showEval, S.redo.map(m => m.move).join(","), S.positions.map(p => p.eval ? p.eval.black_win.toFixed(3) : "-").join(",")].join("|");
   if (key !== movesKey) {
     movesKey = key;
     const e0 = S.positions[0].eval;
@@ -322,9 +440,14 @@ function renderMoves(ply) {
         `<span class="mv${wall ? " wall" : ""}">${m.move}</span>` +
         `<span class="ev">${e ? "B " + (100 * e.black_win).toFixed(0) + "%" : ""}</span></div>`);
     });
+    S.redo.forEach((m, i) => {
+      const n = S.moves.length + i + 1;
+      rows.push(`<div class="m redo" data-ply="${n}" title="Undone: click to go back to it"><span class="n">${n}</span><span class="who ${m.color}"></span>` +
+        `<span class="mv${m.move.length === 3 ? " wall" : ""}">${m.move}</span><span class="ev"></span></div>`);
+    });
     $("moveList").innerHTML = rows.join("");
   }
-  $("moveCount").textContent = S.moves.length ? `${S.moves.length} played` : "";
+  $("moveCount").textContent = S.moves.length ? `${S.moves.length} played` + (S.redo.length ? ` · ${S.redo.length} undone` : "") : "";
   document.querySelectorAll("#moveList .m.cur").forEach(x => x.classList.remove("cur"));
   const row = document.querySelector(`#moveList .m[data-ply="${ply}"]`);
   if (row) {
@@ -340,7 +463,7 @@ function renderMoves(ply) {
 
 function renderOverlay() {
   const key = S.game_id + ":" + S.moves.length;
-  const show = !!S.winner && viewPly === null && dismissedOver !== key;
+  const show = !!S.winner && viewPly === null && dismissedOver !== key && !isAnalysis();
   $("overlay").hidden = !show;
   if (!show) return;
   $("ovTitle").textContent = `${NAME[S.winner]} wins by ${S.margin} move${S.margin === 1 ? "" : "s"}`;
@@ -353,10 +476,26 @@ function renderButtons() {
   const ready = S && S.engine.status === "ready";
   const idle = ready && S.started && !S.thinking && !S.busy && !pending;
   const h = S && S.settings.human;
-  $("undoBtn").disabled = !(idle && h && S.moves.some(m => m.color === h));
-  $("hintBtn").disabled = !(idle && S.to_move === h && !S.winner);
+  const ana = isAnalysis();
+  $("undoBtn").disabled = !(idle && (ana ? S.moves.length > 0 : h && S.moves.some(m => m.color === h)));
+  $("undoBtn").title = ana ? "Take back the last move (U, ←)" : "Take back your last move and the AI's reply (U)";
+  $("hintBtn").disabled = !(idle && !S.winner && (ana ? !S.analysis.on : S.to_move === h));
   $("sgfBtn").classList.toggle("disabled", !idle);
   $("newBtn").disabled = !ready || pending;
+  $("anaModeBtn").hidden = ana;
+  $("anaModeBtn").disabled = !(ready && S.started && !S.busy && !pending);
+  $("anaCtl").hidden = !ana;
+  if (ana) {
+    const on = S.analysis.on;
+    $("anaBtn").classList.toggle("on", on);
+    $("anaBtn").textContent = on ? "❚❚ Analysis" : "▶ Analysis";
+    $("anaBtn").disabled = !ready || !S.engine.can_analyze;
+    const mv = $("maxVisits");
+    if (document.activeElement !== mv) mv.value = S.analysis.max_visits ? S.analysis.max_visits : "";
+  }
+  $("keys").textContent = ana
+    ? "Space analysis · ← → Home End move through the game · U undo · H hint · F flip · E evaluation · N new"
+    : "N new · U undo · H hint · A analyze · F flip · E evaluation · ← → review · Esc back";
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -373,6 +512,7 @@ function toast(msg, bad) {
 
 function review(p) {
   if (!S || !S.started) return;
+  if (isAnalysis()) return gotoPly(p === null ? S.moves.length + S.redo.length : p);
   viewPly = p === null || p >= S.moves.length ? null : Math.max(0, p);
   selected = false;
   board.setHover(null);
@@ -382,7 +522,7 @@ function review(p) {
 // ---- board input ----------------------------------------------------------------------------------------------
 function hitAt(e) {
   if (!myTurn()) return null;
-  const p = board.eventPoint(e), h = S.settings.human;
+  const p = board.eventPoint(e), h = mover();
   const hit = board.hitTest(p.x, p.y, S.walls_left[h] > 0);
   if (!hit) return null;
   hit.legal = S.legal_moves.includes(hit.move);
@@ -395,11 +535,31 @@ svgEl.addEventListener("pointermove", e => {
   const hit = hitAt(e);
   board.setHover(hit);
   svgEl.style.cursor = !hit ? "" : hit.legal || hit.own ? "pointer" : hit.kind === "wall" ? "not-allowed" : "";
+  setPvHover(hit && hit.legal ? hit.move : null);
 });
-svgEl.addEventListener("pointerleave", () => { board.setHover(null); svgEl.style.cursor = ""; });
-svgEl.addEventListener("click", e => {
+svgEl.addEventListener("pointerleave", () => { board.setHover(null); svgEl.style.cursor = ""; setPvHover(null); });
+
+// show a candidate's principal variation on the board while it is hovered (board or list)
+function setPvHover(move) {
+  const c = currentCands();
+  const m = move && c ? c.moves.find(x => x.move === move && x.visits > 0 && x.pv && x.pv.length) : null;
+  const next = m ? { color: c.color, moves: m.pv } : null;
+  if ((next && pvHover && next.moves.join() === pvHover.moves.join()) || (!next && !pvHover)) return;
+  pvHover = next;
+  render();
+}
+// pointerdown + pointerup instead of click: the board is redrawn several times a second while the analysis
+// runs, and a click whose target was replaced between press and release is never delivered
+let downMove = null;
+svgEl.addEventListener("pointerdown", e => {
+  const hit = e.button === 0 ? hitAt(e) : null;
+  downMove = hit ? hit.move : null;
+});
+svgEl.addEventListener("pointerup", e => {
   const hit = hitAt(e);
-  if (!hit) return;
+  const same = hit && hit.move === downMove;
+  downMove = null;
+  if (!same) return;
   // On touch screens the first tap only previews; a second tap on the same target plays it.
   if (e.pointerType === "touch" && hit.kind === "wall") {
     const h = board.hover;
@@ -425,13 +585,30 @@ $("moveForm").addEventListener("submit", e => {
   playMove(mv);
 });
 
-$("hintList").addEventListener("click", e => {
-  const row = e.target.closest(".hrow");
-  if (row && myTurn() && S.legal_moves.includes(row.dataset.move)) playMove(row.dataset.move);
+// pointerdown, not click: the list is rebuilt several times a second while the analysis runs, which can
+// swallow a click between press and release
+$("candList").addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  const row = e.target.closest(".crow");
+  if (row && row.dataset.move && myTurn() && S.legal_moves.includes(row.dataset.move)) playMove(row.dataset.move);
 });
+$("candList").addEventListener("mouseover", e => {
+  const row = e.target.closest(".crow");
+  setPvHover(row ? row.dataset.move : null);
+});
+$("candList").addEventListener("mouseleave", () => setPvHover(null));
+$("polOnly").addEventListener("change", e => { polOnly = e.target.checked; saveSettings({ polOnly }); candKey = ""; render(); });
 $("moveList").addEventListener("click", e => {
   const row = e.target.closest(".m");
   if (row) review(+row.dataset.ply);
+});
+$("anaModeBtn").onclick = () => enterAnalysis();
+$("anaBtn").onclick = () => toggleAnalysis();
+$("maxVisits").addEventListener("change", e => {
+  const v = parseInt(e.target.value, 10);
+  const max = v > 0 ? v : 0;
+  saveSettings({ maxVisits: max });
+  if (isAnalysis()) act(() => api("api/analyze", { max_visits: max }));
 });
 $("backBtn").onclick = () => review(null);
 $("undoBtn").onclick = () => { viewPly = null; act(() => api("api/undo", {})); };
@@ -485,10 +662,13 @@ dlg.addEventListener("close", () => {
 document.addEventListener("keydown", e => {
   if (dlg.open || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") {
-    if (e.key === "Escape") e.target.blur();
+    if (e.key === "Escape" || (e.key === "Enter" && e.target.id === "maxVisits")) e.target.blur();
     return;
   }
   const k = e.key;
+  if (k === " ") { e.preventDefault(); if (e.target.blur) e.target.blur(); toggleAnalysis(); return; }
+  if ((k === "a" || k === "A") && !isAnalysis()) { if (!$("anaModeBtn").disabled) enterAnalysis(); return; }
+  if (k === "Backspace" && isAnalysis()) { e.preventDefault(); if (!$("undoBtn").disabled) $("undoBtn").click(); return; }
   if (k === "n" || k === "N") { e.preventDefault(); if (!$("newBtn").disabled) openNewDialog(); }
   else if (k === "u" || k === "U") { if (!$("undoBtn").disabled) $("undoBtn").click(); }
   else if (k === "h" || k === "H") { if (!$("hintBtn").disabled) $("hintBtn").click(); }
@@ -497,8 +677,8 @@ document.addEventListener("keydown", e => {
   else if (k === "ArrowLeft" && S && S.started) { e.preventDefault(); review(curPly() - 1); }
   else if (k === "ArrowRight" && S && S.started) { e.preventDefault(); review(curPly() + 1); }
   else if (k === "Home" && S && S.started) review(0);
-  else if (k === "End") review(null);
-  else if (k === "Escape") { if (selected) { selected = false; render(); } else review(null); }
+  else if (k === "End" && S && S.started) review(null);
+  else if (k === "Escape") { if (selected) { selected = false; render(); } else if (!isAnalysis()) review(null); }
 });
 window.addEventListener("resize", () => { if (S && S.started) renderChart(curPly()); });
 

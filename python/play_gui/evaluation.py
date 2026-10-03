@@ -17,6 +17,9 @@ Every evaluation handed to the frontend is a dict:
 """
 
 
+EVAL_KEYS = ("black_win", "white_win", "black_lead", "source", "visits", "pv")
+
+
 def make_eval(black_win, black_lead, source, visits=None, pv=None, draw=0.0):
     black_win = min(1.0, max(0.0, float(black_win)))
     white_win = min(1.0, max(0.0, 1.0 - black_win - float(draw)))
@@ -74,7 +77,7 @@ def parse_raw_nn(text):
 
 
 _FLOAT_KEYS = {"winrate", "scoreLead", "scoreMean", "scoreStdev", "scoreSelfplay", "utility", "lcb", "prior",
-               "utilityLcb", "weight"}
+               "utilityLcb", "weight", "rawStWrError", "rawStScoreError", "rawVarTimeLeft"}
 _INT_KEYS = {"visits", "edgeVisits", "order"}
 
 
@@ -133,3 +136,35 @@ def info_for(analysis, move):
         if d.get("move") == move:
             return d
     return None
+
+
+def candidates(analysis, player):
+    """The searched children of `parse_analysis` output for `player` to move, in the engine's order.
+
+    Each is an evaluation dict (Black/White perspective, for the position after the move) plus the raw
+    side-to-move numbers: winrate, lead, lcb, utility, score_stdev, prior (the net's policy for the move),
+    visits / edge_visits and order. Children listed only because of `minmoves` have 0 visits; their values
+    are meaningless, only `prior` counts.
+    """
+    out = []
+    for d in analysis["infos"]:
+        visits = d.get("visits", 0)
+        e = from_side_to_move(d.get("winrate", 0.5), d.get("scoreLead", 0.0), player, "search", visits, d.get("pv"))
+        e.update(move=d["move"], order=d.get("order", len(out)), prior=d.get("prior"), winrate=d.get("winrate"),
+                 lead=d.get("scoreLead"), lcb=d.get("lcb"), utility=d.get("utility"),
+                 score_stdev=d.get("scoreStdev"), edge_visits=d.get("edgeVisits", visits))
+        out.append(e)
+    return out
+
+
+def root_summary(analysis, player):
+    """The rootInfo of `parse_analysis` output as an evaluation dict plus the raw numbers, or None."""
+    r = analysis["root"]
+    if not r or "winrate" not in r:
+        return None
+    pv = analysis["infos"][0].get("pv") if analysis["infos"] else None
+    e = from_side_to_move(r["winrate"], r.get("scoreLead", 0.0), player, "search", r.get("visits"), pv)
+    e.update(winrate=r["winrate"], lead=r.get("scoreLead"), utility=r.get("utility"),
+             score_stdev=r.get("scoreStdev"), raw_wr_error=r.get("rawStWrError"),
+             raw_score_error=r.get("rawStScoreError"), raw_time_left=r.get("rawVarTimeLeft"))
+    return e

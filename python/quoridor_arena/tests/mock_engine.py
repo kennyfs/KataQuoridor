@@ -8,7 +8,7 @@
 
 It speaks the same QTP subset the arena uses, so it can serve as both arbiter and player. It also answers
 the commands the play GUI (python/play_gui) uses: name, version, walls, undo, kata-set-param maxVisits,
-kata-genmove_analyze, kata-search_analyze and kata-raw-nn. Their output imitates KataQuoridor's: analysis
+kata-genmove_analyze, kata-search_analyze, kata-analyze (streams until the next command) and kata-raw-nn. Their output imitates KataQuoridor's: analysis
 values are from the side to move, kata-raw-nn values from White's, a 1-visit search prints no "info" line,
 and kata-raw-nn on a finished game kills the process (like KataQuoridor 0.1.0's "legalCount > 0" assert).
 
@@ -19,6 +19,7 @@ Flags: --illegal (genmove answers "z9"), --crash-after N (exit after N genmoves)
 import argparse
 import math
 import sys
+import threading
 import time
 
 COLS = "abcdefghi"
@@ -147,10 +148,25 @@ def main():
         if args.think_delay > 0:
             time.sleep(args.think_delay)
 
+    streamer = None   # (thread, stop event) of a running kata-analyze
+
+    def stream(c, interval, stop):
+        visits = 2
+        while not stop.wait(interval):
+            sys.stdout.write(analysis(g, c, visits) + "\n")
+            sys.stdout.flush()
+            visits *= 2
+
     for line in sys.stdin:
         parts = line.split()
         if not parts:
             continue
+        if streamer is not None:  # like KataGo, any command ends a running analysis
+            streamer[1].set()
+            streamer[0].join()
+            streamer = None
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         cmd, rest = parts[0], parts[1:]
         if cmd == "quit":
             reply(True)
@@ -158,7 +174,7 @@ def main():
         elif cmd == "known_command":
             known = {"play", "genmove", "clear_board", "winner", "dist", "printsgf", "quit", "known_command",
                      "showboard", "name", "version", "walls", "undo", "kata-set-param", "kata-genmove_analyze",
-                     "kata-search_analyze", "kata-raw-nn"}
+                     "kata-search_analyze", "kata-raw-nn", "kata-analyze", "stop"}
             if not args.no_legal:
                 known.add("legal_moves")
             reply(True, "true" if rest and rest[0] in known else "false")
@@ -201,6 +217,20 @@ def main():
             if cmd == "kata-genmove_analyze":
                 g.play(c, mv)
             reply(True, "\n" + (text + "\n" if text else "") + "play " + mv)
+        elif cmd == "kata-analyze":
+            c = color_arg(rest[0]) if rest and color_arg(rest[0]) else g.to_move
+            if g.winner() or c != g.to_move:
+                reply(False, "cannot analyze")
+                continue
+            interval = float(rest[1]) / 100 if len(rest) > 1 and rest[1].isdigit() else 0.1
+            sys.stdout.write("=\n")
+            sys.stdout.flush()
+            stop = threading.Event()
+            t = threading.Thread(target=stream, args=(c, max(0.01, interval), stop), daemon=True)
+            t.start()
+            streamer = (t, stop)
+        elif cmd == "stop":
+            reply(True)
         elif cmd == "kata-raw-nn":
             if g.winner():
                 sys.stderr.write("FATAL ERROR:\nFailed test assert: legalCount > 0\n")

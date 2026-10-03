@@ -19,7 +19,7 @@ allowResignation=false, reportAnalysisWinratesAs=SIDETOMOVE` and opens the page.
 
 ## Playing
 
-- **New game** (N): your side (Black moves first, White, Random, or an AI vs AI demo) and strength:
+- **New game** (N): your side (Black moves first, White, Random, an AI vs AI demo, or Analysis) and strength:
   Easy = 1 visit (raw policy net), Normal = 16, Hard = 256, Max = 800, or a custom visit count.
   The last choice is remembered in the browser.
 - **Pawn moves:** legal destinations (jumps included) are marked with dots; click one. Clicking your own
@@ -27,11 +27,30 @@ allowResignation=false, reportAnalysisWinratesAs=SIDETOMOVE` and opens the page.
 - **Walls:** hover a groove between cells. A horizontal groove gives an `h` wall, a vertical one a `v` wall,
   centred on the nearest groove crossing. Legal previews are in your colour, illegal ones red (not clickable).
 - **Keyboard fallback:** type a move in QTP notation (`e8`, `e2h`, `d5v`) and press Enter.
-- **Undo** (U) takes back your last move and the AI's reply. **Hint** (H) searches your position and shows
-  the top 3 moves on the board and in the side panel (click a line to play it). **Flip** (F) turns the board.
+- **Undo** (U) takes back your last move and the AI's reply. **Hint** (H) searches your position
+  (`--hint-visits`) and shows the candidate moves on the board and in the side panel (see below; click a
+  line to play it). **Flip** (F) turns the board.
   **Evaluation** (E) shows or hides the win chances. **SGF** downloads the game as `.sgfs`, which
   `python/sgfs_viewer` opens (with the evaluation of every position in the move comments).
 - Click a move in the list, or use ← / →, to review earlier positions (read-only); Esc or End goes back.
+
+## Analysis mode
+
+**Analyze** (A) turns the current game into an analysis board (or choose *Analysis* in the New game dialog):
+
+- You move for both sides; the board takes moves for the side to move. The AI no longer plays.
+- **Undo** (U, Backspace, ←) takes back one move and keeps it: → (or clicking a greyed move in the list)
+  replays it, Home / End jump to the start / the end of the line. Playing a different move drops the undone ones.
+- **Space** starts or pauses the engine (`kata-analyze`, which keeps searching the current position and
+  restarts on every new position). **max** caps the visits per position; empty means no limit. The search
+  tree is reused, so going back to an analysed position continues where it stopped.
+- Candidate moves are drawn as in Ogatak: the engine's best move in light blue, the others in green that
+  fades with fewer visits, each with its win chance (for the side to move) and visit count; walls get a
+  label on the wall. Hovering a candidate (on the board or in the list) shows its continuation, numbered.
+- The side panel lists every searched child: win %, lead (moves), visits and their share, the net's raw
+  policy prior, the winrate LCB, and the continuation. *unvisited* also lists the moves the search has not
+  tried yet, with their policy prior. Above the list: the root value, utility, score spread, the net's own
+  uncertainty estimates and the raw net value of the position (also shown under the evaluation bar).
 
 The board is drawn as seen from your side: as White, row 1 is at the bottom and column a on the left; as
 Black, the board is rotated 180°. (sgfs_viewer draws a mirrored view instead, so the two can look different.)

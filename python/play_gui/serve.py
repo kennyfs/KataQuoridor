@@ -121,6 +121,12 @@ def make_handler(game):
                 return self._run(game.undo)
             if path == "/api/hint":
                 return self._run(game.request_hint)
+            if path == "/api/goto":
+                return self._run(lambda: game.goto(body.get("ply")))
+            if path == "/api/analysis_mode":
+                return self._run(game.enter_analysis)
+            if path == "/api/analyze":
+                return self._run(lambda: game.set_analysis(body.get("on"), body.get("max_visits")))
             if path == "/api/restart":
                 threading.Thread(target=_start_quietly, args=(game,), daemon=True).start()
                 return self._json(200, {"ok": True})

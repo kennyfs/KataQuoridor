@@ -346,3 +346,100 @@ def test_ai_vs_ai_demo(game):
     assert s["winner"] == "b" and len(s["moves"]) == 15
     with pytest.raises(ActionError):
         game.undo()
+
+
+# -- analysis mode ------------------------------------------------------------------------------------------
+def wait_for(pred, timeout=10.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if pred():
+            return
+        time.sleep(0.02)
+    raise AssertionError("condition not met within %.0fs" % timeout)
+
+
+def analysis_visits(g):
+    cur = g.state()["analysis"]["current"]
+    return cur["root"]["visits"] if cur and cur["root"] else 0
+
+
+def test_analysis_mode_plays_both_sides_and_undo_redo(game):
+    s = game.new_game("analysis", 16)
+    assert s["mode"] == "analysis" and s["settings"]["human"] is None and not s["thinking"]
+    game.play("e8")
+    s = game.play("e2")
+    assert moves_of(s) == [("b", "e8"), ("w", "e2")] and not s["thinking"]
+    s = game.undo()
+    assert moves_of(s) == [("b", "e8")] and s["redo"] == [{"color": "w", "move": "e2"}]
+    s = game.goto(0)
+    assert s["moves"] == [] and [m["move"] for m in s["redo"]] == ["e8", "e2"]
+    assert s["pawns"] == {"b": "e9", "w": "e1"}
+    s = game.goto(2)
+    assert moves_of(s) == [("b", "e8"), ("w", "e2")] and s["redo"] == []
+    assert s["pawns"] == {"b": "e8", "w": "e2"}
+    game.undo()
+    s = game.play("d1")      # a different move drops the redo line
+    assert moves_of(s) == [("b", "e8"), ("w", "d1")] and s["redo"] == []
+    game.goto(1)
+    s = game.play("d1")      # replaying the redo move keeps the rest of the line
+    assert s["redo"] == []
+    with pytest.raises(ActionError):
+        game.goto(5)
+
+
+def test_analysis_streams_and_stops(game):
+    game.new_game("analysis", 16)
+    s = game.set_analysis(on=True, max_visits=0)
+    assert s["analysis"]["on"]
+    wait_for(lambda: analysis_visits(game) >= 8)
+    s = game.state()
+    cur = s["analysis"]["current"]
+    assert s["analysis"]["running"] and cur["ply"] == 0 and cur["color"] == "b"
+    assert cur["moves"][0]["move"] == "e8" and cur["moves"][0]["prior"] == 0.5
+    assert s["positions"][0]["eval"]["source"] == "search"
+    assert s["positions"][0]["net"]["source"] == "net"
+    # commands still work while it streams; the analysis follows the position
+    s = game.play("e8")
+    wait_for(lambda: (game.state()["analysis"]["current"] or {}).get("color") == "w" and analysis_visits(game) > 0)
+    assert game.state()["analysis"]["current"]["ply"] == 1
+    assert game.legal  # engine still answers normally
+    game.set_analysis(on=False)
+    s = game.state()
+    assert not s["analysis"]["running"]
+    assert game._must("dist")  # the stream is closed: plain commands get their own answers
+
+
+def test_analysis_visit_cap(game):
+    game.new_game("analysis", 16)
+    game.set_analysis(on=True, max_visits=16)
+    wait_for(lambda: not game.state()["analysis"]["running"] and analysis_visits(game) >= 16)
+    v = analysis_visits(game)
+    time.sleep(0.3)
+    assert analysis_visits(game) == v
+    game.set_analysis(max_visits=0)            # raising the cap resumes it
+    wait_for(lambda: analysis_visits(game) > v)
+    game.set_analysis(on=False)
+
+
+def test_enter_analysis_from_a_game(tmp_path):
+    g = make_game(tmp_path, "--think-delay", "0.3")
+    try:
+        g.new_game("b", 16)
+        g.play("e8")                           # the AI starts thinking
+        s = g.enter_analysis()                 # the running search still plays its move
+        assert s["mode"] == "analysis" and not s["thinking"]
+        assert moves_of(s) == [("b", "e8"), ("w", "e2")]
+        s = g.play("e7")
+        assert moves_of(s)[-1] == ("b", "e7") and not s["thinking"]
+        s = g.play("e3")                       # the user now plays White too
+        assert moves_of(s)[-1] == ("w", "e3")
+    finally:
+        g.close()
+
+
+def test_hint_has_candidate_details(game):
+    game.new_game("b", 16)
+    h = game.request_hint()
+    m = h["moves"][0]
+    assert m["chosen"] and m["visits"] > 0 and m["prior"] == 0.5 and m["order"] == 0
+    assert 0 <= m["winrate"] <= 1 and h["root"]["visits"] == 50

@@ -11,6 +11,13 @@ const WALL_BAND = GAP / 2 + 10;   // a groove "captures" the pointer this far fr
 const SVGNS = "http://www.w3.org/2000/svg";
 const COLS = "abcdefghi";
 const ACC = { b: "var(--b-acc)", w: "var(--w-acc)" };
+// Candidate colours as in Ogatak: the engine's best move bright light blue, the others green, fading with
+// fewer visits.
+const CAND_TOP = "#77eeff", CAND_OFF = "#99dd55";
+function candAlpha(visits, top) {
+  if (!top) return 0.5;
+  return 0.25 + 0.75 * Math.sqrt(Math.max(0, Math.min(1, visits / top)));
+}
 
 function el(tag, attrs, parent) {
   const e = document.createElementNS(SVGNS, tag);
@@ -84,8 +91,10 @@ class Board {
     return m ? pt.matrixTransform(m.inverse()) : { x: -1, y: -1 };
   }
 
-  // v: {pos, lastMove: {color, move}|null, prevPawn, legal: Set|null, human, walls_left, hints: [...],
-  //     selected: bool, interactive: bool}
+  // v: {pos, lastMove: {color, move}|null, prevPawn, legal: Set|null, mover, cands: {color, moves}|null,
+  //     pv: {color, moves}|null, selected: bool, interactive: bool}
+  // cands.moves: candidate dicts (move, visits, winrate for the mover, order) already filtered and sorted;
+  // pv: a line to show instead of the candidates.
   draw(v) {
     this.v = v;
     const svg = this.svg;
@@ -114,20 +123,6 @@ class Board {
     if (!v || !v.pos) return;
     const pos = v.pos;
 
-    // hints (under walls and pawns): numbered target cells and translucent walls
-    (v.hints || []).forEach((h, i) => {
-      const m = parseMove(h.move), col = ACC[v.human] || "var(--hint)";
-      if (m.wall) {
-        el("rect", { ...this.wallRect(m.c, m.r, m.o), rx: 4, fill: col, opacity: 0.45, stroke: "#fff", "stroke-width": 1.5, "stroke-dasharray": "4 3" }, svg);
-        const b = this.wallRect(m.c, m.r, m.o);
-        this.badge(b.x + b.width / 2, b.y + b.height / 2, i + 1);
-      } else {
-        const [x, y] = this.cellXY(m.c, m.r);
-        el("rect", { x: x + 3, y: y + 3, width: CELL - 6, height: CELL - 6, rx: 7, fill: "none", stroke: "var(--hint)", "stroke-width": 2.5, "stroke-dasharray": "5 4" }, svg);
-        this.badge(x + CELL - 9, y + 9, i + 1);
-      }
-    });
-
     // walls
     const last = v.lastMove;
     for (const w of pos.walls) {
@@ -142,12 +137,13 @@ class Board {
       el("circle", { cx, cy, r: CELL * 0.33, fill: "none", stroke: ACC[last.color], "stroke-width": 2, "stroke-dasharray": "4 4", opacity: 0.85 }, svg);
     }
 
-    // legal pawn destinations
+    // legal pawn destinations (not where a candidate is drawn)
+    const candCells = new Set(v.pv ? [] : ((v.cands && v.cands.moves) || []).map(m => m.move));
     if (v.interactive && v.legal) {
       for (const mv of v.legal) {
-        if (mv.length !== 2) continue;
+        if (mv.length !== 2 || candCells.has(mv)) continue;
         const m = parseMove(mv), [cx, cy] = this.center(m.c, m.r);
-        el("circle", { cx, cy, r: v.selected ? 9 : 7, fill: ACC[v.human], opacity: v.selected ? 0.85 : 0.55, class: "dest" }, svg);
+        el("circle", { cx, cy, r: v.selected ? 9 : 7, fill: ACC[v.mover], opacity: v.selected ? 0.85 : 0.55, class: "dest" }, svg);
       }
     }
 
@@ -156,19 +152,68 @@ class Board {
       const m = parseMove(pos.pawns[p]), [cx, cy] = this.center(m.c, m.r);
       const isLast = last && last.color === p && !parseMove(last.move).wall;
       if (isLast) el("circle", { cx, cy, r: CELL * 0.45, fill: "none", stroke: ACC[p], "stroke-width": 2.5, opacity: 0.6 }, svg);
-      if (v.interactive && v.selected && p === v.human) el("circle", { cx, cy, r: CELL * 0.47, fill: "none", stroke: "var(--sel-ring)", "stroke-width": 3 }, svg);
+      if (v.interactive && v.selected && p === v.mover) el("circle", { cx, cy, r: CELL * 0.47, fill: "none", stroke: "var(--sel-ring)", "stroke-width": 3 }, svg);
       el("circle", { cx, cy, r: CELL * 0.34, fill: p === "b" ? "var(--b-pawn)" : "var(--w-pawn)", stroke: ACC[p], "stroke-width": 4, filter: "url(#shadow)" }, svg);
       el("circle", { cx: cx - CELL * 0.1, cy: cy - CELL * 0.11, r: CELL * 0.09, fill: "#fff", opacity: p === "b" ? 0.18 : 0.8 }, svg);
     }
+
+    // candidates or a principal variation, above everything else
+    const top = el("g", { "pointer-events": "none" }, svg);
+    if (v.pv && v.pv.moves.length) this.drawPV(top, v.pv);
+    else if (v.cands) this.drawCands(top, v.cands);
 
     this.previewLayer = el("g", { "pointer-events": "none" }, svg);
     this.drawPreview();
   }
 
-  badge(x, y, n) {
-    el("circle", { cx: x, cy: y, r: 8.5, fill: "var(--hint)", stroke: "#fff", "stroke-width": 1.5 }, this.svg);
-    const t = el("text", { x, y: y + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#fff" }, this.svg);
-    t.textContent = n;
+  drawCands(g, cands) {
+    const list = cands.moves;
+    if (!list.length) return;
+    const topVisits = Math.max(...list.map(m => m.visits || 0));
+    // walls first so the pawn-move discs stay readable; the best move last, on top
+    const ordered = [...list].sort((a, b) => (b.move.length - a.move.length) || (b.order - a.order));
+    for (const m of ordered) {
+      const p = parseMove(m.move), best = m.order === 0;
+      const col = best ? CAND_TOP : CAND_OFF, a = best ? 1 : candAlpha(m.visits, topVisits);
+      const win = m.winrate == null ? "" : (100 * m.winrate).toFixed(0);
+      if (p.wall) {
+        const r = this.wallRect(p.c, p.r, p.o);
+        el("rect", { ...r, rx: 4, fill: col, "fill-opacity": a, stroke: best ? "#0b6c7c" : "#3d6b1c", "stroke-opacity": Math.min(1, a + 0.2), "stroke-width": 1.5 }, g);
+        const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+        el("rect", { x: cx - 15, y: cy - 8, width: 30, height: 16, rx: 8, fill: col, "fill-opacity": Math.max(a, 0.85), stroke: "#14303a", "stroke-opacity": 0.5, "stroke-width": 1 }, g);
+        this.text(g, cx, cy + 4, win, 10.5, 750, "#10242c");
+      } else {
+        const [cx, cy] = this.center(p.c, p.r);
+        el("circle", { cx, cy, r: CELL * 0.44, fill: col, "fill-opacity": a, stroke: best ? "#0b6c7c" : "#3d6b1c", "stroke-opacity": Math.min(1, a + 0.2), "stroke-width": 1.5 }, g);
+        this.text(g, cx, cy + 1, win, 15, 750, "#10242c");
+        this.text(g, cx, cy + 13, fmtVisits(m.visits), 9.5, 600, "#10242c");
+      }
+    }
+  }
+
+  drawPV(g, pv) {
+    let c = pv.color;
+    pv.moves.slice(0, 12).forEach((mv, i) => {
+      const p = parseMove(mv);
+      if (p.wall) {
+        const r = this.wallRect(p.c, p.r, p.o);
+        el("rect", { ...r, rx: 4, fill: ACC[c], opacity: 0.8, stroke: "#fff", "stroke-width": 1.5, "stroke-dasharray": "4 3" }, g);
+        const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+        el("circle", { cx, cy, r: 9, fill: c === "b" ? "var(--b-pawn)" : "var(--w-pawn)", stroke: ACC[c], "stroke-width": 2 }, g);
+        this.text(g, cx, cy + 4, i + 1, 11, 750, c === "b" ? "#fff" : "#111");
+      } else {
+        const [cx, cy] = this.center(p.c, p.r);
+        el("circle", { cx, cy, r: CELL * 0.3, fill: c === "b" ? "var(--b-pawn)" : "var(--w-pawn)", opacity: 0.85, stroke: ACC[c], "stroke-width": 3 }, g);
+        this.text(g, cx, cy + 5, i + 1, 14, 750, c === "b" ? "#fff" : "#111");
+      }
+      c = c === "b" ? "w" : "b";
+    });
+  }
+
+  text(g, x, y, s, size, weight, fill) {
+    const t = el("text", { x, y, "text-anchor": "middle", "font-size": size, "font-weight": weight, fill }, g);
+    t.textContent = s;
+    return t;
   }
 
   // hover: {kind, move, legal} or null
@@ -187,11 +232,18 @@ class Board {
     if (!h || !v || !v.interactive) return;
     const m = parseMove(h.move);
     if (h.kind === "wall") {
-      el("rect", { ...this.wallRect(m.c, m.r, m.o), rx: 4, fill: h.legal ? ACC[v.human] : "var(--bad)", opacity: h.legal ? 0.6 : 0.5,
+      el("rect", { ...this.wallRect(m.c, m.r, m.o), rx: 4, fill: h.legal ? ACC[v.mover] : "var(--bad)", opacity: h.legal ? 0.6 : 0.5,
         stroke: h.legal ? "#fff" : "var(--bad)", "stroke-width": 1.5, class: h.legal ? "pv-ok" : "pv-bad" }, g);
     } else if (h.legal) {
       const [cx, cy] = this.center(m.c, m.r);
-      el("circle", { cx, cy, r: CELL * 0.34, fill: v.human === "b" ? "var(--b-pawn)" : "var(--w-pawn)", stroke: ACC[v.human], "stroke-width": 4, opacity: 0.5 }, g);
+      el("circle", { cx, cy, r: CELL * 0.34, fill: v.mover === "b" ? "var(--b-pawn)" : "var(--w-pawn)", stroke: ACC[v.mover], "stroke-width": 4, opacity: 0.5 }, g);
     }
   }
+}
+
+function fmtVisits(n) {
+  if (n == null) return "";
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+  return String(n);
 }

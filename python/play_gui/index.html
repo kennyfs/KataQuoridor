@@ -13,7 +13,13 @@
   <div class="actions">
     <button id="newBtn" class="primary" title="New game (N)">New game</button>
     <button id="undoBtn" title="Take back your last move and the AI's reply (U)">Undo</button>
-    <button id="hintBtn" title="Ask the engine for your best moves (H)">Hint</button>
+    <button id="hintBtn" title="Ask the engine for the best moves (H)">Hint</button>
+    <button id="anaModeBtn" title="Analysis mode: move for both sides, undo freely, live engine analysis (A)">Analyze</button>
+    <span id="anaCtl" class="ana-ctl" hidden>
+      <button id="anaBtn" class="toggle" title="Start / pause the engine analysis (Space)">▶ Analysis</button>
+      <label class="maxv" title="Stop the analysis at this many visits; empty = no limit">max
+        <input id="maxVisits" type="number" min="1" step="100" placeholder="∞"></label>
+    </span>
     <button id="flipBtn" title="Flip the board (F)">Flip</button>
     <button id="evalBtn" class="toggle on" title="Show or hide the evaluation (E)">Evaluation</button>
     <a id="sgfBtn" class="btn" href="api/sgf" download title="Download the game as .sgfs (opens in sgfs_viewer)">SGF</a>
@@ -53,18 +59,21 @@
       <div class="ev-nums"><span id="evB">—</span><span id="evW">—</span></div>
       <div class="ev-lead" id="evLead">—</div>
       <div class="ev-src" id="evSrc"></div>
+      <div class="ev-src" id="evNet"></div>
       <svg id="chart" aria-label="Black win probability over the game"></svg>
     </div>
-    <div id="hintCard" class="card" hidden>
-      <h2>Hint <span class="sub" id="hintSub"></span></h2>
-      <div id="hintList"></div>
+    <div id="candCard" class="card" hidden>
+      <h2><span id="candTitle">Hint</span> <span class="sub" id="candSub"></span>
+        <label class="pol-only" title="Also list moves the search has not visited (net policy only)"><input type="checkbox" id="polOnly"> unvisited</label></h2>
+      <div id="candRoot" class="cand-root"></div>
+      <div id="candList" class="cand-list"></div>
     </div>
     <div class="card grow">
       <h2>Moves <span class="sub" id="moveCount"></span></h2>
       <div id="reviewBar" hidden><span id="reviewText"></span><button id="backBtn" class="primary">Back to current</button></div>
       <div id="moveList"></div>
     </div>
-    <div class="keys">N new · U undo · H hint · F flip · E evaluation · ← → review · Esc back</div>
+    <div class="keys" id="keys"></div>
   </section>
 </main>
 
@@ -78,6 +87,7 @@
         <label><input type="radio" name="side" value="w"><span><i class="pawn w"></i>White</span></label>
         <label><input type="radio" name="side" value="random"><span>Random</span></label>
         <label><input type="radio" name="side" value="none"><span>AI vs AI <small>demo</small></span></label>
+        <label><input type="radio" name="side" value="analysis"><span>Analysis <small>both sides</small></span></label>
       </div>
     </div>
     <div class="field">
