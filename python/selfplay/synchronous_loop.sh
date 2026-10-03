@@ -69,6 +69,8 @@ EXPAND_WINDOW_PER_ROW="${EXPAND_WINDOW_PER_ROW:-0.6}" # Initial slope of the shu
 MAX_CYCLES="${MAX_CYCLES:-0}" # Stop after this many cycles (0 = run forever). Rerunning continues the run.
 VALIDATE="${VALIDATE:-1}" # 1: shuffle peels off ~5% of the selfplay files (by path md5) as validation data; 0: no validation.
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}" # Extra train.py args, e.g. "-use-aurora -wd-floor-frac 0.5 -lr-scale 2 -max-val-samples 5000"
+START_AT="${START_AT:-gatekeeper}" # First cycle only: start at this step (gatekeeper, selfplay, shuffle, train, export), e.g. shuffle to
+# train on self-play data that a stopped loop already produced. Later cycles run all steps.
 GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs longer than this many seconds (it has hung
 # once in CUDA backend init); the candidate stays in modelstobetested/ and is tested again next cycle. 0 disables.
 
@@ -106,22 +108,40 @@ CYCLE=0
 while [[ "$MAX_CYCLES" -le 0 || "$CYCLE" -lt "$MAX_CYCLES" ]]
 do
     CYCLE=$((CYCLE + 1))
+    SKIP=""
+    if [[ "$CYCLE" == 1 ]]; then
+        case "$START_AT" in
+            gatekeeper) ;; selfplay) SKIP="gatekeeper" ;; shuffle) SKIP="gatekeeper selfplay" ;;
+            train) SKIP="gatekeeper selfplay shuffle" ;; export) SKIP="gatekeeper selfplay shuffle train" ;;
+            *) echo "unknown START_AT=$START_AT"; exit 1 ;;
+        esac
+    fi
+    skip() { [[ " $SKIP " == *" $1 "* ]]; }
+
+    if ! skip gatekeeper; then
     echo "Gatekeeper"
     time timeout -k 60 "$GATEKEEPER_TIMEOUT" ./bin/katago gatekeeper -rejected-models-dir "$BASEDIR"/rejectedmodels -accepted-models-dir "$BASEDIR"/models/ -sgf-output-dir "$BASEDIR"/gatekeepersgf/ -test-models-dir "$BASEDIR"/modelstobetested/ -config "$DATED_ARCHIVE"/gatekeeper.cfg -quit-if-no-nets-to-test | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt \
         || echo "$(date '+%F %T') gatekeeper failed or timed out (status $?), continuing with the current model" | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt
+    fi
 
+    if ! skip selfplay; then
     echo "Selfplay"
     time ./bin/katago selfplay -max-games-total "$NUM_GAMES_PER_CYCLE" -output-dir "$BASEDIR"/selfplay -models-dir "$BASEDIR"/models -config "$DATED_ARCHIVE"/selfplay.cfg | tee -a "$BASEDIR"/selfplay/stdout.txt
+    fi
 
+    if ! skip shuffle; then
     echo "Shuffle"
     (
         # The validation split is per file, so it needs many files per cycle (see maxRowsPerTrainFile in the selfplay config).
         if [[ "$VALIDATE" == "0" ]]; then export SKIP_VALIDATE=1; else unset SKIP_VALIDATE; fi
         time ./shuffle.sh "$BASEDIR" "$SCRATCHDIR" "$NUM_THREADS_FOR_SHUFFLING" -min-rows "$SHUFFLE_MINROWS" -keep-target-rows "$SHUFFLE_KEEPROWS" -taper-window-scale "$TAPER_WINDOW_SCALE" -expand-window-per-row "$EXPAND_WINDOW_PER_ROW" | tee -a "$BASEDIR"/logs/outshuffle.txt
     )
+    fi
 
+    if ! skip train; then
     echo "Train"
     time ./train.sh "$BASEDIR" "$TRAININGNAME" "$MODELKIND" "$BATCHSIZE" main -samples-per-epoch "$NUM_TRAIN_SAMPLES_PER_EPOCH" -swa-period-samples "$NUM_TRAIN_SAMPLES_PER_SWA" -quit-if-no-data -stop-when-train-bucket-limited -export-only-at-end -max-train-bucket-per-new-data "$MAX_TRAIN_PER_DATA" -max-train-bucket-size "$MAX_TRAIN_SAMPLES_PER_CYCLE" $TRAIN_EXTRA_ARGS
+    fi
 
     echo "Export"
     (
