@@ -256,9 +256,16 @@ must be in the checkout the loop runs from (`synchronous_loop.sh` copies `python
    (they come from the game), only its search used a score head with the bonus. With gating, the gatekeeper compares
    the first λ = 0 net with it at λ = 0.
 
-### 9.3 Capacity test: `tf2_b8c256_quoridor_v3`
+### 9.3 Optimizer and capacity: Aurora, `tf3_b5c256_quoridor_v3`
 
-New preset: 8 blocks, 256 trunk, `mid` 128, FFN 384, 4 heads of 32, heads 48/48/96/96; **4,082,801** parameters
-(3.2× `tf2_b4c192`'s 1,290,513). Parity (`tests/test_nn_parity.py`, random net): Eigen FP32 max diff 9e-7, CUDA FP32
-5e-7, CUDA FP16 9e-4 (b4c192: 8e-4), symmetries 0 and 1. On the 3070: self-play NN evals/s 15.9k vs 26.6k for
-b4c192 (**1.68× slower**, 256 game threads, FP16); training 498 vs 1045 samples/s (2.1×).
+- **Aurora.** A from-scratch b4c192 bootstrap on run3's newest 2.5M rows with Aurora (`-use-aurora -wd-floor-frac
+  0.5`, no warmup, lr scale 8 → 4 at 3.6M → 2 at 5.1M samples) beat run3's SGD net trained on the same data by about
+  +84 Elo (kq_ladder3) and became run3a's first net, `run3a-s6097408-d4605550` (metrics and logs:
+  `~/q1_run/run3/train/run3a/bootstrap_from_scratch/`). A 300k-sample lr sweep found Aurora stable up to x8 (no
+  warmup needed for stability, but its first ~100k samples are slower than SGD) and clearly better than SGD at x2-x8.
+  run3a then trains with constant lr scale 2. Note the lr scale is relative to train.py's per-sample lr, which for
+  SGD is KataGo's late-training value (KataGo's own schedules start at 8-12x).
+- **Capacity.** With Aurora, run3a's Elo per data row fell well below run3's late SGD rate while val losses stayed
+  flat, so the next run (run4) uses a bigger net, KataGo's mainline design (b11c768h12nbt3tflrs-fson-silu) scaled
+  down: `tf3_b5c256_quoridor_v3`, 5 nested-bottleneck blocks of 3 transformer layers (15 layers), 256 trunk, `mid`
+  128, FFN 384, 4 heads of 32, heads 48/48/96/96, fson normalization, SiLU; **3,672,817** parameters (2.8x b4c192).

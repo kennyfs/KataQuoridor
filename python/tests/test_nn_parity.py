@@ -57,7 +57,7 @@ FP32_TOL = float(os.environ.get("NN_PARITY_TOL", "1e-4"))
 # $NN_PARITY_MODELS (comma-separated) restricts the nets, e.g. conv only for CUDA NCHW, which rejects transformers.
 MODEL_CONFIGS = os.environ.get(
     "NN_PARITY_MODELS",
-    "b2c64_quoridor,tf2_b4c192_quoridor,b2c64_quoridor_v2,tf2_b4c192_quoridor_v2,b2c64_quoridor_v3,tf2_b4c192_quoridor_v3,tf2_b8c256_quoridor_v3",
+    "b2c64_quoridor,tf2_b4c192_quoridor,b2c64_quoridor_v2,tf2_b4c192_quoridor_v2,b2c64_quoridor_v3,tf2_b4c192_quoridor_v3,tf3_b5c256_quoridor_v3",
 ).split(",")
 IO_VERSIONS = [1, 2, 3]
 NUM_SPATIAL = {1: 17, 2: 19, 3: 21}

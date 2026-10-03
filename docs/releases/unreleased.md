@@ -208,5 +208,6 @@ See [QuoridorIOv3.md §9](../QuoridorIOv3.md#9-λ--0-2026-10-02).
 - **`python/quoridor_convert_tdata_lambda0.py`** converts λ > 0 training data: final utility score := lead on
   decisive rows, and the non-convertible short-term score target is switched off by the new weight column **C70**
   (read by the loss; written 0).
-- **`tf2_b8c256_quoridor_v3`** preset (4.08M parameters, 8 transformer blocks, 256 trunk).
+- **`tf3_b5c256_quoridor_v3`** preset (3.67M parameters, 5 nested-bottleneck blocks of 3 transformer layers, 256 trunk,
+  fson normalization, SiLU), KataGo's mainline design scaled to Quoridor.
 - `kq_ladder`: `extra_pairs` for pairs such as two nets at equal search time.
