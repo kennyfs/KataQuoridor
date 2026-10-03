@@ -123,6 +123,8 @@ def make_handler(game):
                 return self._run(game.request_hint)
             if path == "/api/goto":
                 return self._run(lambda: game.goto(body.get("ply")))
+            if path == "/api/ai_sides":
+                return self._run(lambda: game.set_ai_sides(body.get("sides", "")))
             if path == "/api/analysis_mode":
                 return self._run(game.enter_analysis)
             if path == "/api/analyze":

@@ -116,6 +116,10 @@ body.noeval #moveList .ev { visibility: hidden; }
 /* analysis controls */
 .ana-ctl { display: inline-flex; gap: 6px; align-items: center; }
 .ana-ctl[hidden] { display: none; }
+.ai-seg { display: inline-flex; align-items: center; gap: 0; color: var(--muted); font-size: 12.5px; }
+.ai-seg button { padding: 5px 9px; border-radius: 0; margin-left: -1px; }
+.ai-seg button:first-of-type { border-radius: 8px 0 0 8px; margin-left: 5px; }
+.ai-seg button:last-of-type { border-radius: 0 8px 8px 0; }
 .maxv { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12.5px; }
 .maxv input { font: inherit; width: 84px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px; background: #fbfaf7; color: var(--ink); }
 

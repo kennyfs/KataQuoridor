@@ -171,6 +171,7 @@ class GameController:
         self.mode = "play"               # play | analysis
         self.can_analyze = False         # the engine knows kata-analyze
         self.analysis_on = False
+        self.ai_sides = ""               # analysis mode: colours the AI plays ("", "b", "w" or "bw")
         self.max_visits = 0              # analysis visit cap, 0 = unlimited
         self._stream = None              # token of the running kata-analyze, None when idle
         self._reset_position_state()
@@ -410,9 +411,9 @@ class GameController:
         self.engine.close()
 
     def _ai_should_move(self):
-        if self.mode == "analysis":
-            return False
         tm = self._to_move()
+        if self.mode == "analysis":
+            return tm is not None and tm in self.ai_sides
         return tm is not None and tm != self.human
 
     def _spawn_ai(self, gen, delay=0.0):
@@ -427,7 +428,7 @@ class GameController:
         try:
             with self._session():
                 with self.lock:
-                    if gen != self.gen or not self.thinking or self.mode == "analysis":
+                    if gen != self.gen or not self.thinking or not self._ai_should_move():
                         return
                     color = self._to_move()
                 ok, text = self._send("kata-genmove_analyze %s 1000 rootInfo true" % color,
@@ -465,7 +466,7 @@ class GameController:
                     if root_eval is not None:
                         self.positions[-1]["eval"] = root_eval
                     self._apply(color, move, winner, dist, walls_left, legal, move_eval)
-                    again = self.human is None and self.mode == "play" and not winner
+                    again = not winner and self._ai_should_move()
                     self.thinking = again
         except EngineDown:
             return
@@ -517,6 +518,7 @@ class GameController:
                     gen = self.gen
                     self.human_choice = human
                     self.mode = "analysis" if human == "analysis" else "play"
+                    self.ai_sides = ""
                     self.human = (None if human in ("none", "analysis") else
                                   self.rng.choice("bw") if human == "random" else human)
                     self.visits = visits
@@ -548,6 +550,7 @@ class GameController:
             # An AI search that is already running still plays its move (kata-genmove_analyze has played it
             # in the engine); one that has not started yet sees the mode and gives up.
             self.mode = "analysis"
+            self.ai_sides = ""
             self.human = None
             self.human_choice = "analysis"
             self.hint = None
@@ -577,6 +580,23 @@ class GameController:
         with self._session():
             pass                   # stops the analysis, restarts it when it is (still) wanted
         return self.state()
+
+    def set_ai_sides(self, sides):
+        """Analysis mode: let the AI play "b", "w", both ("bw") or neither ("") side."""
+        sides = "".join(c for c in "bw" if c in str(sides or ""))
+        with self.lock:
+            self._check_ready()
+            if self.mode != "analysis":
+                raise ActionError("AI sides can only be chosen in analysis mode")
+            self.ai_sides = sides
+            need_ai = self.started and not self.thinking and not self.busy and self._ai_should_move()
+            if need_ai:
+                self.thinking = True
+            gen = self.gen
+            state = self._state_locked()
+        if need_ai:
+            self._spawn_ai(gen)
+        return state
 
     def _record_position(self, color, move, entry=None):
         """After an accepted `play`: query the engine and record the move (call with engine_lock held).
@@ -629,10 +649,12 @@ class GameController:
                 raise ActionError("the game is over")
             if self.busy:
                 raise ActionError("busy: %s" % self.busy)
-            if self.mode == "analysis":
-                return
             if self.thinking:
                 raise ActionError("the AI is thinking")
+            if self.mode == "analysis":
+                if self._to_move() in self.ai_sides:
+                    raise ActionError("the AI plays this side")
+                return
             if self._to_move() != self.human:
                 raise ActionError("it is not your turn")
 
@@ -671,6 +693,8 @@ class GameController:
             if self.busy:
                 raise ActionError("busy: %s" % self.busy)
             if self.mode == "analysis":
+                if self.thinking:
+                    raise ActionError("cannot undo while the AI is thinking")
                 if not self.moves:
                     raise ActionError("nothing to undo")
                 count = 1
@@ -706,6 +730,8 @@ class GameController:
             self._check_ready()
             if self.mode != "analysis":
                 raise ActionError("goto is only available in analysis mode")
+            if self.thinking:
+                raise ActionError("the AI is thinking")
             if self.busy:
                 raise ActionError("busy: %s" % self.busy)
             if not 0 <= ply <= len(self.moves) + len(self.redo):
@@ -814,7 +840,7 @@ class GameController:
             "busy": self.busy,
             "ai_error": self.ai_error,
             "hint": self.hint,
-            "analysis": {"on": self.analysis_on, "max_visits": self.max_visits,
+            "analysis": {"on": self.analysis_on, "max_visits": self.max_visits, "ai_sides": self.ai_sides,
                          "running": self._stream is not None,
                          "current": None if an is None else dict(an, moves=list(an["moves"]))},
             "positions": [dict(p) for p in self.positions],

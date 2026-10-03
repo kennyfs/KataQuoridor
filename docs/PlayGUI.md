@@ -42,6 +42,8 @@ allowResignation=false, reportAnalysisWinratesAs=SIDETOMOVE` and opens the page.
 - **Undo** (U, Backspace, ←) takes back one move and keeps it: → (or clicking a greyed move in the list)
   replays it, Home / End jump to the start / the end of the line. The mouse wheel over the board
   steps back (up) and forward (down), in play mode too (review). Playing a different move drops the undone ones.
+- **AI all / B / W** lets the AI play its best move (with the game's visit setting) for both sides, Black or
+  White; all three can be combined with the analysis. Undo and goto wait until the AI has moved.
 - **Space** starts or pauses the engine (`kata-analyze`, which keeps searching the current position and
   restarts on every new position). **max** caps the visits per position; empty means no limit. The search
   tree is reused, so going back to an analysed position continues where it stopped.

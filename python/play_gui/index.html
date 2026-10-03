@@ -17,6 +17,8 @@
     <button id="anaModeBtn" title="Analysis mode: move for both sides, undo freely, live engine analysis (A)">Analyze</button>
     <span id="anaCtl" class="ana-ctl" hidden>
       <button id="anaBtn" class="toggle" title="Start / pause the engine analysis (Space)">▶ Analysis</button>
+      <span class="ai-seg" title="Let the AI play its best move for a side">AI
+        <button id="aiAll" class="toggle" data-sides="bw">all</button><button id="aiB" class="toggle" data-sides="b">B</button><button id="aiW" class="toggle" data-sides="w">W</button></span>
       <label class="maxv" title="Stop the analysis at this many visits; empty = no limit">max
         <input id="maxVisits" type="number" min="1" step="100" placeholder="∞"></label>
     </span>

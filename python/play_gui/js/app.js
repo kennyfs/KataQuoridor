@@ -163,7 +163,7 @@ function isAnalysis() { return !!S && S.mode === "analysis"; }
 function mover() { return isAnalysis() ? S.to_move : S.settings.human; }
 function myTurn() {
   if (!S || !S.started || viewPly !== null || S.winner || S.busy || pending || S.engine.status !== "ready") return false;
-  if (isAnalysis()) return true;
+  if (isAnalysis()) return !S.thinking && !S.analysis.ai_sides.includes(S.to_move);
   return !!S.settings.human && S.to_move === S.settings.human && !S.thinking;
 }
 // the candidate list for the current position: the live analysis, else a hint
@@ -275,7 +275,7 @@ function pips(left) {
 function renderCard(box, c, pos) {
   const toMove = viewPly === null ? S.to_move : (curPly() % 2 === 0 ? "b" : "w");
   const over = viewPly === null ? !!S.winner : false;
-  const isAi = !isAnalysis() && S.settings.human !== c;
+  const isAi = isAnalysis() ? S.analysis.ai_sides.includes(c) : S.settings.human !== c;
   const thinking = isAi && S.thinking && viewPly === null && S.to_move === c;
   const d = pos.dist ? pos.dist[c] : null;
   const left = pos.walls_left ? pos.walls_left[c] : 10;
@@ -315,6 +315,7 @@ function renderStatus() {
 function analysisStatus() {
   if (S.winner) return `<b>Game over:</b> ${NAME[S.winner]} wins by ${S.margin} move${S.margin === 1 ? "" : "s"}. ← to step back.`;
   if (S.busy === "hint") return `<span class="spin"></span>Searching (${S.settings.hint_visits} visits)…`;
+  if (S.thinking) return `<span class="spin"></span>AI (${NAME[S.to_move]}) is choosing its move… (${S.settings.visits} visit${S.settings.visits === 1 ? "" : "s"})`;
   if (pending || S.busy) return `<span class="spin"></span>Working…`;
   const a = S.analysis, cur = a.current, v = cur && cur.root ? cur.root.visits : 0;
   const cap = a.max_visits ? fmtVisits(a.max_visits) : "∞";
@@ -500,6 +501,11 @@ function renderButtons() {
     $("anaBtn").classList.toggle("on", on);
     $("anaBtn").textContent = on ? "❚❚ Analysis" : "▶ Analysis";
     $("anaBtn").disabled = !ready || !S.engine.can_analyze;
+    const ai = S.analysis.ai_sides;
+    $("aiAll").classList.toggle("on", ai === "bw");
+    $("aiB").classList.toggle("on", ai.includes("b"));
+    $("aiW").classList.toggle("on", ai.includes("w"));
+    for (const id of ["aiAll", "aiB", "aiW"]) $(id).disabled = !ready || !S.started;
     const mv = $("maxVisits");
     if (document.activeElement !== mv) mv.value = S.analysis.max_visits ? S.analysis.max_visits : "";
   }
@@ -629,6 +635,15 @@ $("moveList").addEventListener("click", e => {
 });
 $("anaModeBtn").onclick = () => enterAnalysis();
 $("anaBtn").onclick = () => toggleAnalysis();
+// AI sides: "all" switches both on (or both off when both are on); B / W flip one side
+function setAiSides(btn) {
+  const cur = S.analysis.ai_sides, d = btn.dataset.sides;
+  let next;
+  if (d === "bw") next = cur === "bw" ? "" : "bw";
+  else next = cur.includes(d) ? cur.replace(d, "") : cur + d;
+  act(() => api("api/ai_sides", { sides: next }));
+}
+for (const id of ["aiAll", "aiB", "aiW"]) $(id).onclick = e => setAiSides(e.currentTarget);
 $("maxVisits").addEventListener("change", e => {
   const v = parseInt(e.target.value, 10);
   const max = v > 0 ? v : 0;

@@ -443,3 +443,24 @@ def test_hint_has_candidate_details(game):
     m = h["moves"][0]
     assert m["chosen"] and m["visits"] > 0 and m["prior"] == 0.5 and m["order"] == 0
     assert 0 <= m["winrate"] <= 1 and h["root"]["visits"] == 50
+
+
+def test_analysis_ai_sides(game):
+    game.new_game("analysis", 16)
+    s = game.set_ai_sides("w")
+    assert s["analysis"]["ai_sides"] == "w" and not s["thinking"]   # Black to move: still the user
+    with pytest.raises(ActionError):
+        game.play("e2")                                              # not White's turn
+    game.play("e8")
+    s = wait_idle(game)
+    assert moves_of(s) == [("b", "e8"), ("w", "e2")]                 # the AI answered for White
+    s = game.set_ai_sides("bw")                                      # both: it plays on by itself
+    wait_for(lambda: game.state()["winner"] is not None, timeout=20)
+    s = wait_idle(game)
+    assert s["mode"] == "analysis" and s["winner"] == "b"
+    game.undo()
+    s = game.set_ai_sides("")
+    assert s["analysis"]["ai_sides"] == "" and not s["thinking"]
+    game.new_game("b", 16)
+    with pytest.raises(ActionError):
+        game.set_ai_sides("b")                                       # only in analysis mode
