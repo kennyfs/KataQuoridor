@@ -40,15 +40,18 @@ allowResignation=false, reportAnalysisWinratesAs=SIDETOMOVE` and opens the page.
 
 - You move for both sides; the board takes moves for the side to move. The AI no longer plays.
 - **Undo** (U, Backspace, ←) takes back one move and keeps it: → (or clicking a greyed move in the list)
-  replays it, Home / End jump to the start / the end of the line. Playing a different move drops the undone ones.
+  replays it, Home / End jump to the start / the end of the line. The mouse wheel over the board
+  steps back (up) and forward (down), in play mode too (review). Playing a different move drops the undone ones.
 - **Space** starts or pauses the engine (`kata-analyze`, which keeps searching the current position and
   restarts on every new position). **max** caps the visits per position; empty means no limit. The search
   tree is reused, so going back to an analysed position continues where it stopped.
 - Candidate moves are drawn as in Ogatak: the engine's best move in light blue, the others in green that
   fades with fewer visits, each with its win chance (for the side to move) and visit count; walls get a
-  label on the wall. Hovering a candidate (on the board or in the list) shows its continuation, numbered.
+  label on the wall. Hovering a candidate (on the board or in the list) shows its continuation, numbered; **PV** (P)
+  switches this off and on.
 - The side panel lists every searched child: win %, lead (moves), visits and their share, the net's raw
-  policy prior, the winrate LCB, and the continuation. *unvisited* also lists the moves the search has not
+  policy prior, the winrate LCB, and the continuation. It is sorted by LCB; click the *visits* or *#*
+  (the engine's own ranking) header to sort by those instead. *unvisited* also lists the moves the search has not
   tried yet, with their policy prior. Above the list: the root value, utility, score spread, the net's own
   uncertainty estimates and the raw net value of the position (also shown under the evaluation bar).
 

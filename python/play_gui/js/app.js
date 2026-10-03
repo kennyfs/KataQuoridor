@@ -33,6 +33,14 @@ function saveSettings(o) {
 }
 let showEval = loadSettings().showEval !== false;
 let polOnly = !!loadSettings().polOnly;
+let pvOnHover = loadSettings().pvOnHover !== false;
+// candidate list order: "lcb", "visits" or "order" (the engine's own ranking)
+let sortBy = ["visits", "lcb", "order"].includes(loadSettings().sortBy) ? loadSettings().sortBy : "lcb";
+const SORTS = {
+  visits: (a, b) => b.visits - a.visits || a.order - b.order,
+  lcb: (a, b) => (b.lcb ?? -9) - (a.lcb ?? -9) || a.order - b.order,
+  order: (a, b) => a.order - b.order,
+};
 
 // ---- server -----------------------------------------------------------------------------------------------
 async function api(path, body) {
@@ -194,6 +202,7 @@ const pct = x => (100 * x).toFixed(1) + "%";
 function render() {
   document.body.classList.toggle("noeval", !showEval);
   $("evalBtn").classList.toggle("on", showEval);
+  $("pvBtn").classList.toggle("on", pvOnHover);
   renderBanner();
   renderEngineInfo();
   if (!S || !S.started) {
@@ -397,16 +406,17 @@ function renderCands(c) {
   }
   $("candRoot").innerHTML = root;
 
-  const searched = c.moves.filter(m => m.visits > 0).sort((a, b) => a.order - b.order);
+  const searched = c.moves.filter(m => m.visits > 0).sort(SORTS[sortBy]);
   const total = searched.reduce((t, m) => t + m.visits, 0) || 1;
   let rows = searched;
   if (polOnly) rows = rows.concat(c.moves.filter(m => !(m.visits > 0)).sort((a, b) => (b.prior || 0) - (a.prior || 0)));
-  const key = c.src + "|" + polOnly + "|" + rows.map(m => m.move + m.visits).join(",") ;
+  const key = c.src + "|" + polOnly + "|" + sortBy + "|" + rows.map(m => m.move + m.visits).join(",") ;
   if (key === candKey) return;
   candKey = key;
-  const head = `<div class="crow chead"><span>#</span><span>move</span><span title="Win chance for ${NAME[col]} (side to move)">win%</span>` +
-    `<span title="Expected margin in moves for ${NAME[col]}">lead</span><span title="Visits (share of all child visits)">visits</span>` +
-    `<span title="Raw policy prior of the net">policy</span><span title="Lower confidence bound of the winrate">lcb</span></div>`;
+  const sh = (k, label, title) => `<span class="sort${sortBy === k ? " on" : ""}" data-sort="${k}" title="${title} · click to sort">${label}${sortBy === k ? " ▾" : ""}</span>`;
+  const head = `<div class="crow chead">${sh("order", "#", "The engine's ranking")}<span>move</span><span title="Win chance for ${NAME[col]} (side to move)">win%</span>` +
+    `<span title="Expected margin in moves for ${NAME[col]}">lead</span>${sh("visits", "visits", "Visits (share of all child visits)")}` +
+    `<span title="Raw policy prior of the net">policy</span>${sh("lcb", "lcb", "Lower confidence bound of the winrate")}</div>`;
   $("candList").innerHTML = head + rows.map(m => {
     const v = m.visits > 0;
     const cls = !v ? "unv" : m.order === 0 ? "top" : "";
@@ -494,8 +504,8 @@ function renderButtons() {
     if (document.activeElement !== mv) mv.value = S.analysis.max_visits ? S.analysis.max_visits : "";
   }
   $("keys").textContent = ana
-    ? "Space analysis · ← → Home End move through the game · U undo · H hint · F flip · E evaluation · N new"
-    : "N new · U undo · H hint · A analyze · F flip · E evaluation · ← → review · Esc back";
+    ? "Space analysis · ← → Home End move through the game · U undo · H hint · wheel on board ↑↓ · P PV on hover · F flip · E evaluation · N new"
+    : "N new · U undo · H hint · A analyze · P PV on hover · F flip · E evaluation · ← → / wheel review · Esc back";
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -537,10 +547,23 @@ svgEl.addEventListener("pointermove", e => {
   svgEl.style.cursor = !hit ? "" : hit.legal || hit.own ? "pointer" : hit.kind === "wall" ? "not-allowed" : "";
   setPvHover(hit && hit.legal ? hit.move : null);
 });
+// mouse wheel over the board: up = previous move, down = next move
+let wheelAcc = 0;
+svgEl.addEventListener("wheel", e => {
+  if (!S || !S.started) return;
+  e.preventDefault();
+  wheelAcc += e.deltaY;
+  if (Math.abs(wheelAcc) < 40) return;   // trackpads send many small deltas
+  const step = wheelAcc > 0 ? 1 : -1;
+  wheelAcc = 0;
+  if (isAnalysis()) { if (!pending && !S.busy) gotoPly(S.moves.length + step); }
+  else review(curPly() + step);
+}, { passive: false });
 svgEl.addEventListener("pointerleave", () => { board.setHover(null); svgEl.style.cursor = ""; setPvHover(null); });
 
 // show a candidate's principal variation on the board while it is hovered (board or list)
 function setPvHover(move) {
+  if (!pvOnHover) move = null;
   const c = currentCands();
   const m = move && c ? c.moves.find(x => x.move === move && x.visits > 0 && x.pv && x.pv.length) : null;
   const next = m ? { color: c.color, moves: m.pv } : null;
@@ -589,6 +612,8 @@ $("moveForm").addEventListener("submit", e => {
 // swallow a click between press and release
 $("candList").addEventListener("pointerdown", e => {
   if (e.button !== 0) return;
+  const sc = e.target.closest("[data-sort]");
+  if (sc) { sortBy = sc.dataset.sort; saveSettings({ sortBy }); candKey = ""; render(); return; }
   const row = e.target.closest(".crow");
   if (row && row.dataset.move && myTurn() && S.legal_moves.includes(row.dataset.move)) playMove(row.dataset.move);
 });
@@ -614,6 +639,7 @@ $("backBtn").onclick = () => review(null);
 $("undoBtn").onclick = () => { viewPly = null; act(() => api("api/undo", {})); };
 $("hintBtn").onclick = () => { viewPly = null; act(() => api("api/hint", {}).then(() => api("api/state"))); };
 $("flipBtn").onclick = () => { bottom = opp(bottom); board.setHover(null); render(); };
+$("pvBtn").onclick = () => { pvOnHover = !pvOnHover; saveSettings({ pvOnHover }); if (!pvOnHover) pvHover = null; render(); };
 $("evalBtn").onclick = () => { showEval = !showEval; saveSettings({ showEval }); movesKey = ""; render(); };
 $("restartBtn").onclick = () => act(() => api("api/restart", {}).then(() => api("api/state")));
 $("ovNew").onclick = () => openNewDialog();
@@ -674,6 +700,7 @@ document.addEventListener("keydown", e => {
   else if (k === "h" || k === "H") { if (!$("hintBtn").disabled) $("hintBtn").click(); }
   else if (k === "f" || k === "F") $("flipBtn").click();
   else if (k === "e" || k === "E") $("evalBtn").click();
+  else if (k === "p" || k === "P") $("pvBtn").click();
   else if (k === "ArrowLeft" && S && S.started) { e.preventDefault(); review(curPly() - 1); }
   else if (k === "ArrowRight" && S && S.started) { e.preventDefault(); review(curPly() + 1); }
   else if (k === "Home" && S && S.started) review(0);

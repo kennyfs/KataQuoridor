@@ -128,6 +128,8 @@ body.noeval #moveList .ev { visibility: hidden; }
 .crow > span:nth-child(n+3) { text-align: right; }
 .crow:hover:not(.chead) { background: #eef7f9; }
 .crow.chead { cursor: default; color: var(--muted); font-size: 11px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); z-index: 1; }
+.crow.chead .sort { cursor: pointer; text-decoration: underline dotted; }
+.crow.chead .sort.on { color: var(--ink); font-weight: 700; text-decoration: none; }
 .crow .ci { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
 .crow .ci i { width: 11px; height: 11px; border-radius: 50%; background: var(--dot, transparent); opacity: var(--dot-a, 0); border: 1px solid rgba(0,0,0,.25); flex: none; }
 .crow .mv { font-weight: 700; }
