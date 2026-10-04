@@ -13,7 +13,6 @@ function setTab(stats) {
 }
 $("tabView").onclick = () => setTab(false);
 $("tabStats").onclick = () => setTab(true);
-$("sType").addEventListener("input", renderStats);
 $("fileInput").addEventListener("change", e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 $("flipBtn").onclick = () => { flipped = !flipped; update(false); };
 $("pathBtn").onclick = () => { showPaths = !showPaths; $("pathBtn").classList.toggle("on", showPaths); update(false); };
@@ -28,7 +27,33 @@ $("bNext").onclick = () => go(1);
 $("bPrev10").onclick = () => go(-10);
 $("bNext10").onclick = () => go(10);
 $("moveSlider").oninput = e => { ply = +e.target.value; update(); };
-for (const id of ["fRes", "fType", "fMin"]) $(id).addEventListener("input", applyFilters);
+for (const id of FILTER_IDS) $(id).addEventListener("input", applyFilters);
+$("fChips").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.x === "opening") setOpeningFilter(""); else clearFilters();
+});
+
+// Desktop: drag the handle between the game list and the board to resize the list; the width is remembered.
+{
+  const LIST_W_KEY = "sgfsViewer.listWidth", main = document.querySelector("main"), handle = $("listResize");
+  const setW = w => { w = Math.round(Math.max(220, Math.min(w, innerWidth - 640))); main.style.setProperty("--listW", w + "px"); return w; };
+  try { const w = +localStorage.getItem(LIST_W_KEY); if (w) setW(w); } catch (e) { /* storage unavailable */ }
+  handle.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const x0 = e.clientX, w0 = $("gamesPanel").getBoundingClientRect().width;
+    document.body.classList.add("resizing");
+    const move = ev => setW(w0 + ev.clientX - x0);
+    const up = ev => {
+      handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up); handle.removeEventListener("pointercancel", up);
+      document.body.classList.remove("resizing");
+      try { localStorage.setItem(LIST_W_KEY, setW(w0 + ev.clientX - x0)); } catch (err) { /* storage unavailable */ }
+      if (cur) renderChart();
+    };
+    handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", up); handle.addEventListener("pointercancel", up);
+  });
+  handle.addEventListener("dblclick", () => { main.style.removeProperty("--listW"); try { localStorage.removeItem(LIST_W_KEY); } catch (e) { /* storage unavailable */ } if (cur) renderChart(); });
+}
 $("gameList").addEventListener("click", e => { const r = e.target.closest(".g"); if (r) selectGame(+r.dataset.g); });
 $("moveList").addEventListener("click", e => { const r = e.target.closest(".m"); if (r) { ply = +r.dataset.i; update(false); } });
 

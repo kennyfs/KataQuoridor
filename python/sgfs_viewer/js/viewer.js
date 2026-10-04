@@ -136,7 +136,7 @@ function renderInfo() {
   const rows = [
     ["Game", `#${curGameIdx + 1} of ${games.length}`],
     ["Result", resultLabel(h)],
-    ...(h.repetition ? [["Repetition rule", `draw at occurrence ${h.repetition} of a position`]] : []),
+    ...(h.ruleKnown || h.repetition ? [["Repetition rule", h.repetition ? `on: draw at occurrence ${h.repetition} of a position` : "off"]] : []),
     ...(h.komi !== STANDARD_KOMI ? [["Komi", `${fmtKomi(h.komi)} (standard −0.5)`]] : []),
     ...(h.wb !== STANDARD_WALLS || h.ww !== STANDARD_WALLS ? [["Initial walls", `Black ${h.wb} · White ${h.ww}`]] : []),
     ["Moves", `${g.moves.length}  (init ${g.startTurnIdx}, searched ${g.moves.length - g.startTurnIdx})`],
@@ -276,19 +276,22 @@ function update(scrollList = true) {
 
 // ---- Game list -------------------------------------------------------------
 // Sort keys for finding interesting games. desc = true means "most interesting first" is descending.
+// Winner-based metrics are null for draws (no winner), so draws sort last on them.
 const SORTS = [
   { key: "idx", label: "File order", desc: "Games in the order they appear in the file.", get: s => s.i, fmt: v => v + 1, dir: "asc" },
-  { key: "comeback", label: "Comeback (win%)", desc: "Winner's lowest White/Black win% during search. Low = the winner was nearly lost.", get: s => s.minWinnerP, fmt: v => pct(v, 0), dir: "asc" },
-  { key: "scoreComeback", label: "Comeback (lead)", desc: "Winner's worst predicted lead during search. Negative = the winner was predicted to trail by that much.", get: s => leadOnly(s) ? s.minWinnerScore : null, fmt: fmtScore, dir: "asc" },
-  { key: "raceDeficit", label: "Race comeback (path)", desc: "Winner's worst path-race deficit: max over positions of (winner's shortest path − loser's). High = the winner was far behind in the race.", get: s => s.raceDeficit, fmt: v => (v > 0 ? "+" : "") + v, dir: "desc" },
+  { key: "comeback", label: "Comeback (win%)", desc: "Winner's lowest White/Black win% during search. Low = the winner was nearly lost. Draws have no winner and are listed last.", get: s => s.minWinnerP, fmt: v => pct(v, 0), dir: "asc" },
+  { key: "scoreComeback", label: "Comeback (lead)", desc: "Winner's worst predicted lead during search. Negative = the winner was predicted to trail by that much. Draws are listed last.", get: s => leadOnly(s) ? s.minWinnerScore : null, fmt: fmtScore, dir: "asc" },
+  { key: "raceDeficit", label: "Race comeback (path)", desc: "Winner's worst path-race deficit: max over positions of (winner's shortest path − loser's). High = the winner was far behind in the race. Draws are listed last.", get: s => s.raceDeficit, fmt: v => (v > 0 ? "+" : "") + v, dir: "desc" },
   { key: "leadChanges", label: "Lead changes", desc: "Times the win% crossed 50% during search.", get: s => s.leadChanges, fmt: v => v, dir: "desc" },
   { key: "volatility", label: "Volatility", desc: "Total win% movement: sum of |Δ win%| between consecutive searches.", get: s => s.volatility, fmt: v => (100 * v).toFixed(0), dir: "desc" },
   { key: "maxSwing", label: "Biggest swing", desc: "Largest single-move |Δ win%|: a blunder or a surprise.", get: s => s.maxSwing, fmt: v => pct(v, 0), dir: "desc" },
-  { key: "decidedLeft", label: "Decided late", desc: "Moves left after the winner last dropped below 90%. Low = the game stayed open until the end.", get: s => s.decidedLeft, fmt: v => v, dir: "asc" },
-  { key: "close", label: "Close finish", desc: "Final result margin. Small = close game.", get: s => s.margin, fmt: v => v, dir: "asc" },
+  { key: "decidedLeft", label: "Decided late", desc: "Moves left after the winner last dropped below 90%. Low = the game stayed open until the end. Draws are listed last.", get: s => s.decidedLeft, fmt: v => v, dir: "asc" },
+  { key: "close", label: "Close finish", desc: "Final result margin. Small = close game. Draws and resignations / forfeits are listed last.", get: s => s.margin, fmt: v => v, dir: "asc" },
+  { key: "cycling", label: "Cycling", desc: "Longest repeated stretch: plies in a row whose position (pawns, walls placed, side to move) occurred before in the game. High = the game cycled.", get: s => s.cycleMax, fmt: v => v, dir: "desc" },
+  { key: "komi", label: "Komi", desc: "Komi (KM, standard −0.5; positive favours White).", get: s => s.komi, fmt: fmtKomi, dir: "asc" },
   { key: "maxPath", label: "Longest detour", desc: "Longest shortest path of either pawn at any point (a clear 9x9 board is 8). High = a big maze.", get: s => s.maxPath, fmt: v => v, dir: "desc" },
   { key: "walls", label: "Walls placed", desc: "Total walls placed by both sides.", get: s => s.walls, fmt: v => v, dir: "desc" },
-  { key: "brier", label: "Misjudged", desc: "Mean squared error of White win% vs the actual result (Brier). High = the search was wrong for long stretches.", get: s => s.brier, fmt: v => v.toFixed(2), dir: "desc" },
+  { key: "brier", label: "Misjudged", desc: "Mean squared error of White win% vs the actual result (Brier, a draw counts as ½). High = the search was wrong for long stretches.", get: s => s.brier, fmt: v => v.toFixed(2), dir: "desc" },
   { key: "len", label: "Length", desc: "Total moves.", get: s => s.n, fmt: v => v, dir: "desc" },
 ];
 let sortDesc = false;
@@ -312,11 +315,84 @@ function setSort(key) {
 }
 function randomGame() { if (filtered.length) selectGame(filtered[Math.floor(Math.random() * filtered.length)]); }
 
+// ---- Filters: one shared state for the game list and the statistics page ----
+// The selects hold the state; `openingFilter` (set from the statistics page's opening table) is shown as a chip.
+const FILTER_IDS = ["fRes", "fRule", "fKomi", "fWalls", "fType", "fCyc", "fMin"];
+let openingFilter = "";
+let repTags = false;   // tag each list row with its repetition rule (the file mixes rules)
+function passes(g, s) {
+  const r = $("fRes").value, rule = $("fRule").value, km = $("fKomi").value, wl = $("fWalls").value;
+  const t = $("fType").value, cyc = +$("fCyc").value || 0, mn = +$("fMin").value || 0;
+  if (r) {
+    if (r[0] === "m") { if (!match || g.winnerModel !== match.models[+r[1]]) return false; }
+    else if (r[0] === "a") { if (!match || g.pb !== match.models[+r[1]]) return false; }
+    else if (r === "D") { if (!isDraw(g.winner)) return false; }
+    else if (r.startsWith("D:")) { if (!isDraw(g.winner) || g.drawReason !== r.slice(2)) return false; }
+    else if (g.winner !== r) return false;
+  }
+  if (rule && !(rule === "on" ? g.repetition > 0 : rule === "off" ? g.ruleKnown && !g.repetition : g.repetition === +rule)) return false;
+  if (km && g.komi !== (km === "std" ? STANDARD_KOMI : +km)) return false;
+  if (wl) {
+    const std = g.wb === STANDARD_WALLS && g.ww === STANDARD_WALLS;
+    if (wl === "std" ? !std : wl === "hc" ? std : wl === "hcB" ? !(g.wb < g.ww) : !(g.ww < g.wb)) return false;
+  }
+  if (t && g.gtype !== t) return false;
+  if (g.nMoves < mn) return false;
+  if (openingFilter && g.opening !== openingFilter && !g.opening.startsWith(openingFilter + " ")) return false;
+  if (cyc && s && s.cycleMax < cyc) return false;   // before the summaries are ready the cycling filter is not applied
+  return true;
+}
+// Human-readable list of the active filters ("" when none), for the statistics page.
+function activeFilters() {
+  const out = [];
+  for (const id of FILTER_IDS) {
+    const e = $(id);
+    if (!e.value || e.hidden) continue;
+    out.push(id === "fMin" ? `≥ ${e.value} moves` : e.options[e.selectedIndex].text);
+  }
+  if (openingFilter) out.push(`opening ${openingLabel(openingFilter)}`);
+  return out;
+}
+function setOpeningFilter(key) { openingFilter = key; applyFilters(); }
+function clearFilters() {
+  for (const id of FILTER_IDS) $(id).value = "";
+  openingFilter = "";
+  applyFilters();
+}
+function renderChips() {
+  const n = activeFilters().length;
+  $("fChips").innerHTML = (openingFilter ? `<span class="chip">Opening ${escapeHtml(openingLabel(openingFilter))} <button data-x="opening" title="Remove">×</button></span>` : "") +
+    (n ? `<button class="linkbtn" data-x="all">Clear filters</button>` : "");
+}
+
+// Fill the filter selects from the games of a newly loaded file; a select whose filter cannot split the file is hidden.
+function initFilters() {
+  const res = `<option value="">All results</option><option value="B">Black wins</option><option value="W">White wins</option>` +
+    (games.some(g => isDraw(g.winner)) ? `<option value="D">Draws</option>` +
+      [...new Set(games.filter(g => isDraw(g.winner) && g.drawReason).map(g => g.drawReason))].sort()
+        .map(r => `<option value="D:${escapeHtml(r)}">Draw by ${DRAW_REASONS[r] || escapeHtml(r)}</option>`).join("") : "");
+  $("fRes").innerHTML = res + (match ? match.labels.map((l, k) => `<option value="m${k}">${l} wins</option>`).join("") +
+    match.labels.map((l, k) => `<option value="a${k}">${l} as Black</option>`).join("") : "");
+  const reps = new Set(games.map(g => g.ruleKnown ? g.repetition : -1));
+  repTags = reps.size > 1;
+  $("fRule").hidden = !repTags;
+  $("fRule").innerHTML = `<option value="">Any rep. rule</option><option value="on">Rep. rule on</option><option value="off">Rep. rule off</option>` +
+    [...reps].filter(x => x > 0).sort().map(x => `<option value="${x}">Rep. rule N = ${x}</option>`).join("");
+  const komis = [...new Set(games.map(g => g.komi))].sort((a, b) => a - b);
+  $("fKomi").hidden = komis.length < 2;
+  $("fKomi").innerHTML = `<option value="">Any komi</option><option value="std">Komi standard (−0.5)</option>` +
+    komis.filter(k => k !== STANDARD_KOMI).map(k => `<option value="${k}">Komi ${fmtKomi(k)}</option>`).join("");
+  $("fWalls").hidden = games.every(g => g.wb === STANDARD_WALLS && g.ww === STANDARD_WALLS);
+  const types = [...new Set(games.map(g => g.gtype).filter(Boolean))].sort();
+  $("fType").hidden = types.length < 2;
+  $("fType").innerHTML = `<option value="">All types</option>` + types.map(t => `<option>${escapeHtml(t)}</option>`).join("");
+  for (const id of FILTER_IDS) $(id).value = "";
+  openingFilter = "";
+}
+
 function applyFilters() {
-  const r = $("fRes").value, t = $("fType").value, mn = +$("fMin").value || 0;
   filtered = [];
-  const okRes = g => !r || (r[0] === "m" ? match && g.winnerModel === match.models[+r[1]] : r[0] === "a" ? match && g.pb === match.models[+r[1]] : g.winner === r);
-  for (const g of games) if (okRes(g) && (!t || g.gtype === t) && g.nMoves >= mn) filtered.push(g.i);
+  for (const g of games) if (passes(g, statsCache && statsCache[g.i])) filtered.push(g.i);
   const M = SORTS.find(s => s.key === $("sortKey").value) || SORTS[0];
   const sign = (sortDesc ? -1 : 1);
   if (statsCache) {
@@ -330,18 +406,22 @@ function applyFilters() {
   if (statsCache) $("sortKey").querySelector('option[value="scoreComeback"]').textContent = statsCache.some(t => t.hasLead) || !statsCache.length ? "Comeback (lead)" : "Comeback (margin, no lead)";
   $("sortDesc").textContent = statsCache ? sortNote(M) : "Computing game metrics…";
   $("sortDir").textContent = sortDesc ? "↓" : "↑";
+  const tag = s => `<span class="tag">${escapeHtml(s)}</span>`;
   $("gameList").innerHTML = filtered.map(i => {
     const g = games[i];
-    let tag = g.gtype && g.gtype !== "normal" ? `<span class="tag">${escapeHtml(g.gtype)}</span>` : "";
-    if (g.rulesLabel) tag += `<span class="tag">${escapeHtml(g.rulesLabel)}</span>`;
-    if (g.drawReason) tag += `<span class="tag">${escapeHtml(DRAW_REASONS[g.drawReason] || g.drawReason)}</span>`;
-    if (match) tag += ` · ${mDot(g.winnerModel)}${mLabel(g.winnerModel)} won`;
+    let tags = g.gtype && g.gtype !== "normal" ? tag(g.gtype) : "";
+    if (repTags) tags += tag(repLabel(g) || "rule ?");
+    if (g.rulesLabel) tags += tag(g.rulesLabel);
+    if (g.drawReason) tags += tag(DRAW_REASONS[g.drawReason] || g.drawReason);
+    if (match && g.winnerModel) tags += `<span class="won">${mDot(g.winnerModel)}${mLabel(g.winnerModel)} won</span>`;
     const v = statsCache && M.key !== "idx" && M.key !== "len" ? M.get(statsCache[i]) : undefined;
     const mval = v === undefined ? "" : v === null ? "—" : M.fmt(v);
-    return `<div class="g${i === curGameIdx ? " sel" : ""}" data-g="${i}"><span class="idx">#${i + 1}</span><span class="res ${g.winner}">${escapeHtml(g.result)}</span><span class="meta">${g.nMoves} moves${tag}</span><span class="mval">${mval}</span></div>`;
+    return `<div class="g${i === curGameIdx ? " sel" : ""}" data-g="${i}"><span class="idx">#${i + 1}</span><span class="res ${isDraw(g.winner) ? "D" : g.winner}">${escapeHtml(g.result)}</span><span class="meta">${g.nMoves} moves${tags}</span><span class="mval">${mval}</span></div>`;
   }).join("");
-  $("listCount").textContent = `${filtered.length} / ${games.length} games`;
+  $("listCount").textContent = `${filtered.length} / ${games.length} games` + (activeFilters().length ? " (filtered)" : "");
   $("gamesHeadInfo").textContent = curGameIdx >= 0 ? `· #${curGameIdx + 1} of ${games.length}` : `· ${games.length}`;
+  renderChips();
+  if (statsCache && document.body.classList.contains("stats")) renderStats();
 }
 
 function selectGame(i) {
@@ -371,13 +451,7 @@ function loadText(text, name) {
   games = lines.map(headerOf);
   match = detectMatch();
   statsCache = null;
-  const base = `<option value="">All results</option><option value="B">Black wins</option><option value="W">White wins</option>`;
-  $("fRes").innerHTML = base + (match ? match.labels.map((l, k) => `<option value="m${k}">${l} wins</option>`).join("") +
-    match.labels.map((l, k) => `<option value="a${k}">${l} as Black</option>`).join("") : "");
-  const types = [...new Set(games.map(g => g.gtype).filter(Boolean))].sort();
-  const opts = types.map(t => `<option>${escapeHtml(t)}</option>`).join("");
-  $("fType").innerHTML = `<option value="">All types</option>` + opts;
-  $("sType").innerHTML = `<option value="">All</option>` + opts;
+  initFilters();
   $("fileName").textContent = `${name} — ${games.length} games` + (match ? ` · match: ${match.models.map((m, k) => `${match.labels[k]} ${shortName(m)}`).join(" vs ")}` : " · self-play");
   document.querySelectorAll(".vis").forEach(e => e.hidden = false);
   $("empty").hidden = true;
@@ -399,8 +473,7 @@ function computeSummaries() {
     for (; i < end; i++) out[i] = summarize(lines[i], games[i]);
     if (i < lines.length) { $("sortDesc").textContent = `Computing game metrics… ${Math.round(100 * i / lines.length)}%`; return setTimeout(step, 0); }
     statsCache = out;
-    applyFilters();
-    if (document.body.classList.contains("stats")) renderStats();
+    applyFilters();   // re-renders the statistics page when it is open
   };
   step();
 }

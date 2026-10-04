@@ -21,10 +21,15 @@
   <section class="panel games" id="gamesPanel">
     <h2 id="gamesHead">Games <span id="gamesHeadInfo"></span></h2>
     <div class="filters">
-      <select id="fRes"><option value="">All results</option><option value="B">Black wins</option><option value="W">White wins</option></select>
-      <select id="fType"><option value="">All types</option></select>
+      <select id="fRes" title="Result"><option value="">All results</option></select>
+      <select id="fRule" title="Repetition rule" hidden></select>
+      <select id="fKomi" title="Komi" hidden></select>
+      <select id="fWalls" title="Initial walls" hidden><option value="">Any walls</option><option value="std">Walls 10/10</option><option value="hc">Fence handicap</option><option value="hcB">Handicap on Black</option><option value="hcW">Handicap on White</option></select>
+      <select id="fType" title="Game type" hidden><option value="">All types</option></select>
+      <select id="fCyc" title="Longest repeated stretch (computed with the game metrics)"><option value="">Any cycling</option><option value="4">Cycled ≥ 4 plies</option><option value="8">Cycled ≥ 8 plies</option><option value="16">Cycled ≥ 16 plies</option></select>
       <input id="fMin" type="number" min="0" placeholder="min moves">
     </div>
+    <div class="chips" id="fChips"></div>
     <div class="filters sortrow">
       <select id="sortKey" title="Sort games by"></select>
       <button id="sortDir" title="Flip sort direction">↓</button>
@@ -34,6 +39,7 @@
     <div id="gameList"></div>
     <div id="listCount"></div>
   </section>
+  <div id="listResize" title="Drag to resize the game list (double-click: default width)"></div>
 
   <section class="panel center">
     <div class="empty" id="empty">
@@ -101,9 +107,8 @@
 
 <section id="statsView">
   <div class="stats-top">
-    <span>Game type</span>
-    <select id="sType"><option value="">All</option></select>
     <span id="statsNote"></span>
+    <span id="statsFilters"></span>
   </div>
   <div id="matchSection" hidden>
     <div class="sec" id="matchTitle"></div>
