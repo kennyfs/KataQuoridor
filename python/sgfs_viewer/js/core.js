@@ -24,7 +24,6 @@ let curGameIdx = -1;
 let ply = 0;          // number of moves applied
 let flipped = false;
 let showPaths = true;  // overlay all shortest paths on the board
-let playTimer = null;
 let statsCache = null; // per-game summaries (sort metrics + statistics), filled by computeSummaries()
 // Match files (gatekeeper): every game is model X vs model Y with PB != PW. Self-play files have PB == PW.
 // models[0] is the newer one (larger "-s<samples>" in the name) when both names carry it.

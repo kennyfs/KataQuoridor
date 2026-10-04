@@ -346,7 +346,6 @@ function applyFilters() {
 
 function selectGame(i) {
   if (i < 0 || i >= games.length) return;
-  stopPlay();
   curGameIdx = i;
   cur = parseGame(lines[i]);
   ply = cur.startTurnIdx;

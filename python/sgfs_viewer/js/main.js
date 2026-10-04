@@ -1,14 +1,6 @@
 "use strict";
-// ---- Playback --------------------------------------------------------------
-function stopPlay() { if (playTimer) { clearInterval(playTimer); playTimer = null; $("bPlay").textContent = "Play"; } }
-function togglePlay() {
-  if (!cur) return;
-  if (playTimer) return stopPlay();
-  if (ply >= cur.moves.length) ply = cur.startTurnIdx;
-  $("bPlay").textContent = "Pause";
-  playTimer = setInterval(() => { if (ply >= cur.moves.length) return stopPlay(); ply++; update(); }, 450);
-}
-const go = d => { if (cur) { stopPlay(); ply += d; update(); } };
+// ---- Navigation ------------------------------------------------------------
+const go = d => { if (cur) { ply += d; update(); } };
 
 // ---- Events ----------------------------------------------------------------
 function setTab(stats) {
@@ -17,7 +9,7 @@ function setTab(stats) {
   $("tabView").classList.toggle("on", !stats);
   $("flipBtn").hidden = stats;
   hideTip();
-  if (stats) { stopPlay(); renderStats(); } else if (cur) renderChart();
+  if (stats) renderStats(); else if (cur) renderChart();
 }
 $("tabView").onclick = () => setTab(false);
 $("tabStats").onclick = () => setTab(true);
@@ -29,17 +21,16 @@ initSortSelect();
 $("sortKey").addEventListener("input", e => setSort(e.target.value));
 $("sortDir").onclick = () => { sortDesc = !sortDesc; applyFilters(); };
 $("randBtn").onclick = randomGame;
-$("bFirst").onclick = () => { if (cur) { stopPlay(); ply = 0; update(); } };
-$("bLast").onclick = () => { if (cur) { stopPlay(); ply = cur.moves.length; update(); } };
+$("bFirst").onclick = () => { if (cur) { ply = 0; update(); } };
+$("bLast").onclick = () => { if (cur) { ply = cur.moves.length; update(); } };
 $("bPrev").onclick = () => go(-1);
 $("bNext").onclick = () => go(1);
 $("bPrev10").onclick = () => go(-10);
 $("bNext10").onclick = () => go(10);
-$("bPlay").onclick = togglePlay;
-$("moveSlider").oninput = e => { stopPlay(); ply = +e.target.value; update(); };
+$("moveSlider").oninput = e => { ply = +e.target.value; update(); };
 for (const id of ["fRes", "fType", "fMin"]) $(id).addEventListener("input", applyFilters);
 $("gameList").addEventListener("click", e => { const r = e.target.closest(".g"); if (r) selectGame(+r.dataset.g); });
-$("moveList").addEventListener("click", e => { const r = e.target.closest(".m"); if (r) { stopPlay(); ply = +r.dataset.i; update(false); } });
+$("moveList").addEventListener("click", e => { const r = e.target.closest(".m"); if (r) { ply = +r.dataset.i; update(false); } });
 
 // wheel on the board: down = next move, up = previous. Accumulate so trackpads don't race.
 let wheelAcc = 0;
@@ -72,7 +63,7 @@ $("gameList").addEventListener("click", () => { if (narrow.matches) $("gamesPane
 }
 
 // chart: click to jump, hover crosshair + tooltip
-$("chart").addEventListener("click", e => { if (cur) { stopPlay(); ply = chartPlyAt(e); update(); } });
+$("chart").addEventListener("click", e => { if (cur) { ply = chartPlyAt(e); update(); } });
 $("chart").addEventListener("mousemove", e => {
   if (!cur) return;
   const i = chartPlyAt(e), { X } = chartGeom(), hv = $("chart")._hover;
@@ -98,7 +89,6 @@ document.addEventListener("keydown", e => {
   else if (k === "End") $("bLast").click();
   else if (k === "ArrowDown") stepGame(1);
   else if (k === "ArrowUp") stepGame(-1);
-  else if (k === " ") togglePlay();
   else if (k === "f" || k === "F") $("flipBtn").click();
   else if (k === "p" || k === "P") $("pathBtn").click();
   else if (k === "r" || k === "R") randomGame();

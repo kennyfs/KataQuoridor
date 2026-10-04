@@ -225,7 +225,6 @@
     #moveSlider { height: 28px; }
     .controls { gap: 5px; }
     .controls button { flex: 1; min-width: 40px; min-height: 46px; padding: 4px 2px; }
-    .controls button.primary { flex: 1.6; }
     .m { padding: 6px 10px; grid-template-columns: 30px 16px 40px 1fr; }
     .g { padding: 9px 12px; grid-template-columns: 44px 56px 1fr auto; }
     #statsView { padding: 10px; }
