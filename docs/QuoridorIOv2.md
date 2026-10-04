@@ -460,7 +460,9 @@ are counted from the real game start. Training data is unchanged by step 3.
   `KM` / `WB` / `WW` / `RE` from the arbiter's `printsgf` (the `KM[0]` / integer-margin workaround of §7 is gone),
   and an arbiter rule draw is a draw. Details in [Evaluation.md](Evaluation.md#komi-and-fence-handicap).
 - `python/sgfs_viewer`: komi and initial walls in the game list and info panel when not standard, walls counters
-  from the initial walls, and win-rate slices by komi and by fence handicap on the stats page.
+  from the initial walls, game-list filters by komi and by walls (standard, fence handicap on Black / on White) and a
+  sort by komi, and on the stats page a komi table and score slices per initial-walls pair (rates are scores with a
+  draw as ½).
 
 ### 5.7 Still to do (after merging step 2)
 
@@ -615,7 +617,7 @@ Open points after step 2:
 | Configs | `cpp/configs/training/selfplay_quoridor_v2.cfg`, `gatekeeper_quoridor_v2.cfg`; λ note in `cpp/configs/gtp_quoridor.cfg` |
 | C++ tests | `cpp/tests/testquoridorselfplay.cpp` (`runtests quoridorselfplay`) |
 | Arena | `referee.py` (`make_rules`, `RulesState`, `play_game(rules=...)`, result from the arbiter's `RE`), `arena.py` (roster `rules` / `pair_rules` / `supports_rules`, `--komi` / `--black-walls` / `--white-walls`, rules in game ids), `elo.py` (Rules column); tests `tests/test_arena.py`, `tests/test_referee_rules.py`, mock engine `tests/mock_engine.py` |
-| Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`), `viewer.js` (tags, info, walls counters), `stats.js` (win-rate slices) |
+| Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`), `viewer.js` (tags, info, walls counters, komi / walls filters, komi sort), `stats.js` (komi table, score slices by initial walls) |
 
 ## 10. Repetition draw: design and where things live
 
@@ -688,7 +690,7 @@ that ends the game is what's needed. No domain knowledge (e.g. "detect sealed re
 | Gatekeeper | `numRepetitionDraws` (`cpp/command/gatekeeper.cpp`); a draw is half a point either way, as before |
 | Configs | `repetitionDrawCount = 3` in `selfplay_quoridor_v2.cfg` and `gatekeeper_quoridor_v2.cfg`; commented out (off) in `gtp_quoridor.cfg` |
 | Arena | `referee.py`: `STANDARD_RULES["repetitionDrawCount"] = 0`, sent by `RulesState` as `kata-set-rule repetitionDrawCount N`, game-id tag `_rN`, reason `repetition` from the arbiter's `DR`, result field `repetition_draw_count`; `arena.py --repetition-draw-count`; `elo.py` (draw rate by repetition, rules label) |
-| Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`: `repetition`, `drawReason`; `resultLabel`), `viewer.js` (result, rule row, list tag) |
+| Viewer | `python/sgfs_viewer/js/core.js` (`rulesOf`: `repetition`, `ruleKnown`, `drawReason`; `resultLabel`, `repLabel`, `scoreB`, `repeatStretch`), `viewer.js` (result, rule row, "rep 3" / "rep 4" / "rep off" list tag, rule / result / cycling filters, Cycling sort), `stats.js` (by-rule table, draws and cycling cards, scores with a draw as ½); checks `python/sgfs_viewer/tests/check_core.js` (run by `python/tests/test_sgfs_viewer.py`) |
 | Tests | `cpp/tests/testquoridorrepetition.cpp` (`runtests quoridorrepetition`), `python/tests/test_qtp_rules.py::test_repetition_draw`, `python/quoridor_arena/tests/test_arena.py::test_repetition_draw`, `test_referee_rules.py`, mock engine `--shuffle` |
 
 ### 10.5 Measurements (2026-10-01)

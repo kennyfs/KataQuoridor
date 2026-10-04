@@ -177,6 +177,24 @@ engines and old configs behave as before.
   KataQuoridor engines and the arbiter (SimpleQuoridor-type engines play standard games only); game ids get `_rN`;
   repetition draws get reason `repetition` and are counted in the report.
 - **sgfs_viewer:** shows why a draw ended ("0 (draw by repetition)", a list tag) and the rule when on.
+- **sgfs_viewer: draws and the repetition rule.**
+  - Every rate is a **score with a draw as ½** (Black score, slices, by length, match score / Wilson interval /
+    Elo, per-colour records with W / D / L); score bars show Black / draw / White shares with a tick at the score.
+    Calibration, Brier and the match's eval quality take a draw's outcome as ½ (as the move comments' win prob does);
+    winner-based metrics (comeback, race comeback, decided late, margins, walls winner vs loser) skip draws, and
+    resignations / forfeits (`W+R`, `B+F`) no longer count as margin-0 "close finishes".
+  - Repetition rule per game in the list ("rep 3" / "rep 4" / "rep off" when a file mixes rules) and the info
+    panel; a stats table by rule (games, Black score, draws by reason, mean / median length, searched moves).
+  - **Filters** by result (incl. draws by repetition / by ply limit), repetition rule, komi, walls (fence handicap on
+    Black / on White), game type, cycling and minimum length, combined; the statistics page follows the same
+    filters and lists them. New sorts: Komi, Cycling.
+  - New stats cards: komi table, draws (reasons, lengths, where the final repeated stretch of repetition draws
+    began), cycling (longest repeated stretch by rule), frequent 6-ply openings (click one to filter the list).
+    "Full searches" counts searches at each game's own max visits, so files mixing visit counts read correctly.
+  - The game list can be widened (drag the handle next to it; the width is remembered) and row tags wrap. The
+    unused Play / autoplay button and its Space shortcut are gone.
+  - Pure-function checks on real SGF lines: `node python/sgfs_viewer/tests/check_core.js [file.sgfs]` (also run by
+    `python/tests/test_sgfs_viewer.py`).
 - New `runtests quoridorrepetition` test group.
 
 ## Neural net I/O v3 (repetition inputs)
