@@ -149,6 +149,12 @@ KataQuoridor scores a finished game in tempo, from White's point of view ([GameR
   utility score as `scoreSelfplay`, and their `scoreMean` field is a copy of `scoreLead`; `kata-raw-nn` reports
   `whiteLead` and `whiteScoreSelfplay`.
 
+## Play in the browser
+
+`python3 python/play_gui/serve.py --katago <katago> --model <net.bin.gz>` starts a local web page for
+playing against the engine with the mouse (hints, undo, evaluation, SGF download). See
+[docs/PlayGUI.md](docs/PlayGUI.md).
+
 ## Training
 
 The self-play training loop is KataGo's, with Quoridor configs:

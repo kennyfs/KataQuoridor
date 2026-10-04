@@ -9,10 +9,12 @@ MOCK = os.path.join(os.path.dirname(__file__), "mock_engine.py")
 
 
 def write_roster(path, extra=None, arbiter_args=(), **top):
+    # The mock also answers kata-genmove_analyze (for the play GUI); m1..m3 stand for plain QTP engines.
     engines = [
-        {"name": "m1", "command": sys.executable, "args": [MOCK, "--seed", "{seed}"], "seed": 1, "supports_rules": True},
-        {"name": "m2", "command": sys.executable, "args": [MOCK], "seed": 2, "supports_rules": True},
-        {"name": "m3", "command": sys.executable, "args": [MOCK], "supports_rules": True},
+        {"name": "m1", "command": sys.executable, "args": [MOCK, "--seed", "{seed}"], "seed": 1, "supports_rules": True,
+         "kata": False},
+        {"name": "m2", "command": sys.executable, "args": [MOCK], "seed": 2, "supports_rules": True, "kata": False},
+        {"name": "m3", "command": sys.executable, "args": [MOCK], "supports_rules": True, "kata": False},
     ] + (extra or [])
     with open(path, "w") as f:
         json.dump(dict({"arbiter": [sys.executable, MOCK] + list(arbiter_args), "engines": engines}, **top), f)

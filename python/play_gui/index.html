@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KataQuoridor Play</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1><span class="dot" style="background:var(--b-acc)"></span><span class="dot" style="background:var(--w-acc)"></span> KataQuoridor</h1>
+  <span id="engineInfo" class="engine-info">Starting…</span>
+  <div class="actions">
+    <button id="newBtn" class="primary" title="New game (N)">New game</button>
+    <button id="undoBtn" title="Take back your last move and the AI's reply (U)">Undo</button>
+    <button id="hintBtn" title="Ask the engine for the best moves (H)">Hint</button>
+    <button id="anaModeBtn" title="Analysis mode: move for both sides, undo freely, live engine analysis (A)">Analyze</button>
+    <span id="anaCtl" class="ana-ctl" hidden>
+      <button id="anaBtn" class="toggle" title="Start / pause the engine analysis (Space)">▶ Analysis</button>
+      <span class="ai-seg" title="Let the AI play its best move for a side">AI
+        <button id="aiAll" class="toggle" data-sides="bw">all</button><button id="aiB" class="toggle" data-sides="b">B</button><button id="aiW" class="toggle" data-sides="w">W</button></span>
+      <label class="maxv" title="Stop the analysis at this many visits; empty = no limit">max
+        <input id="maxVisits" type="number" min="1" step="100" placeholder="∞"></label>
+    </span>
+    <button id="flipBtn" title="Flip the board (F)">Flip</button>
+    <button id="pvBtn" class="toggle on" title="Show a candidate's continuation when the pointer is over it (P)">PV</button>
+    <button id="evalBtn" class="toggle on" title="Show or hide the evaluation (E)">Evaluation</button>
+    <a id="sgfBtn" class="btn" href="api/sgf" download title="Download the game as .sgfs (opens in sgfs_viewer)">SGF</a>
+  </div>
+</header>
+
+<div id="banner" hidden>
+  <div class="banner-text"><b id="bannerTitle"></b><pre id="bannerMsg"></pre></div>
+  <button id="restartBtn">Restart engine</button>
+</div>
+
+<main>
+  <section class="panel center">
+    <div class="pcard" id="cardTop"></div>
+    <div id="boardWrap">
+      <svg id="board" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Quoridor board"></svg>
+      <div id="overlay" hidden>
+        <div class="ov-box">
+          <div class="ov-title" id="ovTitle"></div>
+          <div class="ov-sub" id="ovSub"></div>
+          <div class="ov-btns"><button class="primary" id="ovNew">New game</button><button id="ovReview">Review the board</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="pcard" id="cardBottom"></div>
+    <div id="status" class="status"></div>
+    <form id="moveForm" class="move-form" autocomplete="off">
+      <input id="moveInput" placeholder="Type a move: e8, e2h, d5v" spellcheck="false" aria-label="Move in QTP notation">
+      <button type="submit">Play</button>
+    </form>
+  </section>
+
+  <section class="panel side">
+    <div id="evalCard" class="card">
+      <h2>Evaluation <span class="sub" id="evalPly"></span></h2>
+      <div class="ev-bar"><div class="b" id="evBarB"></div><div class="w" id="evBarW"></div></div>
+      <div class="ev-nums"><span id="evB">—</span><span id="evW">—</span></div>
+      <div class="ev-lead" id="evLead">—</div>
+      <div class="ev-src" id="evSrc"></div>
+      <div class="ev-src" id="evNet"></div>
+      <svg id="chart" aria-label="Black win probability over the game"></svg>
+    </div>
+    <div id="candCard" class="card" hidden>
+      <h2><span id="candTitle">Hint</span> <span class="sub" id="candSub"></span>
+        <label class="pol-only" title="Also list moves the search has not visited (net policy only)"><input type="checkbox" id="polOnly"> unvisited</label></h2>
+      <div id="candRoot" class="cand-root"></div>
+      <div id="candList" class="cand-list"></div>
+    </div>
+    <div class="card grow">
+      <h2>Moves <span class="sub" id="moveCount"></span></h2>
+      <div id="reviewBar" hidden><span id="reviewText"></span><button id="backBtn" class="primary">Back to current</button></div>
+      <div id="moveList"></div>
+    </div>
+    <div class="keys" id="keys"></div>
+  </section>
+</main>
+
+<dialog id="newDlg">
+  <form method="dialog" id="newForm">
+    <h3>New game</h3>
+    <div class="field">
+      <div class="lab">You play</div>
+      <div class="seg" id="sideSeg">
+        <label><input type="radio" name="side" value="b"><span><i class="pawn b"></i>Black <small>moves first</small></span></label>
+        <label><input type="radio" name="side" value="w"><span><i class="pawn w"></i>White</span></label>
+        <label><input type="radio" name="side" value="random"><span>Random</span></label>
+        <label><input type="radio" name="side" value="none"><span>AI vs AI <small>demo</small></span></label>
+        <label><input type="radio" name="side" value="analysis"><span>Analysis <small>both sides</small></span></label>
+      </div>
+    </div>
+    <div class="field">
+      <div class="lab">Strength</div>
+      <div class="seg" id="strSeg">
+        <label><input type="radio" name="preset" value="easy"><span>Easy <small>1 visit</small></span></label>
+        <label><input type="radio" name="preset" value="normal"><span>Normal <small>16</small></span></label>
+        <label><input type="radio" name="preset" value="hard"><span>Hard <small>256</small></span></label>
+        <label><input type="radio" name="preset" value="max"><span>Max <small>800</small></span></label>
+        <label><input type="radio" name="preset" value="custom"><span>Custom <input type="number" id="customVisits" min="1" max="100000" value="64"></span></label>
+      </div>
+      <div class="note">Visits per move. Easy plays the raw policy net without search.</div>
+    </div>
+    <div class="dlg-btns">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary" id="startBtn">Start</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+
+<script src="js/board.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
