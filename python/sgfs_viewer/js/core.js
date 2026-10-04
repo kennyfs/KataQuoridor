@@ -46,13 +46,29 @@ function headerOf(line, i) {
   const result = re ? re[1] : "?";
   const pb = (/PB\[([^\]]*)\]/.exec(line) || [])[1] || "", pw = (/PW\[([^\]]*)\]/.exec(line) || [])[1] || "";
   return { i, result, winner: result[0], nMoves, gtype: kv.gtype || "", startTurnIdx: +kv.startTurnIdx || 0, pb, pw,
-    winnerModel: result[0] === "B" ? pb : result[0] === "W" ? pw : "", ...rulesOf(line) };
+    winnerModel: result[0] === "B" ? pb : result[0] === "W" ? pw : "", opening: openingOf(line), ...rulesOf(line) };
 }
 
+// Black's score in a game: 1 win, 0 loss, ½ draw (RE[0]: the winner field is "0"); null for an unknown result.
+// Every rate in the viewer is a score with a draw as ½, the same convention as the move comments' White win prob.
+const scoreB = winner => winner === "B" ? 1 : winner === "W" ? 0 : winner === "0" ? 0.5 : null;
+const isDraw = winner => winner === "0";
+
+// The first OPENING_PLIES moves (random init plies included), as raw SGF coords joined by spaces.
+const OPENING_PLIES = 6;
+function openingOf(line) {
+  const re = /;[BW]\[([a-z]*)\]/g, out = [];
+  re.lastIndex = Math.max(0, line.indexOf(";", 2));
+  for (let m; out.length < OPENING_PLIES && (m = re.exec(line));) out.push(m[1]);
+  return out.join(" ");
+}
+const rawNotation = raw => raw.length === 2 ? notation({ raw, x: raw.charCodeAt(0) - 97, y: raw.charCodeAt(1) - 97 }) : "pass";
+const openingLabel = key => key ? key.split(" ").map(rawNotation).join(" ") : "—";
+
 // Komi and initial walls (docs/QuoridorIOv2.md): KM (missing, or KM[0] as 0.1.0 wrote it: the standard -0.5),
-// WB / WW (missing: 10). rulesLabel is "" for the standard game (the repetition rule is not in it: it is on in
-// every v2 self-play game). repetition: RU's repetitionDrawCount (0 = off, also for older files). drawReason: DR,
-// why a drawn game ended ("repetition", "maxPlies", "cutoff"; "" if not a draw or an older file).
+// WB / WW (missing: 10). rulesLabel is "" for the standard game (the repetition rule is not in it: see repLabel).
+// repetition: RU's repetitionDrawCount (0 = off, also for older files); ruleKnown: the game has an RU property.
+// drawReason: DR, why a drawn game ended ("repetition", "maxPlies", "cutoff"; "" if not a draw or an older file).
 const STANDARD_KOMI = -0.5, STANDARD_WALLS = 10;
 function rulesOf(line) {
   const semi = line.indexOf(";", 2), root = semi < 0 ? line : line.slice(0, semi);
@@ -64,8 +80,11 @@ function rulesOf(line) {
   if (komi !== STANDARD_KOMI) parts.push(`komi ${fmtKomi(komi)}`);
   if (wb !== STANDARD_WALLS || ww !== STANDARD_WALLS) parts.push(`walls ${wb}/${ww}`);
   const rep = /repetitionDrawCount=(\d+)/.exec(prop("RU") || "");
-  return { komi, wb, ww, rulesLabel: parts.join(" · "), repetition: rep ? +rep[1] : 0, drawReason: prop("DR") || "" };
+  return { komi, wb, ww, rulesLabel: parts.join(" · "), repetition: rep ? +rep[1] : 0, ruleKnown: prop("RU") !== undefined,
+    drawReason: prop("DR") || "" };
 }
+// "rep 3" / "rep 4" / "rep off" (the repetition rule of a game); "" if the file does not say (no RU).
+const repLabel = h => !h.ruleKnown ? "" : h.repetition ? `rep ${h.repetition}` : "rep off";
 const DRAW_REASONS = { repetition: "repetition", maxPlies: "ply limit", cutoff: "cutoff" };
 // "0 (draw by repetition)" for a draw with a known reason, else the result.
 const resultLabel = h => h.drawReason ? `${h.result} (draw by ${DRAW_REASONS[h.drawReason] || h.drawReason})` : h.result;
@@ -130,6 +149,28 @@ function notation(mv) {
   if (k === "pass") return "pass";
   const s = String.fromCharCode(97 + (mv.x >> 1)) + ((mv.y >> 1) + 1);
   return k === "pawn" ? s : k === "hwall" ? s + "h" : k === "vwall" ? s + "v" : mv.raw;
+}
+
+// ---- Repeated positions -----------------------------------------------------
+// Position = both pawns + walls placed + side to move. Walls are never removed, so the wall count identifies the
+// wall set within a game. A ply is "repeated" when the position after it occurred before in the game (the initial
+// position included). Returns the longest run of consecutive repeated plies (maxRun), where it started (maxStart:
+// the 1-based ply of its first move), and the run still going at the end of the game (endRun, endStart; 0 / null if
+// the last position is new): for a draw by repetition, endStart is where the final cycling began.
+function repeatStretch(g) {
+  const pos = { B: g.startB.x * 32 + g.startB.y, W: g.startW.x * 32 + g.startW.y };
+  let walls = 0, run = 0, start = null, maxRun = 0, maxStart = null;
+  const key = toMove => ((walls * 1024 + pos.B) * 1024 + pos.W) * 2 + (toMove === "B" ? 0 : 1);
+  const seen = new Set([key(g.moves.length ? g.moves[0].pla : "B")]);
+  g.moves.forEach((mv, i) => {
+    const k = moveKind(mv);
+    if (k === "pawn") pos[mv.pla] = mv.x * 32 + mv.y;
+    else if (k === "hwall" || k === "vwall") walls++;
+    const kk = key(mv.pla === "B" ? "W" : "B");
+    if (seen.has(kk)) { if (!run) start = i + 1; run++; if (run > maxRun) { maxRun = run; maxStart = start; } }
+    else { run = 0; seen.add(kk); }
+  });
+  return { maxRun, maxStart, endRun: run, endStart: run ? start : null };
 }
 
 // ---- State reconstruction --------------------------------------------------
