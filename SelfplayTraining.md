@@ -78,3 +78,23 @@ Example instructions to start up these things (assuming you have appropriate mac
      * Gatekeeper takes `-selfplay-dir` as an argument so as to pre-create the directory so that if there are multiple self-play machines, they don't corrupt a shared filesystem in a race to create the dir.
 
 To manually pause a run, sending `SIGINT` or `SIGKILL` to all the relevant processes is the recommended method. The selfplay and gatekeeper processes will terminate gracefully when receiving such a signal and finish writing all pending data (this may take a minute or two), and any python or bash scripts will be terminated abruptly but are all implemented to write to disk in a way that is safe if killed at any point. To resume the run, just restart everything again with the same `$BASEDIR` and everything will continue where it left off.
+
+### Quoridor self-play stats
+Every `logGamesEvery` started games, and when a net is released, KataQuoridor's self-play logs one line per model
+(KataGo's `Game stats for ...` line is not printed). For example (run4-s12637952's 10000 games, recounted from its
+SGFs in this format):
+
+    Quoridor stats for run4-s12637952-d7117843: completed 10000, draws 962 (rate 0.096; repetition 914 (rate 0.091),
+    maxPlies 48 (rate 0.005)), avg plies 67.5, by repetition rule: on 6530 games draw rate 0.140 avg plies 61.7, off
+    3470 games draw rate 0.014 avg plies 78.5, Black score (draw = 1/2) in normal 10/10-wall games by komi: ...
+    -1.5 0.958 (n 759, draws 0.0%) -0.5 0.492 (n 6000, draws 14.8%) +0.5 0.152 (n 719, draws 0.6%) ...; standard
+    komi by repetition rule: on 0.493 (n 3941, draws 21.6%), off 0.492 (n 2059, draws 1.8%)
+
+- "completed" counts every finished game; "avg plies" includes the opening moves played before the search (policy
+  init, fork prefix).
+- "by repetition rule": games with the threefold-repetition draw rule on (any N) and off.
+- "Black score" counts a draw as half a win. The komi slices use normal games (not forks or side positions) with
+  10/10 walls; the last part splits the standard komi (-0.5) by repetition rule.
+- Logs written before 2026-10-05 showed Black's wins over all games instead; see
+  [docs/QuoridorIOv2.md](docs/QuoridorIOv2.md) §5.5 for how to read them.
+

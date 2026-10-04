@@ -68,6 +68,10 @@ were not trained with a time bonus.
   must equal `maxPlies`, otherwise `selfplay`, `gatekeeper` and `match` fail at startup.
 - **Drawn games are training data** (value 0.5/0.5, see the I/O v2 section below) and are reported as draws in the
   self-play stats.
+- **Self-play stats log:** the `Quoridor stats` line reports Black's score with a draw counted as half a win, by komi
+  (with each komi's draw rate) and, for the standard komi, by repetition rule; the old "black win rate in normal
+  standard games" (wins over all games), the fence-handicap slice and KataGo's `Game stats for ...` line are gone.
+  See [SelfplayTraining.md](../../SelfplayTraining.md#quoridor-self-play-stats).
 - **`komiMean` must be a Quoridor komi.** The Quoridor configs now say `komiMean = -0.5`; the old `komiMean = 0`
   fails at startup with an explanation. Update copies of `selfplay_quoridor.cfg` in running training directories
   before using a new binary.

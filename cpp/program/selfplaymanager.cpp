@@ -293,13 +293,11 @@ void SelfplayManager::countOneGameStarted(NNEvaluator* nnEval) {
 
   if(logger != NULL && gameStartedCount % logGamesEvery == 0) {
     logger->write("Started " + Global::int64ToString(gameStartedCount) + " games with " + nnEval->getModelName());
-    logger->write(gameStatsSummary(foundData, gameStartedCount));
     logger->write(quoridorStatsSummary(foundData));
   }
   int64_t logNNEvery = logGamesEvery*100 > 1000 ? logGamesEvery*100 : 1000;
   if(logger != NULL && gameStartedCount % logNNEvery == 0) {
     logger->write(nnEval->getModelFileName());
-    logger->write(gameStatsSummary(foundData, gameStartedCount));
     logger->write("Games finished: " + Global::int64ToString(foundData->gamesFinishedCount.load(std::memory_order_relaxed)));
     logger->write("Moves played: " + Global::int64ToString(foundData->movesPlayedCount.load(std::memory_order_relaxed)));
     if(foundData->tdataWriter != NULL)
@@ -361,17 +359,14 @@ void SelfplayManager::countQuoridorGameResult(NNEvaluator* nnEval, const Finishe
     stats.pliesByRule[r] += hist.getCurrentTurnNumber();
   }
   if(isNormal && standardWalls) {
-    std::pair<int64_t,int64_t>& bucket = stats.byKomi[hist.rules.komi];
-    bucket.first += 1;
-    bucket.second += blackWon ? 1 : 0;
-    if(hist.rules.komi == standard.komi) {
-      stats.standardGames += 1;
-      stats.standardBlackWins += blackWon ? 1 : 0;
-    }
-  }
-  if(isNormal && !standardWalls) {
-    stats.fenceHandicap.first += 1;
-    stats.fenceHandicap.second += blackWon ? 1 : 0;
+    auto add = [&](ModelData::QuoridorStats::Results& r) {
+      r.games += 1;
+      r.blackWins += blackWon ? 1 : 0;
+      r.draws += isDecisive ? 0 : 1;
+    };
+    add(stats.byKomi[hist.rules.komi]);
+    if(hist.rules.komi == standard.komi)
+      add(stats.standardByRule[hist.rules.repetitionDrawCount > 0 ? 1 : 0]);
   }
 }
 
@@ -393,37 +388,23 @@ string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
     s += string(r ? " on " : ", off ") + Global::int64ToString(stats.gamesByRule[r]) + " games draw rate " +
       rate(stats.drawsByRule[r], stats.gamesByRule[r]) + " avg plies " +
       Global::strprintf("%.1f", stats.gamesByRule[r] > 0 ? (double)stats.pliesByRule[r] / (double)stats.gamesByRule[r] : 0.0);
-  s +=
-    ", black win rate in normal standard games " + rate(stats.standardBlackWins, stats.standardGames) +
-    " (" + Global::int64ToString(stats.standardBlackWins) + "/" + Global::int64ToString(stats.standardGames) + ")" +
-    ", by komi (10/10 walls):";
+  // Black's score counts a draw as half a win.
+  auto score = [](const ModelData::QuoridorStats::Results& r) {
+    return Global::strprintf("%.3f", r.games > 0 ? (r.blackWins + 0.5 * r.draws) / (double)r.games : 0.0);
+  };
+  auto drawPct = [](const ModelData::QuoridorStats::Results& r) {
+    return Global::strprintf("%.1f%%", r.games > 0 ? 100.0 * r.draws / (double)r.games : 0.0);
+  };
+  s += ", Black score (draw = 1/2) in normal 10/10-wall games by komi:";
   for(const auto& kv : stats.byKomi)
-    s += " " + Global::strprintf("%+.1f", kv.first) + " " + rate(kv.second.second, kv.second.first) +
-      " (" + Global::int64ToString(kv.second.second) + "/" + Global::int64ToString(kv.second.first) + ")";
-  s += ", fence handicap " + rate(stats.fenceHandicap.second, stats.fenceHandicap.first) +
-    " (" + Global::int64ToString(stats.fenceHandicap.second) + "/" + Global::int64ToString(stats.fenceHandicap.first) + ")";
+    s += " " + Global::strprintf("%+.1f", kv.first) + " " + score(kv.second) +
+      " (n " + Global::int64ToString(kv.second.games) + ", draws " + drawPct(kv.second) + ")";
+  s += "; standard komi by repetition rule:";
+  for(int r = 1; r >= 0; r--) {
+    const ModelData::QuoridorStats::Results& res = stats.standardByRule[r];
+    s += string(r ? " on " : ", off ") + score(res) + " (n " + Global::int64ToString(res.games) + ", draws " + drawPct(res) + ")";
+  }
   return s;
-}
-
-string SelfplayManager::gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount) {
-  int64_t finished = modelData->gamesFinishedCount.load(std::memory_order_relaxed);
-  int64_t drawn = modelData->gamesDrawnCount.load(std::memory_order_relaxed);
-  int64_t repetitionDrawn = modelData->gamesRepetitionDrawnCount.load(std::memory_order_relaxed);
-  int64_t cutoff = modelData->gamesCutoffCount.load(std::memory_order_relaxed);
-  int64_t moves = modelData->movesPlayedCount.load(std::memory_order_relaxed) + modelData->movesPlayedCutoffCount.load(std::memory_order_relaxed);
-  int64_t completed = finished + cutoff;
-  double cutoffRate = completed > 0 ? (double)cutoff / (double)completed : 0.0;
-  double drawRate = finished > 0 ? (double)drawn / (double)finished : 0.0;
-  double avgLength = completed > 0 ? (double)moves / (double)completed : 0.0;
-  return
-    "Game stats for " + modelData->modelName +
-    ": started " + Global::int64ToString(gameStartedCount) +
-    ", finished normally " + Global::int64ToString(finished) +
-    " (draws " + Global::int64ToString(drawn) + ", draw rate " + Global::doubleToString(drawRate) +
-    ", of which by repetition " + Global::int64ToString(repetitionDrawn) + ")" +
-    ", hit cutoff " + Global::int64ToString(cutoff) +
-    ", cutoff rate " + Global::doubleToString(cutoffRate) +
-    ", avg game length " + Global::doubleToString(avgLength);
 }
 
 void SelfplayManager::enqueueDataToWrite(const string& modelName, FinishedGameData* gameData) {
@@ -533,7 +514,6 @@ void SelfplayManager::runDataWriteLoopImpl(ModelData* modelData) {
   //block anyone else
   if(logger != NULL) {
     logger->write("Final cleanup of net: " + modelData->nnEval->getModelFileName());
-    logger->write(gameStatsSummary(modelData, modelData->gameStartedCount));
     logger->write(quoridorStatsSummary(modelData));
     logger->write("Final games finished: " + Global::int64ToString(modelData->gamesFinishedCount.load(std::memory_order_relaxed)));
     logger->write("Final moves played: " + Global::int64ToString(modelData->movesPlayedCount.load(std::memory_order_relaxed)));

@@ -321,6 +321,7 @@ Side-position rows of any game have no outcome targets (C27 = C29 = 0 unless a s
 on draws as on other games (`maybeForkGame` scores a finished candidate draw 0 and replays with the ply count kept).
 The self-play log line `Game stats for ...` reports `finished normally N (draws D, draw rate r)`; "hit cutoff" now
 counts only games stopped by `maxMovesPerGame` before their end, which can't happen while it equals `maxPlies`.
+(Removed on 2026-10-05, see §5.5.)
 
 ### 4.7 Model presets
 
@@ -426,6 +427,26 @@ started / finished / cutoff line:
     black win rate in normal standard games
     b (k/n), by komi (10/10 walls): -1.5 0.778 (21/27) -0.5 0.622 (102/164) +0.5 0.385 (10/26) ..., fence handicap
     f (k/n)
+
+**How to read these lines (logs up to 2026-10-05).** Each "black win rate" is Black's **wins over all games**: a
+draw counts as not a win for Black, so the rate reads low once draws are common, and it is not Black's score. The
+"normal standard games" figure is the same games as the `-0.5` komi entry. "fence handicap" is Black's wins over
+all fence-handicap games (one side starts with 10 walls, the other with fewer), whichever side is the one with fewer
+walls, so it does not show how much the handicap matters. KataGo's `Game stats` line next to it repeats the counts, and its
+"avg game length" leaves out the opening moves played before the search starts (policy init, fork prefix), so it is
+about 6 plies shorter than "avg plies". A real pair of lines (run4, 2026-10-04):
+
+    Game stats for run4-s12637952-d7117843: started 10000, finished normally 10000 (draws 962, draw rate 0.0962, of
+    which by repetition 914), hit cutoff 0, cutoff rate 0, avg game length 61.3887
+    Quoridor stats for run4-s12637952-d7117843: completed 10000, draws 962 (rate 0.096; repetition 914 (rate 0.091),
+    maxPlies 48 (rate 0.005)), avg plies 67.5, by repetition rule: on 6530 games draw rate 0.140 avg plies 61.7, off
+    3470 games draw rate 0.014 avg plies 78.5, black win rate in normal standard games 0.418 (2510/6000), by komi
+    (10/10 walls): -3.5 0.992 (118/119) -2.5 0.978 (396/405) -1.5 0.958 (727/759) -0.5 0.418 (2510/6000) +0.5 0.149
+    (107/719) +1.5 0.031 (12/388) +2.5 0.024 (3/124), fence handicap 0.519 (511/984)
+
+Here 888 of the 6000 standard games were draws (14.8%), so Black's 0.418 is a score of 0.492 (draw = 1/2), not a
+42% win rate. Since 2026-10-05 the `Game stats` line is gone and the `Quoridor stats` line reports Black's score with draws as
+1/2, described in [SelfplayTraining.md](../SelfplayTraining.md#quoridor-self-play-stats).
 
 All completed games count, including those not written to training data (draws while
 `Play::DISCARD_MAX_PLIES_DRAWS` is true). "Normal" games are `FinishedGameData::MODE_NORMAL` (not forks); plies

@@ -118,13 +118,10 @@ class SelfplayManager {
       int64_t gamesByRule[2] = {0,0};
       int64_t drawsByRule[2] = {0,0};
       int64_t pliesByRule[2] = {0,0};
-      // Normal games (not forks etc.) with the standard komi and 10/10 walls.
-      int64_t standardGames = 0;
-      int64_t standardBlackWins = 0;
-      // Normal games with 10/10 walls by komi: (games, Black wins).
-      std::map<float,std::pair<int64_t,int64_t>> byKomi;
-      // Normal games with a fence handicap: (games, Black wins).
-      std::pair<int64_t,int64_t> fenceHandicap = {0,0};
+      // Normal games (not forks etc.) with 10/10 walls, by komi and repetition rule ([0] off, [1] on).
+      struct Results { int64_t games = 0; int64_t blackWins = 0; int64_t draws = 0; };
+      std::map<float,Results> byKomi;
+      Results standardByRule[2];  // the standard komi only
     };
     QuoridorStats quoridorStats;
     double lastReleaseTime;
@@ -166,7 +163,6 @@ class SelfplayManager {
   void runDataWriteLoopImpl(ModelData* modelData);
   //One summary line: games started / finished normally / of which draws, draw rate / hit cutoff, cutoff rate, average
   //game length.
-  static std::string gameStatsSummary(const ModelData* modelData, int64_t gameStartedCount);
   //One line of Quoridor result stats: draw rate, average plies, first-player win rates (standard, by komi, handicap).
   static std::string quoridorStatsSummary(ModelData* modelData);
 
