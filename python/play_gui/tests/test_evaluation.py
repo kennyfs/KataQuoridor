@@ -107,3 +107,26 @@ def test_parse_analysis_uses_last_info_line():
 def test_parse_raw_nn_missing_key():
     with pytest.raises(ValueError):
         ev.parse_raw_nn("symmetry 0 whiteWin 0.5")
+
+
+def test_candidates_symmetry_pruning():
+    text = (
+        "info move f8 visits 50 winrate 0.6 scoreLead 1.2 order 0 pv f8 e2 "
+        "info move d8 visits 50 isSymmetryOf f8 winrate 0.6 scoreLead 1.2 order 1 pv d8 e2 "
+        "info move e7 visits 20 winrate 0.4 scoreLead -0.5 order 2 pv e7 e2\n"
+        "play f8"
+    )
+    a = ev.parse_analysis(text)
+    # Default: deduplicate symmetric moves and re-index order
+    cands = ev.candidates(a, "b")
+    assert len(cands) == 2
+    assert [c["move"] for c in cands] == ["f8", "e7"]
+    assert [c["order"] for c in cands] == [0, 1]
+    assert cands[0]["is_symmetry_of"] is None
+
+    # include_symmetric=True retains symmetric moves
+    all_cands = ev.candidates(a, "b", include_symmetric=True)
+    assert len(all_cands) == 3
+    assert [c["move"] for c in all_cands] == ["f8", "d8", "e7"]
+    assert all_cands[1]["is_symmetry_of"] == "f8"
+    assert all_cands[1]["order"] == 1

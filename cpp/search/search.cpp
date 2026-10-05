@@ -786,10 +786,14 @@ void Search::beginSearch(bool pondering) {
 
   if(searchParams.rootSymmetryPruning) {
     const std::vector<int>& avoidMoveUntilByLoc = rootPla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
-    if(rootPruneOnlySymmetries.size() > 0)
-      SymmetryHelpers::markDuplicateMoveLocs(rootBoard,rootHistory,&rootPruneOnlySymmetries,avoidMoveUntilByLoc,rootSymDupLoc,rootSymmetries);
-    else
-      SymmetryHelpers::markDuplicateMoveLocs(rootBoard,rootHistory,NULL,avoidMoveUntilByLoc,rootSymDupLoc,rootSymmetries);
+    // KataQuoridor: only horizontal reflection (symmetry index 2: flipX) is valid for Quoridor.
+    // Transposition and vertical flip swap player goals/directions and are not Quoridor symmetries.
+    std::vector<int> quoridorSymmetries = {2};
+    if(rootPruneOnlySymmetries.size() > 0) {
+      if(!contains(rootPruneOnlySymmetries, 2))
+        quoridorSymmetries.clear();
+    }
+    SymmetryHelpers::markDuplicateMoveLocs(rootBoard,rootHistory,&quoridorSymmetries,avoidMoveUntilByLoc,rootSymDupLoc,rootSymmetries);
   }
   else {
     //Just in case, don't leave the values undefined.

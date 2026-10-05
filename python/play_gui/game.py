@@ -175,6 +175,7 @@ class GameController:
         self.ai_sides = ""               # analysis mode: colours the AI plays ("", "b", "w" or "bw")
         self.max_visits = 0              # analysis visit cap, 0 = unlimited
         self._stream = None              # token of the running kata-analyze, None when idle
+        self._stream_cmd = None          # command used for running analysis
         self._reset_position_state()
 
     def _reset_position_state(self):
@@ -299,15 +300,21 @@ class GameController:
                     pass
 
     def _stop_analysis(self):
-        """Stop a running kata-analyze (call with engine_lock held)."""
+        """Stop a running analysis (call with engine_lock held)."""
         with self.lock:
             if self._stream is None:
                 return
             self._stream = None
+            cmd = self._stream_cmd
+            self._stream_cmd = None
         try:
-            self.engine.write("stop")
-            self.engine.read_response("kata-analyze", self.move_timeout)   # the analysis ends ...
-            self.engine.read_response("stop", self.move_timeout)           # ... then "stop" answers
+            if cmd == "kata-search_analyze_cancellable":
+                self.engine.write("")   # newline cancels kata-search_analyze_cancellable
+                self.engine.read_response("kata-search_analyze", self.move_timeout)
+            else:
+                self.engine.write("stop")
+                self.engine.read_response("kata-analyze", self.move_timeout)   # the analysis ends ...
+                self.engine.read_response("stop", self.move_timeout)           # ... then "stop" answers
         except QTPError as e:
             raise self._fail(e)
         finally:
@@ -315,7 +322,7 @@ class GameController:
             self.engine.on_info = None
 
     def _maybe_start_analysis(self):
-        """Start kata-analyze on the current position when analysis is on (call with engine_lock held)."""
+        """Start analysis on the current position when analysis is on (call with engine_lock held)."""
         with self.lock:
             if not (self.mode == "analysis" and self.analysis_on and self.can_analyze and self.started
                     and not self.winner and self.engine_status == "ready" and self._stream is None):
@@ -327,23 +334,35 @@ class GameController:
                 self.analysis = {"ply": len(self.moves), "color": color, "moves": [], "root": None, "done": False}
             token = object()
             self._stream = token
+            max_v = self.max_visits if self.max_visits > 0 else 1000000000
         self.engine.on_info = lambda line: self._on_info(token, line)
         self.engine.streaming = True
         try:
-            self.engine.write("kata-analyze %s %d rootInfo true minmoves 300" % (color, ANALYZE_INTERVAL_CS))
+            if self.engine.known_command("kata-search_analyze_cancellable"):
+                self._stream_cmd = "kata-search_analyze_cancellable"
+                self._must("kata-set-param maxVisits %d" % max_v)
+                self.engine.write("kata-search_analyze_cancellable %s %d rootInfo true minmoves 300"
+                                  % (color, ANALYZE_INTERVAL_CS))
+            else:
+                self._stream_cmd = "kata-analyze"
+                self.engine.write("kata-analyze %s %d rootInfo true minmoves 300" % (color, ANALYZE_INTERVAL_CS))
         except QTPError as e:
             raise self._fail(e)
 
     def _on_info(self, token, line):
-        """One kata-analyze report (engine reader thread)."""
+        """One analysis report (engine reader thread)."""
         a = ev.parse_analysis(line)
         with self.lock:
             an = self.analysis
             if self._stream is not token or an is None:
                 return
+            if an.get("done"):
+                return
             an["moves"] = ev.candidates(a, an["color"])
             root = ev.root_summary(a, an["color"])
             if root is not None:
+                if self.max_visits and root.get("visits", 0) > self.max_visits:
+                    root["visits"] = self.max_visits
                 an["root"] = root
                 self.positions[an["ply"]]["eval"] = {k: root[k] for k in ev.EVAL_KEYS}
             visits = root["visits"] if root else 0
@@ -387,7 +406,8 @@ class GameController:
                 raise self._fail(QTPError("the engine does not support: %s (is it KataQuoridor >= 0.1.0?)"
                                           % ", ".join(missing)))
             try:
-                can_analyze = self.engine.known_command("kata-analyze")
+                can_analyze = (self.engine.known_command("kata-search_analyze_cancellable")
+                               or self.engine.known_command("kata-analyze"))
             except QTPError as e:
                 raise self._fail(e)
             try:
@@ -441,6 +461,7 @@ class GameController:
                     if gen != self.gen or not self.thinking or not self._ai_should_move():
                         return
                     color = self._to_move()
+                self._must("kata-set-param maxVisits %d" % self.visits)
                 ok, text = self._send("kata-genmove_analyze %s 1000 rootInfo true" % color,
                                       timeout=self.move_timeout)
                 if not ok:

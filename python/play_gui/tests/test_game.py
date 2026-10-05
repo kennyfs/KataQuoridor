@@ -464,3 +464,23 @@ def test_analysis_ai_sides(game):
     game.new_game("b", 16)
     with pytest.raises(ActionError):
         game.set_ai_sides("b")                                       # only in analysis mode
+
+
+def test_analysis_ai_uses_new_game_visits(game):
+    # Start game with initial visits 16
+    game.new_game("analysis", 16)
+    assert game.state()["settings"]["visits"] == 16
+    assert game.state()["analysis"]["max_visits"] == 0
+
+    # Change analysis visits to 64 via set_analysis
+    game.set_analysis(max_visits=64)
+    assert game.state()["settings"]["visits"] == 16
+    assert game.state()["analysis"]["max_visits"] == 64
+
+    # Let AI play White
+    game.set_ai_sides("w")
+    game.play("e8")
+    s = wait_idle(game)
+    assert moves_of(s) == [("b", "e8"), ("w", "e2")]
+    # White's move should use the new-game visits (16), not the analysis max_visits (64)
+    assert s["positions"][2]["eval"]["visits"] == 16

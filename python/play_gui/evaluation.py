@@ -138,21 +138,28 @@ def info_for(analysis, move):
     return None
 
 
-def candidates(analysis, player):
+def candidates(analysis, player, include_symmetric=False):
     """The searched children of `parse_analysis` output for `player` to move, in the engine's order.
 
     Each is an evaluation dict (Black/White perspective, for the position after the move) plus the raw
     side-to-move numbers: winrate, lead, lcb, utility, score_stdev, prior (the net's policy for the move),
     visits / edge_visits and order. Children listed only because of `minmoves` have 0 visits; their values
     are meaningless, only `prior` counts.
+
+    If `include_symmetric` is False (default), duplicate moves marked with `isSymmetryOf`
+    are excluded, and remaining moves are re-indexed to sequential orders 0, 1, 2, ...
     """
     out = []
     for d in analysis["infos"]:
+        if not include_symmetric and d.get("isSymmetryOf") is not None:
+            continue
         visits = d.get("visits", 0)
         e = from_side_to_move(d.get("winrate", 0.5), d.get("scoreLead", 0.0), player, "search", visits, d.get("pv"))
-        e.update(move=d["move"], order=d.get("order", len(out)), prior=d.get("prior"), winrate=d.get("winrate"),
+        order = len(out) if not include_symmetric else d.get("order", len(out))
+        e.update(move=d["move"], order=order, prior=d.get("prior"), winrate=d.get("winrate"),
                  lead=d.get("scoreLead"), lcb=d.get("lcb"), utility=d.get("utility"),
-                 score_stdev=d.get("scoreStdev"), edge_visits=d.get("edgeVisits", visits))
+                 score_stdev=d.get("scoreStdev"), edge_visits=d.get("edgeVisits", visits),
+                 is_symmetry_of=d.get("isSymmetryOf"))
         out.append(e)
     return out
 

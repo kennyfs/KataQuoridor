@@ -212,25 +212,40 @@ def main():
             return "%s%d" % (COLS[3 if x == 4 else 4], g.pos[c][1])
         return g.legal(c)[0]
 
-    streamer = None   # (thread, stop event) of a running kata-analyze
+    streamer = None   # (thread, stop event, is_cancellable) of a running analysis
 
-    def stream(c, interval, stop):
+    def stop_streamer(cancelled=False):
+        nonlocal streamer
+        if streamer is not None:
+            t, stop, is_cancellable = streamer
+            stop.set()
+            t.join()
+            streamer = None
+            if is_cancellable:
+                sys.stdout.write("play cancelled\n\n" if cancelled else "\n")
+            else:
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    def stream(c, interval, stop, is_cancellable=False):
+        nonlocal streamer
         visits = 2
         while not stop.wait(interval):
             sys.stdout.write(analysis(g, c, visits) + "\n")
             sys.stdout.flush()
+            if is_cancellable and max_visits > 0 and visits >= max_visits:
+                sys.stdout.write("play " + g.legal(c)[0] + "\n\n")
+                sys.stdout.flush()
+                streamer = None
+                break
             visits *= 2
 
     for line in sys.stdin:
         parts = line.split()
         if not parts:
+            stop_streamer(cancelled=True)
             continue
-        if streamer is not None:  # like KataGo, any command ends a running analysis
-            streamer[1].set()
-            streamer[0].join()
-            streamer = None
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+        stop_streamer(cancelled=False)
         cmd, rest = parts[0], parts[1:]
         if cmd == "quit":
             reply(True)
@@ -238,7 +253,7 @@ def main():
         elif cmd == "known_command":
             known = {"play", "genmove", "clear_board", "winner", "dist", "printsgf", "quit", "known_command",
                      "showboard", "name", "version", "walls", "undo", "kata-set-param", "kata-genmove_analyze",
-                     "kata-search_analyze", "kata-raw-nn", "kata-analyze", "stop"}
+                     "kata-search_analyze", "kata-search_analyze_cancellable", "kata-raw-nn", "kata-analyze", "stop"}
             if not args.no_legal:
                 known.add("legal_moves")
             if not args.no_rules:
@@ -316,7 +331,7 @@ def main():
             if cmd == "kata-genmove_analyze" and not args.illegal:
                 g.play(c, mv)
             reply(True, "\n" + (text + "\n" if text else "") + "play " + mv)
-        elif cmd == "kata-analyze":
+        elif cmd in ("kata-analyze", "kata-search_analyze_cancellable"):
             c = color_arg(rest[0]) if rest and color_arg(rest[0]) else g.to_move
             if g.winner() or c != g.to_move:
                 reply(False, "cannot analyze")
@@ -325,9 +340,10 @@ def main():
             sys.stdout.write("=\n")
             sys.stdout.flush()
             stop = threading.Event()
-            t = threading.Thread(target=stream, args=(c, max(0.01, interval), stop), daemon=True)
+            is_cancellable = (cmd == "kata-search_analyze_cancellable")
+            t = threading.Thread(target=stream, args=(c, max(0.01, interval), stop, is_cancellable), daemon=True)
             t.start()
-            streamer = (t, stop)
+            streamer = (t, stop, is_cancellable)
         elif cmd == "stop":
             reply(True)
         elif cmd == "kata-raw-nn":
