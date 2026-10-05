@@ -70,6 +70,12 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("quoridorselfplay"))
     Tests::runQuoridorSelfplayTests();
 
+  if(shouldRun("q4board"))
+    Tests::runQ4BoardTests();
+
+  if(runAll ? false : shouldRun("q4slow"))
+    Tests::runQ4SlowTests();
+
   if(shouldRun("nninputs"))
     Tests::runNNInputsTests();
 

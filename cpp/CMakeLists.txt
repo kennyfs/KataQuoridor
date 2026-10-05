@@ -1122,6 +1122,18 @@ add_executable(katago
   command/startposes.cpp
   command/tune.cpp
   command/writetrainingdata.cpp
+  q4/q4rules.cpp
+  q4/q4board.cpp
+  q4/q4history.cpp
+  q4/q4notation.cpp
+  q4/q4symmetry.cpp
+  q4/q4record.cpp
+  q4/q4bots.cpp
+  q4/command/q4qtp.cpp
+  q4/command/q4tool.cpp
+  q4/command/q4match.cpp
+  q4/tests/testq4board.cpp
+  q4/tests/testq4slow.cpp
   main.cpp
   )
 
@@ -2053,6 +2065,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "C
 endif()
 
 target_include_directories(katago PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(katago PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/q4)
 
 # On Windows ROCm builds, clang compiles host code against MSVC-compatibility headers
 # that require Windows SDK ucrt/shared/um headers.

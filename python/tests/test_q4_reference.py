@@ -339,3 +339,35 @@ def test_repetition_draw():
     assert pos.is_terminal()
     assert pos.is_draw
     assert pos.result_str() == "Draw"
+
+
+def test_perft_pinned_numbers():
+    from q4.reference import perft
+
+    # 1. Start position
+    start = Pos()
+    assert perft(start, 1) == 203
+    assert perft(start, 2) == 40445
+
+    # 2. Pawn-heavy position matching C++ test (depths 1..6)
+    p = Pos()
+    p.walls_left = [0, 0, 0, 0]
+    p.pawn[0] = (5, 4)
+    p.pawn[1] = (4, 5)
+    p.pawn[2] = (5, 6)
+    p.pawn[3] = (6, 5)
+
+    # Surrounding box of walls
+    p.hwalls.add((3, 3))
+    p.hwalls.add((5, 3))
+    p.hwalls.add((3, 6))
+    p.hwalls.add((5, 6))
+    p.vwalls.add((3, 4))
+    p.vwalls.add((6, 4))
+
+    assert perft(p, 1) == 3
+    assert perft(p, 2) == 7
+    assert perft(p, 3) == 15
+    assert perft(p, 4) == 35
+    assert perft(p, 5) == 51
+    assert perft(p, 6) == 111

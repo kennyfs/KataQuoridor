@@ -155,6 +155,10 @@ namespace Tests {
 
   //testbook.cpp
   void runBookTests();
+
+  //q4 tests
+  void runQ4BoardTests();
+  void runQ4SlowTests();
 }
 
 namespace TestCommon {

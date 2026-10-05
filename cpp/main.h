@@ -13,6 +13,10 @@ namespace MainCmds {
   int match(const std::vector<std::string>& args);
   int selfplay(const std::vector<std::string>& args);
 
+  int q4qtp(const std::vector<std::string>& args);
+  int q4tool(const std::vector<std::string>& args);
+  int q4match(const std::vector<std::string>& args);
+
   int testgpuerror(const std::vector<std::string>& args);
   int testbackendreference(const std::vector<std::string>& args);
   int dumponnx(const std::vector<std::string>& args);
