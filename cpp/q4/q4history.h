@@ -29,6 +29,7 @@ public:
 
   // Hashes of positions since last irreversible change (wall placement or elimination)
   std::vector<Hash128> repetitionHashes;
+  std::vector<std::vector<Hash128>> repetitionHistory; // repetitionHashes before each event
 
   Q4History();
   explicit Q4History(const Q4Rules& rules);

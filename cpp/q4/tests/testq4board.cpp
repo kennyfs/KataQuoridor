@@ -223,6 +223,15 @@ void testHashingAndUndo() {
       testAssert(history.currentBoard.vWalls == expectedBoard.vWalls);
       testAssert(memcmp(history.currentBoard.blocked, expectedBoard.blocked, sizeof(expectedBoard.blocked)) == 0);
       testAssert(memcmp(history.currentBoard.distToCenter, expectedBoard.distToCenter, sizeof(expectedBoard.distToCenter)) == 0);
+
+      // Verify repetition state equals a fresh replay of the remaining events
+      Q4History fresh(history.rules);
+      for(size_t evIdx = 0; evIdx < history.events.size(); evIdx++) {
+        const auto& ev = history.events[evIdx];
+        if(ev.isElimination) fresh.eliminate(ev.eliminatedSeat);
+        else fresh.play(ev.action);
+      }
+      testAssert(history.repetitionHashes == fresh.repetitionHashes);
     }
     testAssert(!history.undo()); // Cannot undo further
   }
@@ -348,6 +357,64 @@ void testTerminalRules() {
     testAssert(h.isDraw);
     testAssert(h.getResultString() == "Draw");
   }
+
+  // 8. Repetition right after a wall (N=2 and N=3)
+  {
+    for(int repCount : {2, 3}) {
+      Q4Rules r;
+      r.repetitionDrawCount = repCount;
+      Q4History h(r);
+
+      // Seat 0 places a wall: a1h (anchor (0, 0)) -> action 221
+      h.play(221);
+      // Post-wall state P0: toMove = 1 (West).
+      // Each cycle: West, North, East, South step out and return, returning to P0.
+      for(int cycle = 0; cycle < repCount - 1; cycle++) {
+        testAssert(!h.isFinished);
+        // Step away
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(0, 6))); // West
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 9))); // North
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(10, 6))); // East
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 1))); // South
+
+        // Step back
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(0, 5))); // West returns to a6
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 10))); // North returns to f11
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(10, 5))); // East returns to k6
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 0))); // South returns to f1
+      }
+      testAssert(h.isFinished);
+      testAssert(h.isDraw);
+      testAssert(h.getResultString() == "Draw");
+    }
+  }
+
+  // 9. Repetition right after an elimination (N=2 and N=3)
+  {
+    for(int repCount : {2, 3}) {
+      Q4Rules r;
+      r.repetitionDrawCount = repCount;
+      Q4History h(r);
+
+      // Eliminate seat 1 (West). Post-elimination position Pe has alive = {0, 2, 3}, toMove = 0.
+      h.eliminate(1);
+      for(int cycle = 0; cycle < repCount - 1; cycle++) {
+        testAssert(!h.isFinished);
+        // Step away
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 1))); // South
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 9))); // North
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(10, 6))); // East
+
+        // Step back
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 0))); // South returns to f1
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(5, 10))); // North returns to f11
+        h.play(Q4Board::actionOfPawn(Q4Board::cellOf(10, 5))); // East returns to k6
+      }
+      testAssert(h.isFinished);
+      testAssert(h.isDraw);
+      testAssert(h.getResultString() == "Draw");
+    }
+  }
 }
 
 void testPerft() {
@@ -361,48 +428,102 @@ void testPerft() {
   uint64_t d2 = perft(startBoard, 2);
   testAssert(d2 == 40445);
 
-  // Pawn-heavy position: four pawns surrounding center, no walls left
-  // South at (5, 4), West at (4, 5), North at (5, 6), East at (6, 5)
-  // Surrounding walls: a box around them so they must jump or step around
-  Q4Board pBoard;
-  for(int s = 0; s < 4; s++) {
-    pBoard.wallsLeft[s] = 0;
-    pBoard.occupant[pBoard.pawn[s]] = -1;
+  // 3 non-degenerate positions replacing the degenerate pawn-heavy position (A4)
+  // Position 1: Straight jumps, diagonal jump at board edge (a10->b11 over a11), diagonal jump at wall (e3->d4/f4 over e4 with e4h)
+  {
+    Q4Board b;
+    for(int s = 0; s < 4; s++) {
+      b.wallsLeft[s] = 0;
+      b.occupant[b.pawn[s]] = -1;
+    }
+    b.pawn[0] = Q4Board::cellOf(0, 9);  b.occupant[b.pawn[0]] = 0; // a10
+    b.pawn[1] = Q4Board::cellOf(0, 10); b.occupant[b.pawn[1]] = 1; // a11
+    b.pawn[2] = Q4Board::cellOf(4, 2);  b.occupant[b.pawn[2]] = 2; // e3
+    b.pawn[3] = Q4Board::cellOf(4, 3);  b.occupant[b.pawn[3]] = 3; // e4
+    b.applyWall(4, 3, true); // e4h behind (4, 3)
+    b.toMove = 0;
+    b.recomputeDistancesToCenter();
+    b.hash = b.getHashFromScratch();
+
+    // Verify center is not reachable in one move
+    std::vector<int> m0;
+    b.getPawnMoves(0, m0);
+    testAssert(std::find(m0.begin(), m0.end(), Q4Board::CENTER_CELL) == m0.end());
+
+    testAssert(perft(b, 1) == 3);
+    testAssert(perft(b, 2) == 6);
+    testAssert(perft(b, 3) == 30);
+    testAssert(perft(b, 4) == 90);
+    testAssert(perft(b, 5) == 330);
+    testAssert(perft(b, 6) == 990);
+    testAssert(perft(b, 7) == 3828);
+    testAssert(perft(b, 8) == 14388);
   }
-  pBoard.pawn[0] = Q4Board::cellOf(5, 4); pBoard.occupant[pBoard.pawn[0]] = 0;
-  pBoard.pawn[1] = Q4Board::cellOf(4, 5); pBoard.occupant[pBoard.pawn[1]] = 1;
-  pBoard.pawn[2] = Q4Board::cellOf(5, 6); pBoard.occupant[pBoard.pawn[2]] = 2;
-  pBoard.pawn[3] = Q4Board::cellOf(6, 5); pBoard.occupant[pBoard.pawn[3]] = 3;
 
-  // Add surrounding walls around 3..7
-  pBoard.applyWall(3, 3, true);  // d4h
-  pBoard.applyWall(5, 3, true);  // f4h
-  pBoard.applyWall(3, 6, true);  // d7h
-  pBoard.applyWall(5, 6, true);  // f7h
-  pBoard.applyWall(3, 4, false); // d5v
-  pBoard.applyWall(6, 4, false); // g5v
+  // Position 2: Two-pawn jump permitted vs denied (c3 at (2, 2) jumping over c4 and c5 with wall c3v)
+  {
+    Q4Board b;
+    for(int s = 0; s < 4; s++) {
+      b.wallsLeft[s] = 0;
+      b.occupant[b.pawn[s]] = -1;
+    }
+    b.pawn[0] = Q4Board::cellOf(2, 2); b.occupant[b.pawn[0]] = 0; // c3
+    b.pawn[1] = Q4Board::cellOf(2, 3); b.occupant[b.pawn[1]] = 1; // c4
+    b.pawn[2] = Q4Board::cellOf(2, 4); b.occupant[b.pawn[2]] = 2; // c5
+    b.pawn[3] = Q4Board::cellOf(9, 9); b.occupant[b.pawn[3]] = 3;
+    b.applyWall(2, 2, false); // c3v blocks East from (2, 2)
+    b.toMove = 0;
+    b.recomputeDistancesToCenter();
+    b.hash = b.getHashFromScratch();
 
-  pBoard.toMove = 0;
-  pBoard.recomputeDistancesToCenter();
-  pBoard.hash = pBoard.getHashFromScratch();
+    // Verify two-pawn jump is permitted to (2, 5)
+    std::vector<int> m0;
+    b.getPawnMoves(0, m0);
+    testAssert(std::find(m0.begin(), m0.end(), Q4Board::cellOf(2, 5)) != m0.end());
+    // Verify center is not reachable in one move
+    testAssert(std::find(m0.begin(), m0.end(), Q4Board::CENTER_CELL) == m0.end());
 
-  // Test perft depths on this pawn-heavy position
-  uint64_t pd1 = perft(pBoard, 1);
-  uint64_t pd2 = perft(pBoard, 2);
-  uint64_t pd3 = perft(pBoard, 3);
-  uint64_t pd4 = perft(pBoard, 4);
-  uint64_t pd5 = perft(pBoard, 5);
-  uint64_t pd6 = perft(pBoard, 6);
+    testAssert(perft(b, 1) == 3);
+    testAssert(perft(b, 2) == 9);
+    testAssert(perft(b, 3) == 35);
+    testAssert(perft(b, 4) == 140);
+    testAssert(perft(b, 5) == 564);
+    testAssert(perft(b, 6) == 2088);
+    testAssert(perft(b, 7) == 7776);
+    testAssert(perft(b, 8) == 27216);
+  }
 
-  cout << "Pawn-heavy position perft counts: "
-       << "d1=" << pd1 << ", d2=" << pd2 << ", d3=" << pd3
-       << ", d4=" << pd4 << ", d5=" << pd5 << ", d6=" << pd6 << endl;
-  testAssert(pd1 == 3);
-  testAssert(pd2 == 7);
-  testAssert(pd3 == 15);
-  testAssert(pd4 == 35);
-  testAssert(pd5 == 51);
-  testAssert(pd6 == 111);
+  // Position 3: Two-pawn jump into center a few plies deep
+  {
+    Q4Board b;
+    for(int s = 0; s < 4; s++) {
+      b.wallsLeft[s] = 0;
+      b.occupant[b.pawn[s]] = -1;
+    }
+    b.pawn[0] = Q4Board::cellOf(2, 5); b.occupant[b.pawn[0]] = 0; // c6
+    b.pawn[1] = Q4Board::cellOf(3, 5); b.occupant[b.pawn[1]] = 1; // d6
+    b.pawn[2] = Q4Board::cellOf(4, 4); b.occupant[b.pawn[2]] = 2; // e5
+    b.pawn[3] = Q4Board::cellOf(9, 9); b.occupant[b.pawn[3]] = 3;
+    b.toMove = 2; // Seat 2 to move
+    b.recomputeDistancesToCenter();
+    b.hash = b.getHashFromScratch();
+
+    // Verify center is not reachable in one move for any seat
+    for(int s = 0; s < 4; s++) {
+      std::vector<int> ms;
+      b.getPawnMoves(s, ms);
+      testAssert(std::find(ms.begin(), ms.end(), Q4Board::CENTER_CELL) == ms.end());
+    }
+
+    testAssert(perft(b, 1) == 4);
+    testAssert(perft(b, 2) == 16);
+    testAssert(perft(b, 3) == 64);
+    testAssert(perft(b, 4) == 244);
+    testAssert(perft(b, 5) == 892);
+    testAssert(perft(b, 6) == 2812);
+    testAssert(perft(b, 7) == 10792);
+    testAssert(perft(b, 8) == 41312);
+  }
 }
 
 }  // namespace

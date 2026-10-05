@@ -56,6 +56,10 @@ struct Q4Board {
   // Distances to center (walls-only, 255 if unreachable)
   uint8_t distToCenter[NUM_CELLS];
 
+  // Cached shortest paths to center for alive seats (Plan §5.3)
+  std::bitset<110> hPathEdges;
+  std::bitset<110> vPathEdges;
+
   Hash128 hash;
 
   // Constructors
@@ -109,6 +113,7 @@ struct Q4Board {
   int getWinner() const;  // 0..3 if won, -1 if no winner
 
   void recomputeDistancesToCenter();
+  void recomputeCachedPaths();
   Hash128 getHashFromScratch() const;
   bool checkInvariants() const;
 

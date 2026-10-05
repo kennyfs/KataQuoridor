@@ -349,25 +349,56 @@ def test_perft_pinned_numbers():
     assert perft(start, 1) == 203
     assert perft(start, 2) == 40445
 
-    # 2. Pawn-heavy position matching C++ test (depths 1..6)
-    p = Pos()
-    p.walls_left = [0, 0, 0, 0]
-    p.pawn[0] = (5, 4)
-    p.pawn[1] = (4, 5)
-    p.pawn[2] = (5, 6)
-    p.pawn[3] = (6, 5)
+    # 2. 3 non-degenerate positions replacing the degenerate pawn-heavy position (A4)
+    # Position 1: Straight jumps, diagonal jump at board edge (a10->b11 over a11), diagonal jump at wall
+    p1 = Pos()
+    p1.walls_left = [0, 0, 0, 0]
+    p1.pawn[0] = (0, 9)   # a10
+    p1.pawn[1] = (0, 10)  # a11
+    p1.pawn[2] = (4, 2)   # e3
+    p1.pawn[3] = (4, 3)   # e4
+    p1.hwalls.add((4, 3)) # e4h
+    p1.to_move = 0
+    assert perft(p1, 1) == 3
+    assert perft(p1, 2) == 6
+    assert perft(p1, 3) == 30
+    assert perft(p1, 4) == 90
+    assert perft(p1, 5) == 330
+    assert perft(p1, 6) == 990
+    assert perft(p1, 7) == 3828
+    assert perft(p1, 8) == 14388
 
-    # Surrounding box of walls
-    p.hwalls.add((3, 3))
-    p.hwalls.add((5, 3))
-    p.hwalls.add((3, 6))
-    p.hwalls.add((5, 6))
-    p.vwalls.add((3, 4))
-    p.vwalls.add((6, 4))
+    # Position 2: Two-pawn jump permitted vs denied (c3 at (2, 2) jumping over c4 and c5 with wall c3v)
+    p2 = Pos()
+    p2.walls_left = [0, 0, 0, 0]
+    p2.pawn[0] = (2, 2)
+    p2.pawn[1] = (2, 3)
+    p2.pawn[2] = (2, 4)
+    p2.pawn[3] = (9, 9)
+    p2.vwalls.add((2, 2)) # c3v
+    p2.to_move = 0
+    assert perft(p2, 1) == 3
+    assert perft(p2, 2) == 9
+    assert perft(p2, 3) == 35
+    assert perft(p2, 4) == 140
+    assert perft(p2, 5) == 564
+    assert perft(p2, 6) == 2088
+    assert perft(p2, 7) == 7776
+    assert perft(p2, 8) == 27216
 
-    assert perft(p, 1) == 3
-    assert perft(p, 2) == 7
-    assert perft(p, 3) == 15
-    assert perft(p, 4) == 35
-    assert perft(p, 5) == 51
-    assert perft(p, 6) == 111
+    # Position 3: Two-pawn jump into center a few plies deep
+    p3 = Pos()
+    p3.walls_left = [0, 0, 0, 0]
+    p3.pawn[0] = (2, 5)
+    p3.pawn[1] = (3, 5)
+    p3.pawn[2] = (4, 4)
+    p3.pawn[3] = (9, 9)
+    p3.to_move = 2
+    assert perft(p3, 1) == 4
+    assert perft(p3, 2) == 16
+    assert perft(p3, 3) == 64
+    assert perft(p3, 4) == 244
+    assert perft(p3, 5) == 892
+    assert perft(p3, 6) == 2812
+    assert perft(p3, 7) == 10792
+    assert perft(p3, 8) == 41312

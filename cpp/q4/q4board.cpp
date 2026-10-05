@@ -158,15 +158,46 @@ bool Q4Board::wallConflicts(int ax, int ay, bool isHorizontal) const {
 }
 
 bool Q4Board::isGeometricallyLegalWall(int ax, int ay, bool isHorizontal) const {
-  return !wallConflicts(ax, ay, isHorizontal);
+  if(wallConflicts(ax, ay, isHorizontal))
+    return false;
+
+  if(isHorizontal) {
+    int e1 = ay * BOARD_SIZE + ax;
+    int e2 = ay * BOARD_SIZE + (ax + 1);
+    if(!hPathEdges.test(e1) && !hPathEdges.test(e2))
+      return true;
+  }
+  else {
+    int e1 = ay * NUM_ANCHORS + ax;
+    int e2 = (ay + 1) * NUM_ANCHORS + ax;
+    if(!vPathEdges.test(e1) && !vPathEdges.test(e2))
+      return true;
+  }
+
+  return isLegalWallBruteForce(ax, ay, isHorizontal);
 }
 
 bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
   if(wallConflicts(ax, ay, isHorizontal))
     return false;
 
-  // Tentatively place wall on grid
-  const_cast<Q4Board*>(this)->addWallToBlocked(ax, ay, isHorizontal);
+  // Local copy of blocked to eliminate const_cast and data races
+  uint8_t localBlocked[NUM_CELLS];
+  std::memcpy(localBlocked, blocked, sizeof(blocked));
+
+  int c0 = cellOf(ax, ay);
+  if(isHorizontal) {
+    localBlocked[c0] |= (1 << DIR_N);
+    localBlocked[c0 + BOARD_SIZE] |= (1 << DIR_S);
+    localBlocked[c0 + 1] |= (1 << DIR_N);
+    localBlocked[c0 + BOARD_SIZE + 1] |= (1 << DIR_S);
+  }
+  else {
+    localBlocked[c0] |= (1 << DIR_E);
+    localBlocked[c0 + 1] |= (1 << DIR_W);
+    localBlocked[c0 + BOARD_SIZE] |= (1 << DIR_E);
+    localBlocked[c0 + BOARD_SIZE + 1] |= (1 << DIR_W);
+  }
 
   // BFS from CENTER_CELL
   uint8_t q[NUM_CELLS];
@@ -178,7 +209,7 @@ bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
   while(head < tail) {
     int curr = q[head++];
     for(int dir = 0; dir < 4; dir++) {
-      if(!(blocked[curr] & (1 << dir))) {
+      if(!(localBlocked[curr] & (1 << dir))) {
         int nxt = curr + DIR_OFFSET[dir];
         if(!visited[nxt]) {
           visited[nxt] = true;
@@ -188,25 +219,21 @@ bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
     }
   }
 
-  bool ok = true;
   for(int s = 0; s < NUM_SEATS; s++) {
     if(isAlive(s)) {
       int p = pawn[s];
       if(p >= 0 && !visited[p]) {
-        ok = false;
-        break;
+        return false;
       }
     }
   }
-
-  const_cast<Q4Board*>(this)->removeWallFromBlocked(ax, ay, isHorizontal);
-  return ok;
+  return true;
 }
 
 bool Q4Board::isLegalWall(int ax, int ay, bool isHorizontal) const {
   if(wallsLeft[toMove] <= 0)
     return false;
-  return isLegalWallBruteForce(ax, ay, isHorizontal);
+  return isGeometricallyLegalWall(ax, ay, isHorizontal);
 }
 
 void Q4Board::recomputeDistancesToCenter() {
@@ -225,6 +252,50 @@ void Q4Board::recomputeDistancesToCenter() {
         if(distToCenter[nxt] == 255) {
           distToCenter[nxt] = d + 1;
           q[tail++] = nxt;
+        }
+      }
+    }
+  }
+
+  recomputeCachedPaths();
+}
+
+void Q4Board::recomputeCachedPaths() {
+  hPathEdges.reset();
+  vPathEdges.reset();
+  for(int s = 0; s < NUM_SEATS; s++) {
+    if(isAlive(s)) {
+      int p = pawn[s];
+      if(p >= 0 && distToCenter[p] < 255) {
+        int curr = p;
+        while(curr != CENTER_CELL) {
+          bool stepped = false;
+          for(int dir = 0; dir < 4; dir++) {
+            if(!(blocked[curr] & (1 << dir))) {
+              int nxt = curr + DIR_OFFSET[dir];
+              if(distToCenter[nxt] == distToCenter[curr] - 1) {
+                int cx = curr % BOARD_SIZE;
+                int cy = curr / BOARD_SIZE;
+                if(dir == DIR_N) {
+                  hPathEdges.set(cy * BOARD_SIZE + cx);
+                }
+                else if(dir == DIR_S) {
+                  hPathEdges.set((cy - 1) * BOARD_SIZE + cx);
+                }
+                else if(dir == DIR_E) {
+                  vPathEdges.set(cy * NUM_ANCHORS + cx);
+                }
+                else if(dir == DIR_W) {
+                  vPathEdges.set(cy * NUM_ANCHORS + (cx - 1));
+                }
+                curr = nxt;
+                stepped = true;
+                break;
+              }
+            }
+          }
+          if(!stepped)
+            break;
         }
       }
     }
@@ -331,9 +402,9 @@ void Q4Board::getLegalActions(int seat, std::vector<int>& outActions) const {
     for(int ay = 0; ay < NUM_ANCHORS; ay++) {
       for(int ax = 0; ax < NUM_ANCHORS; ax++) {
         int a = anchorOf(ax, ay);
-        if(isLegalWallBruteForce(ax, ay, false))
+        if(isGeometricallyLegalWall(ax, ay, false))
           outActions.push_back(actionOfVWall(a));
-        if(isLegalWallBruteForce(ax, ay, true))
+        if(isGeometricallyLegalWall(ax, ay, true))
           outActions.push_back(actionOfHWall(a));
       }
     }
@@ -355,11 +426,11 @@ bool Q4Board::isLegalAction(int action, int seat) const {
 
   if(isVWallAction(action)) {
     int a = action - 121;
-    return isLegalWallBruteForce(anchorX(a), anchorY(a), false);
+    return isGeometricallyLegalWall(anchorX(a), anchorY(a), false);
   }
   if(isHWallAction(action)) {
     int a = action - 221;
-    return isLegalWallBruteForce(anchorX(a), anchorY(a), true);
+    return isGeometricallyLegalWall(anchorX(a), anchorY(a), true);
   }
   return false;
 }
@@ -380,6 +451,8 @@ void Q4Board::applyPawnMove(int destCell) {
     toMove = getNextAlive(toMove);
     hash ^= ZOBRIST_TO_MOVE[toMove];
   }
+
+  recomputeCachedPaths();
 }
 
 void Q4Board::applyWall(int ax, int ay, bool isHorizontal) {
@@ -448,6 +521,8 @@ void Q4Board::eliminateSeat(int seat) {
     toMove = nextSeat;
     hash ^= ZOBRIST_TO_MOVE[toMove];
   }
+
+  recomputeCachedPaths();
 }
 
 bool Q4Board::isFinished() const {

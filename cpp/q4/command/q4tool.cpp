@@ -203,9 +203,52 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
       if(line.empty()) continue;
       try {
         json j = json::parse(line);
-        Q4Board board = parseBoardFromJson(j);
+        Q4Board board;
+        bool isFinished = false;
+        int winner = -1;
+        bool isDraw = false;
+
+        if(j.contains("events") && j["events"].is_array()) {
+          Q4Rules rules;
+          if(j.contains("rules")) {
+            const auto& r = j["rules"];
+            if(r.contains("maxPlies")) rules.maxPlies = r["maxPlies"].get<int>();
+            if(r.contains("repetitionDrawCount")) rules.repetitionDrawCount = r["repetitionDrawCount"].get<int>();
+            if(r.contains("initialWalls") && r["initialWalls"].is_array()) {
+              for(int s = 0; s < 4; s++) rules.initialWalls[s] = r["initialWalls"][s].get<int>();
+            }
+          }
+          Q4History history(rules);
+          if(j.contains("initialBoard")) {
+            Q4Board initB = parseBoardFromJson(j["initialBoard"]);
+            history.clear(initB, rules);
+          }
+
+          for(const auto& ev : j["events"]) {
+            if(ev.contains("elim")) {
+              history.eliminate(ev["elim"].get<int>());
+            }
+            else if(ev.contains("a") || ev.contains("action")) {
+              std::string aStr = ev.contains("a") ? ev["a"].get<std::string>() : ev["action"].get<std::string>();
+              history.play(Q4Notation::stringToAction(aStr));
+            }
+          }
+          board = history.currentBoard;
+          isFinished = history.isFinished;
+          winner = history.winnerSeat;
+          isDraw = history.isDraw;
+        }
+        else {
+          board = parseBoardFromJson(j);
+          isFinished = board.isFinished();
+          winner = board.getWinner();
+          isDraw = false;
+        }
+
         std::vector<int> actions;
-        board.getLegalActions(board.toMove, actions);
+        if(!isFinished) {
+          board.getLegalActions(board.toMove, actions);
+        }
         std::vector<std::string> names;
         for(int act : actions)
           names.push_back(Q4Notation::actionToString(act));
@@ -222,8 +265,15 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
             dists.push_back(255);
         }
         resp["dist"] = dists;
-        resp["isFinished"] = board.isFinished();
-        resp["winner"] = board.getWinner();
+
+        json fullDist = json::array();
+        for(int c = 0; c < Q4Board::NUM_CELLS; c++)
+          fullDist.push_back((int)board.distToCenter[c]);
+        resp["distToCenter"] = fullDist;
+
+        resp["isFinished"] = isFinished;
+        resp["winner"] = winner;
+        resp["isDraw"] = isDraw;
         std::cout << resp.dump() << "\n" << std::flush;
       }
       catch(const std::exception& e) {

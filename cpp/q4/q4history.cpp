@@ -17,6 +17,7 @@ void Q4History::clear(const Q4Board& b, const Q4Rules& r) {
   currentBoard = b;
   boardHistory.clear();
   events.clear();
+  repetitionHistory.clear();
   plies = 0;
   isFinished = false;
   winnerSeat = -1;
@@ -68,6 +69,7 @@ void Q4History::play(int action) {
     throw StringError("Illegal action in Q4History::play: " + Global::intToString(action));
 
   boardHistory.push_back(currentBoard);
+  repetitionHistory.push_back(repetitionHashes);
   Q4Event ev;
   ev.isElimination = false;
   ev.action = action;
@@ -81,10 +83,7 @@ void Q4History::play(int action) {
   if(wasWall) {
     repetitionHashes.clear();
   }
-  else {
-    recordRepetition();
-  }
-
+  recordRepetition();
   checkTerminal();
 }
 
@@ -95,6 +94,7 @@ void Q4History::eliminate(int seat) {
     return;
 
   boardHistory.push_back(currentBoard);
+  repetitionHistory.push_back(repetitionHashes);
   Q4Event ev;
   ev.isElimination = true;
   ev.action = Q4Board::NULL_ACTION;
@@ -103,16 +103,19 @@ void Q4History::eliminate(int seat) {
 
   currentBoard.eliminateSeat(seat);
   repetitionHashes.clear();
-
+  recordRepetition();
   checkTerminal();
 }
 
 bool Q4History::undo() {
-  if(boardHistory.empty() || events.empty())
+  if(boardHistory.empty() || events.empty() || repetitionHistory.empty())
     return false;
 
   currentBoard = boardHistory.back();
   boardHistory.pop_back();
+
+  repetitionHashes = repetitionHistory.back();
+  repetitionHistory.pop_back();
 
   Q4Event lastEv = events.back();
   events.pop_back();
@@ -121,52 +124,9 @@ bool Q4History::undo() {
     plies--;
   }
 
-  // Rebuild repetition history from scratch since last wall or elimination
-  repetitionHashes.clear();
-  if(rules.repetitionDrawCount >= 2) {
-    // Find index of most recent wall or elimination in history
-    int startIdx = 0;
-    for(int i = (int)events.size() - 1; i >= 0; i--) {
-      if(events[i].isElimination || !Q4Board::isPawnAction(events[i].action)) {
-        startIdx = i + 1;
-        break;
-      }
-    }
-    // Replay hashes from startIdx to current
-    if(startIdx == 0) {
-      repetitionHashes.push_back(initialBoard.hash);
-    }
-    for(size_t i = startIdx; i < boardHistory.size(); i++) {
-      // The state after event i is boardHistory[i+1] or currentBoard
-      if(i + 1 < boardHistory.size())
-        repetitionHashes.push_back(boardHistory[i + 1].hash);
-      else
-        repetitionHashes.push_back(currentBoard.hash);
-    }
-    if(startIdx > 0 && startIdx == (int)events.size()) {
-      repetitionHashes.push_back(currentBoard.hash);
-    }
-  }
-
   isFinished = false;
   winnerSeat = -1;
   isDraw = false;
-
-  // Re-check repetition draw on the restored state
-  if(rules.repetitionDrawCount >= 2 && !repetitionHashes.empty()) {
-    Hash128 h = currentBoard.hash;
-    int count = 0;
-    for(const auto& prevHash : repetitionHashes) {
-      if(prevHash == h)
-        count++;
-    }
-    if(count >= rules.repetitionDrawCount) {
-      isDraw = true;
-      isFinished = true;
-    }
-  }
-
-  checkTerminal();
   return true;
 }
 
