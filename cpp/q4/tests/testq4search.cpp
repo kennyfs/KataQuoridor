@@ -227,6 +227,76 @@ void testT19TerminalValues(NNEvaluator* nnEval, Logger& logger) {
     testAssert(search.getRootValues(values));
     testAssert(values.value[0] > 0.9);
   }
+
+  // (d) Unit test of the utility of a terminal draw: -0.5 for every seat with 4 alive, 0.0 with 2 alive.
+  {
+    double drawVal[5] = {0.0, 0.0, 0.0, 0.0, 1.0};
+    for(int s = 0; s < 4; s++) {
+      double u4 = Q4S::Search::computeSeatUtility(s, drawVal, 4, true, 1.0);
+      testAssert(std::fabs(u4 - (-0.5)) < 1e-9);
+      double u2 = Q4S::Search::computeSeatUtility(s, drawVal, 2, true, 1.0);
+      testAssert(std::fabs(u2 - 0.0) < 1e-9);
+    }
+  }
+
+  // (e) Integration test: a position with maxPlies = plies + 1 where no legal move reaches the center.
+  // Every child is a terminal draw. After a 200-visit search, every alive seat's root utility is -0.5 (1e-9)
+  // and the root value is [0,0,0,0,1].
+  {
+    Q4Rules rules;
+    rules.maxPlies = 10;
+    Q4PlayState state(rules);
+    state.plies = 9;
+
+    SearchParams params = createTestSearchParams(200, 1);
+    Q4S::Search search(params, nnEval, &logger, "t19_draw_4alive");
+    search.setPosition(state);
+    search.beginSearch();
+    Q4S::NNOutput* rootNN = search.rootNode->getNNOutput();
+    if(rootNN != nullptr) {
+      for(int k = 0; k < 4; k++) rootNN->valueAbs[k] = 0.0f;
+      rootNN->valueAbs[4] = 1.0f;
+    }
+    search.runWholeSearch();
+
+    Q4S::ReportedSearchValues values;
+    testAssert(search.getRootValues(values));
+    for(int s = 0; s < 4; s++) {
+      testAssert(std::fabs(values.value[s] - 0.0) < 1e-9);
+      testAssert(std::fabs(values.utility[s] - (-0.5)) < 1e-9);
+    }
+    testAssert(std::fabs(values.value[4] - 1.0) < 1e-9);
+  }
+
+  // (f) The same with two seats eliminated: utility 0.0 for alive seats.
+  {
+    Q4Rules rules;
+    rules.maxPlies = 10;
+    Q4PlayState state(rules);
+    state.plies = 9;
+    state.eliminate(1);
+    state.eliminate(3);
+
+    SearchParams params = createTestSearchParams(200, 1);
+    Q4S::Search search(params, nnEval, &logger, "t19_draw_2alive");
+    search.setPosition(state);
+    search.beginSearch();
+    Q4S::NNOutput* rootNN = search.rootNode->getNNOutput();
+    if(rootNN != nullptr) {
+      for(int k = 0; k < 4; k++) rootNN->valueAbs[k] = 0.0f;
+      rootNN->valueAbs[4] = 1.0f;
+    }
+    search.runWholeSearch();
+
+    Q4S::ReportedSearchValues values;
+    testAssert(search.getRootValues(values));
+    testAssert(std::fabs(values.value[4] - 1.0) < 1e-9);
+    testAssert(std::fabs(values.utility[0] - 0.0) < 1e-9);
+    testAssert(std::fabs(values.utility[2] - 0.0) < 1e-9);
+    testAssert(std::fabs(values.utility[1] - (-1.0)) < 1e-9); // eliminated
+    testAssert(std::fabs(values.utility[3] - (-1.0)) < 1e-9); // eliminated
+  }
+
   cout << "T19 Terminal values passed!" << endl;
 }
 

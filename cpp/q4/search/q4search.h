@@ -62,6 +62,8 @@ struct SearchThread {
 struct Search {
   // Constant/immutable during search
   int rootSeat;
+  uint8_t rootAliveMask;
+  int rootNumAlive;
   Q4PlayState rootState;
   int rootHintAction;
 

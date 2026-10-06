@@ -18,19 +18,11 @@ void Search::addLeafValue(
   bool assumeNoExistingWeight
 ) {
   (void)isTerminal;
-  int nAlive = 0;
-  for(int s = 0; s < 4; s++) {
-    if(value[s] > 0.0)
-      nAlive++;
-  }
-  if(nAlive == 0)
-    nAlive = 4;
-
   double utility[4];
   double utilitySq[4];
   for(int s = 0; s < 4; s++) {
-    bool isAlive = (value[s] > 0.0);
-    utility[s] = computeSeatUtility(s, value, nAlive, isAlive, searchParams.winLossUtilityFactor);
+    bool isAlive = (rootAliveMask & (1 << s)) != 0;
+    utility[s] = computeSeatUtility(s, value, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
     utilitySq[s] = utility[s] * utility[s];
   }
 
@@ -219,20 +211,12 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
     for(int k = 0; k < 5; k++)
       nnValue[k] = (double)nnOutput->valueAbs[k];
 
-    int nAlive = 0;
-    for(int s = 0; s < 4; s++) {
-      if(nnValue[s] > 0.0)
-        nAlive++;
-    }
-    if(nAlive == 0)
-      nAlive = 4;
-
     double weight = computeWeightFromNNOutput(nnOutput);
     for(int k = 0; k < 5; k++)
       valueSum[k] += weight * nnValue[k];
     for(int s = 0; s < 4; s++) {
-      bool isAlive = (nnValue[s] > 0.0);
-      double u = computeSeatUtility(s, nnValue, nAlive, isAlive, searchParams.winLossUtilityFactor);
+      bool isAlive = (rootAliveMask & (1 << s)) != 0;
+      double u = computeSeatUtility(s, nnValue, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
       utilitySum[s] += weight * u;
       utilitySqSum[s] += weight * u * u;
     }

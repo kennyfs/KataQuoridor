@@ -98,6 +98,8 @@ Search::Search(
   Logger* lg,
   const std::string& rSeed
 ) : rootSeat(0),
+    rootAliveMask(0x0f),
+    rootNumAlive(4),
     rootState(),
     rootHintAction(Q4Board::NULL_ACTION),
     searchParams(params),
@@ -163,12 +165,16 @@ void Search::setPosition(const Q4PlayState& state) {
   clearSearch();
   rootState = state;
   rootSeat = rootState.board.toMove;
+  rootAliveMask = rootState.board.alive;
+  rootNumAlive = rootState.board.getNumAlive();
 }
 
 void Search::setPosition(const Q4History& history) {
   clearSearch();
   rootState = history.getState();
   rootSeat = rootState.board.toMove;
+  rootAliveMask = rootState.board.alive;
+  rootNumAlive = rootState.board.getNumAlive();
 }
 
 void Search::setRootHintAction(int action) {
@@ -212,6 +218,8 @@ bool Search::makeMove(int action) {
 
   rootState.playAssumeLegal(action);
   rootSeat = rootState.board.toMove;
+  rootAliveMask = rootState.board.alive;
+  rootNumAlive = rootState.board.getNumAlive();
 
   if(rootNode != NULL) {
     SearchNode* child = NULL;

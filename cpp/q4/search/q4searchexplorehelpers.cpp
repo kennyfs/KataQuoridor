@@ -237,14 +237,8 @@ double Search::getFpuValueForChildrenAssumeVisited(
   if(nnOutput != nullptr) {
     double val[5];
     for(int i = 0; i < 5; i++) val[i] = nnOutput->valueAbs[i];
-    // Approximate alive count
-    int nAlive = 0;
-    for(int s = 0; s < 4; s++) {
-      if(val[s] > 0.0 || node.stats.valueAvg[s].load(std::memory_order_acquire) > 0.0)
-        nAlive++;
-    }
-    if(nAlive == 0) nAlive = 4;
-    double nnUtility = computeSeatUtility(mover, val, nAlive, true, searchParams.winLossUtilityFactor);
+    bool isAlive = (rootAliveMask & (1 << mover)) != 0;
+    double nnUtility = computeSeatUtility(mover, val, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
 
     if(searchParams.fpuParentWeightByVisitedPolicy) {
       double avgWeight = std::min(1.0, pow(policyProbMassVisited, searchParams.fpuParentWeightByVisitedPolicyPow));
