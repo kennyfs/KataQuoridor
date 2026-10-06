@@ -47,11 +47,11 @@ uint64_t runPerft(const Q4Board& board, int depth) {
 
 Q4Board parseBoardFromJson(const json& j) {
   Q4Board board;
-  board.alive = 0;
-  std::fill(std::begin(board.occupant), std::end(board.occupant), -1);
 
   // Pawns
   if(j.contains("pawns") && j["pawns"].is_array()) {
+    board.alive = 0;
+    std::fill(std::begin(board.occupant), std::end(board.occupant), -1);
     auto pArr = j["pawns"];
     for(size_t s = 0; s < 4 && s < pArr.size(); s++) {
       if(pArr[s].is_null()) {

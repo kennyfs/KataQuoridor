@@ -237,7 +237,14 @@ bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
     }
   }
 
-  return false;
+  for(int s = 0; s < NUM_SEATS; s++) {
+    if(isAlive(s)) {
+      int p = pawn[s];
+      if(p >= 0 && visited[p])
+        foundMask |= (1 << s);
+    }
+  }
+  return foundMask == neededMask;
 }
 
 bool Q4Board::isLegalWall(int ax, int ay, bool isHorizontal) const {
