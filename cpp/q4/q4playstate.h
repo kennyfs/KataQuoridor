@@ -28,6 +28,9 @@ public:
   void playAssumeLegal(int action);
   void eliminate(int seat);
 
+  bool isLegalAction(int action) const { return board.isLegalAction(action, board.toMove); }
+  void getLegalActions(std::vector<int>& outActions) const { board.getLegalActions(board.toMove, outActions); }
+
   int currentPositionRepetitionCount() const;
   std::string getResultString() const;
 

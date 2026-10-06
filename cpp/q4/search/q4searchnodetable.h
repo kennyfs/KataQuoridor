@@ -1,16 +1,20 @@
-#ifndef SEARCH_SEARCHNODETABLE_H
-#define SEARCH_SEARCHNODETABLE_H
+#ifndef Q4SEARCH_SEARCHNODETABLE_H_
+#define Q4SEARCH_SEARCHNODETABLE_H_
 
-#include "../core/global.h"
-#include "../core/hash.h"
-#include "../core/multithread.h"
-#include "../game/board.h"
-#include "../search/mutexpool.h"
+#include <cstdint>
+#include <map>
+#include <vector>
+
+#include "../../core/global.h"
+#include "../../core/hash.h"
+#include "../../search/mutexpool.h"
+
+namespace Q4S {
 
 struct SearchNode;
 
 struct SearchNodeTable {
-  std::vector<std::map<Hash128,SearchNode*>> entries;
+  std::vector<std::map<Hash128, SearchNode*>> entries;
   MutexPool* mutexPool;
   uint32_t numShards;
 
@@ -20,6 +24,6 @@ struct SearchNodeTable {
   uint32_t getIndex(uint64_t hash) const;
 };
 
-#endif
+}  // namespace Q4S
 
-
+#endif  // Q4SEARCH_SEARCHNODETABLE_H_

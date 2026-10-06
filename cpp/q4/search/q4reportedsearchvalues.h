@@ -1,33 +1,20 @@
-#ifndef SEARCH_REPORTEDSEARCHVALUES_H_
-#define SEARCH_REPORTEDSEARCHVALUES_H_
+#ifndef Q4SEARCH_REPORTEDSEARCHVALUES_H_
+#define Q4SEARCH_REPORTEDSEARCHVALUES_H_
 
-#include "../core/global.h"
+#include "../../core/global.h"
 
-struct Search;
+namespace Q4S {
 
 struct ReportedSearchValues {
-  double winValue;
-  double lossValue;
-  double noResultValue;
-  double staticScoreValue;
-  double dynamicScoreValue;
-  double expectedScore;
-  double expectedScoreStdev;
-  double lead;
-  double winLossValue;
-  double utility;
+  double value[5];    // win probability for seats 0..3, and [4] = draw
+  double utility[4];  // utility of seats 0..3
   double weight;
   int64_t visits;
 
   ReportedSearchValues();
   ReportedSearchValues(
-    const Search& search,
-    double winLossValueAvg,
-    double noResultValueAvg,
-    double scoreMeanAvg,
-    double scoreMeanSqAvg,
-    double leadAvg,
-    double utilityAvg,
+    const double valueAvg[5],
+    const double utilityAvg[4],
     double totalWeight,
     int64_t totalVisits
   );
@@ -36,4 +23,6 @@ struct ReportedSearchValues {
   friend std::ostream& operator<<(std::ostream& out, const ReportedSearchValues& values);
 };
 
-#endif
+}  // namespace Q4S
+
+#endif  // Q4SEARCH_REPORTEDSEARCHVALUES_H_

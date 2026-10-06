@@ -44,6 +44,7 @@ public:
   void eliminate(int seat);
   bool undo();
 
+  const Q4PlayState& getState() const { return state; }
   int currentPositionRepetitionCount() const;
   std::string getResultString() const;
 
