@@ -79,6 +79,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(runAll ? false : shouldRun("q4slow"))
     Tests::runQ4SlowTests();
 
+  if(shouldRun("q4search"))
+    Tests::runQ4SearchTests();
+
   if(shouldRun("nninputs"))
     Tests::runNNInputsTests();
 

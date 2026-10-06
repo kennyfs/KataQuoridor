@@ -1139,6 +1139,7 @@ add_executable(katago
   q4/tests/testq4board.cpp
   q4/tests/testq4slow.cpp
   q4/tests/testq4nn.cpp
+  q4/tests/testq4search.cpp
   q4/search/q4reportedsearchvalues.cpp
   q4/search/q4analysisdata.cpp
   q4/search/q4searchnodetable.cpp

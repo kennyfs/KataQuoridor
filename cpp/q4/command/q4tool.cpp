@@ -9,9 +9,15 @@
 #include "q4bots.h"
 #include "q4history.h"
 #include "q4notation.h"
+#include "../core/config_parser.h"
+#include "../neuralnet/nneval.h"
+#include "../program/setup.h"
+#include "nn/q4nn.h"
+#include "../search/q4search.h"
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -457,6 +463,163 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
               << (double)totalPlies / playoutGames << " plies/game, "
               << (uint64_t)pliesPerSec << " plies/sec)\n";
 
+    return 0;
+  }
+
+  if(subcmd == "searchbench") {
+    std::string modelPath = "";
+    int numThreads = 1;
+    int numVisits = 1000;
+    int numPositions = 20;
+    uint64_t seed = 42;
+    std::string configFile = "";
+
+    for(size_t i = 0; i < subArgs.size(); i++) {
+      if(subArgs[i] == "-model" && i + 1 < subArgs.size()) {
+        modelPath = subArgs[++i];
+      }
+      else if(subArgs[i] == "-threads" && i + 1 < subArgs.size()) {
+        numThreads = Global::stringToInt(subArgs[++i]);
+      }
+      else if(subArgs[i] == "-visits" && i + 1 < subArgs.size()) {
+        numVisits = Global::stringToInt(subArgs[++i]);
+      }
+      else if(subArgs[i] == "-positions" && i + 1 < subArgs.size()) {
+        numPositions = Global::stringToInt(subArgs[++i]);
+      }
+      else if(subArgs[i] == "-seed" && i + 1 < subArgs.size()) {
+        seed = (uint64_t)Global::stringToInt64(subArgs[++i]);
+      }
+      else if(subArgs[i] == "-config" && i + 1 < subArgs.size()) {
+        configFile = subArgs[++i];
+      }
+    }
+
+    if(modelPath.empty()) {
+      std::cerr << "Usage: katago q4tool searchbench -model <path> [-threads 1|4] [-visits 1000] [-positions 20] [-config <cfg>]" << std::endl;
+      return 1;
+    }
+
+    Logger logger;
+    ConfigParser cfg;
+    if(!configFile.empty()) {
+      try {
+        cfg.initialize(configFile);
+      }
+      catch(const std::exception& e) {
+        std::cerr << "Warning: Could not read config file " << configFile << ": " << e.what() << std::endl;
+      }
+    }
+
+    if(!cfg.contains("nnCacheSizePowerOfTwo")) cfg.overrideKey("nnCacheSizePowerOfTwo", "16");
+    if(!cfg.contains("nnMutexPoolSizePowerOfTwo")) cfg.overrideKey("nnMutexPoolSizePowerOfTwo", "12");
+    if(!cfg.contains("maxVisits")) cfg.overrideKey("maxVisits", std::to_string(numVisits));
+    if(!cfg.contains("numSearchThreads")) cfg.overrideKey("numSearchThreads", std::to_string(numThreads));
+    if(!cfg.contains("winLossUtilityFactor")) cfg.overrideKey("winLossUtilityFactor", "1.0");
+    if(!cfg.contains("cpuctExploration")) cfg.overrideKey("cpuctExploration", "1.1");
+    if(!cfg.contains("cpuctExplorationLog")) cfg.overrideKey("cpuctExplorationLog", "0.0");
+    if(!cfg.contains("fpuReductionMax")) cfg.overrideKey("fpuReductionMax", "0.2");
+    if(!cfg.contains("rootFpuReductionMax")) cfg.overrideKey("rootFpuReductionMax", "0.0");
+    if(!cfg.contains("fpuParentWeightByVisitedPolicy")) cfg.overrideKey("fpuParentWeightByVisitedPolicy", "true");
+    if(!cfg.contains("fpuParentWeightByVisitedPolicyPow")) cfg.overrideKey("fpuParentWeightByVisitedPolicyPow", "2.0");
+    if(!cfg.contains("valueWeightExponent")) cfg.overrideKey("valueWeightExponent", "0.5");
+    if(!cfg.contains("useUncertainty")) cfg.overrideKey("useUncertainty", "true");
+    if(!cfg.contains("uncertaintyExponent")) cfg.overrideKey("uncertaintyExponent", "1.0");
+    if(!cfg.contains("uncertaintyCoeff")) cfg.overrideKey("uncertaintyCoeff", "0.25");
+    if(!cfg.contains("useLcbForSelection")) cfg.overrideKey("useLcbForSelection", "true");
+    if(!cfg.contains("lcbStdevs")) cfg.overrideKey("lcbStdevs", "5.0");
+    if(!cfg.contains("minVisitPropForLCB")) cfg.overrideKey("minVisitPropForLCB", "0.15");
+    if(!cfg.contains("useNonBuggyLcb")) cfg.overrideKey("useNonBuggyLcb", "true");
+    if(!cfg.contains("rootNoiseEnabled")) cfg.overrideKey("rootNoiseEnabled", "false");
+    if(!cfg.contains("rootDirichletNoiseTotalConcentration")) cfg.overrideKey("rootDirichletNoiseTotalConcentration", "10.83");
+    if(!cfg.contains("rootDirichletNoiseWeight")) cfg.overrideKey("rootDirichletNoiseWeight", "0.25");
+    if(!cfg.contains("rootDesiredPerChildVisitsCoeff")) cfg.overrideKey("rootDesiredPerChildVisitsCoeff", "2");
+    if(!cfg.contains("rootPolicyTemperatureEarly")) cfg.overrideKey("rootPolicyTemperatureEarly", "1.25");
+    if(!cfg.contains("rootPolicyTemperature")) cfg.overrideKey("rootPolicyTemperature", "1.1");
+    if(!cfg.contains("rootNumSymmetriesToSample")) cfg.overrideKey("rootNumSymmetriesToSample", "8");
+    if(!cfg.contains("chosenMoveTemperatureEarly")) cfg.overrideKey("chosenMoveTemperatureEarly", "0.75");
+    if(!cfg.contains("chosenMoveTemperatureHalflife")) cfg.overrideKey("chosenMoveTemperatureHalflife", "38");
+    if(!cfg.contains("chosenMoveTemperature")) cfg.overrideKey("chosenMoveTemperature", "0.15");
+    if(!cfg.contains("chosenMoveSubtract")) cfg.overrideKey("chosenMoveSubtract", "0");
+    if(!cfg.contains("chosenMovePrune")) cfg.overrideKey("chosenMovePrune", "1");
+    if(!cfg.contains("staticScoreUtilityFactor")) cfg.overrideKey("staticScoreUtilityFactor", "0.0");
+    if(!cfg.contains("dynamicScoreUtilityFactor")) cfg.overrideKey("dynamicScoreUtilityFactor", "0.0");
+    if(!cfg.contains("policyOptimism")) cfg.overrideKey("policyOptimism", "0.0");
+    if(!cfg.contains("rootPolicyOptimism")) cfg.overrideKey("rootPolicyOptimism", "0.0");
+    if(!cfg.contains("useGraphSearch")) cfg.overrideKey("useGraphSearch", "false");
+    if(!cfg.contains("useEvalCache")) cfg.overrideKey("useEvalCache", "false");
+    if(!cfg.contains("subtreeValueBiasFactor")) cfg.overrideKey("subtreeValueBiasFactor", "0.0");
+    if(!cfg.contains("avoidRepeatedPatternUtility")) cfg.overrideKey("avoidRepeatedPatternUtility", "0.0");
+    if(!cfg.contains("antiMirror")) cfg.overrideKey("antiMirror", "false");
+    if(!cfg.contains("playoutDoublingAdvantage")) cfg.overrideKey("playoutDoublingAdvantage", "0.0");
+    if(!cfg.contains("visitCapContempt")) cfg.overrideKey("visitCapContempt", "0");
+    if(!cfg.contains("rootSymmetryPruning")) cfg.overrideKey("rootSymmetryPruning", "false");
+    if(!cfg.contains("conservativePass")) cfg.overrideKey("conservativePass", "false");
+    if(!cfg.contains("enablePassingHacks")) cfg.overrideKey("enablePassingHacks", "false");
+    if(!cfg.contains("enableMorePassingHacks")) cfg.overrideKey("enableMorePassingHacks", "false");
+    if(!cfg.contains("fillDameBeforePass")) cfg.overrideKey("fillDameBeforePass", "false");
+    if(!cfg.contains("rootEndingBonusPoints")) cfg.overrideKey("rootEndingBonusPoints", "0.0");
+    if(!cfg.contains("rootPruneUselessMoves")) cfg.overrideKey("rootPruneUselessMoves", "false");
+    if(!cfg.contains("ignorePreRootHistory")) cfg.overrideKey("ignorePreRootHistory", "false");
+    if(!cfg.contains("ignoreAllHistory")) cfg.overrideKey("ignoreAllHistory", "false");
+
+    Rand evalSeed(seed + 100);
+    NNEvaluator* nnEval = Setup::initializeNNEvaluator(
+      modelPath, modelPath, "", cfg, logger, evalSeed, 1, Q4NNConst::POS_LEN, Q4NNConst::POS_LEN,
+      Setup::MaxBatchSizeRequest::explicitSize(16), true, false, Setup::SETUP_FOR_BENCHMARK
+    );
+
+    SearchParams params = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_BENCHMARK);
+    params.maxVisits = numVisits;
+    params.numThreads = numThreads;
+    Q4S::Search::checkParams(params);
+
+    // Sample distinct positions
+    std::vector<Q4PlayState> positions;
+    Rand rand(seed);
+    Q4Rules rules;
+    while((int)positions.size() < numPositions) {
+      Q4History hist(rules);
+      int targetPlies = rand.nextInt(0, 32);
+      for(int p = 0; p < targetPlies && !hist.isFinished; p++) {
+        std::vector<int> acts;
+        hist.currentBoard.getLegalActions(hist.currentBoard.toMove, acts);
+        if(acts.empty()) break;
+        hist.play(acts[rand.nextUInt((uint32_t)acts.size())]);
+      }
+      if(!hist.isFinished) {
+        positions.push_back(hist.state);
+      }
+    }
+
+    Q4S::Search search(params, nnEval, &logger, "bench_" + std::to_string(seed));
+
+    // Warmup on position 0
+    search.setPosition(positions[0]);
+    search.runWholeSearch();
+    search.clearSearch();
+
+    int64_t totalVisits = 0;
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for(size_t i = 0; i < positions.size(); i++) {
+      search.setPosition(positions[i]);
+      search.runWholeSearch();
+      totalVisits += search.getRootVisits();
+      search.clearSearch();
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double secs = std::chrono::duration<double>(t1 - t0).count();
+    double pps = (double)totalVisits / secs;
+
+    std::cout << "=== Q4 Search Benchmark ===" << std::endl;
+    std::cout << "Model: " << modelPath << std::endl;
+    std::cout << "Threads: " << numThreads << std::endl;
+    std::cout << "Visits per search: " << numVisits << std::endl;
+    std::cout << "Positions: " << positions.size() << std::endl;
+    std::cout << "Total visits: " << totalVisits << " in " << std::fixed << std::setprecision(3) << secs << " s" << std::endl;
+    std::cout << "Playouts per second: " << std::fixed << std::setprecision(1) << pps << " visits/sec" << std::endl;
+
+    delete nnEval;
     return 0;
   }
 

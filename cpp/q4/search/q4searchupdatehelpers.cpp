@@ -72,8 +72,15 @@ void Search::addCurrentNNOutputAsLeafValue(SearchNode& node, bool assumeNoExisti
   assert(nnOutput != NULL);
 
   double value[5];
-  for(int k = 0; k < 5; k++)
+  double valSum = 0.0;
+  for(int k = 0; k < 5; k++) {
     value[k] = (double)nnOutput->valueAbs[k];
+    valSum += value[k];
+  }
+  if(valSum > 0.0) {
+    for(int k = 0; k < 5; k++)
+      value[k] /= valSum;
+  }
 
   double weight = computeWeightFromNNOutput(nnOutput);
   addLeafValue(node, value, weight, false, assumeNoExistingWeight);
@@ -233,9 +240,11 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
     weightSum += weight;
   }
 
+  double sumVal = 0.0;
+  for(int k = 0; k < 5; k++) sumVal += valueSum[k];
   double valueAvg[5];
   for(int k = 0; k < 5; k++)
-    valueAvg[k] = valueSum[k] / weightSum;
+    valueAvg[k] = (sumVal > 0.0) ? (valueSum[k] / sumVal) : (valueSum[k] / weightSum);
 
   double utilityAvg[4];
   double utilitySqAvg[4];

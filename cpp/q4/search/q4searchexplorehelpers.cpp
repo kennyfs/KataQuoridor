@@ -114,6 +114,34 @@ double Search::getExploreSelectionValueOfChild(
       if(childVisits + thread->upperBoundVisitsLeft < estimatedRequiredVisits)
         return FUTILE_VISITS_PRUNE_VALUE;
     }
+    // Hack to get the root to funnel more visits down child branches
+    if(searchParams.rootDesiredPerChildVisitsCoeff > 0.0) {
+      if(nnPolicyProb > 0 && childWeight < sqrt(nnPolicyProb * totalChildWeight * searchParams.rootDesiredPerChildVisitsCoeff)) {
+        return 1e20;
+      }
+    }
+    // Hack for rootHintAction - must search this move almost as often as the most searched move
+    if(rootHintAction != Q4Board::NULL_ACTION && action == rootHintAction) {
+      double averageWeightPerVisit = (childWeight + parentWeightPerVisit) / (childVisits + 1.0);
+      ConstSearchNodeChildrenReference children = parent.getChildren();
+      int childrenCapacity = children.getCapacity();
+      for(int i = 0; i < childrenCapacity; i++) {
+        const SearchChildPointer& childPointer = children[i];
+        const SearchNode* c = childPointer.getIfAllocated();
+        if(c == NULL)
+          break;
+        if(childPointer.getActionRelaxed() != rootHintAction) {
+          int64_t cVisits = c->stats.visits.load(std::memory_order_acquire);
+          double cWeight = c->stats.weightSum.load(std::memory_order_acquire);
+          if(cVisits > 0 && cWeight > 0.0) {
+            double cAverageWeightPerVisit = cWeight / cVisits;
+            if(childVisits * averageWeightPerVisit < cVisits * cAverageWeightPerVisit * 0.75) {
+              return 1e20;
+            }
+          }
+        }
+      }
+    }
   }
 
   return getExploreSelectionValue(exploreScaling, nnPolicyProb, childWeight, childUtility);
