@@ -40,6 +40,7 @@ public:
   void eliminate(int seat);
   bool undo();
 
+  int currentPositionRepetitionCount() const;
   std::string getResultString() const;
 
 private:

@@ -103,6 +103,7 @@ struct Q4Board {
   bool isLegalAction(int action, int seat) const;
 
   // Apply moves and events
+  Hash128 getHashAfterPawnMove(int destCell) const;
   void applyPawnMove(int destCell);
   void applyWall(int ax, int ay, bool isHorizontal);
   void applyAction(int action);

@@ -435,6 +435,16 @@ bool Q4Board::isLegalAction(int action, int seat) const {
   return false;
 }
 
+Hash128 Q4Board::getHashAfterPawnMove(int destCell) const {
+  // Exactly the hash that applyPawnMove(destCell) produces: a move into the center ends the game and the turn does
+  // not pass.
+  int seat = toMove;
+  Hash128 h = hash ^ ZOBRIST_PAWN[seat][pawn[seat]] ^ ZOBRIST_PAWN[seat][destCell] ^ ZOBRIST_TO_MOVE[seat];
+  if(destCell != CENTER_CELL)
+    h ^= ZOBRIST_TO_MOVE[getNextAlive(toMove)];
+  return h;
+}
+
 void Q4Board::applyPawnMove(int destCell) {
   int seat = toMove;
   int oldCell = pawn[seat];

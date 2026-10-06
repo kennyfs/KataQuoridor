@@ -1,9 +1,10 @@
 #include "q4symmetry.h"
 
+#include <mutex>
 #include <stdexcept>
 
 namespace {
-  bool isInitialized = false;
+  std::once_flag initFlag;  // init() is called from every NN evaluation, on any thread
   int cellMap[8][Q4Board::NUM_CELLS];
   int anchorMap[8][Q4Board::NUM_WALL_ANCHORS][2][2]; // [sym][a][isH][0: newA, 1: newIsH]
   int actionMap[8][Q4Board::NUM_ACTIONS];
@@ -33,10 +34,13 @@ namespace {
 
 namespace Q4Symmetry {
 
-void init() {
-  if(isInitialized)
-    return;
+static void buildTables();
 
+void init() {
+  std::call_once(initFlag, buildTables);
+}
+
+static void buildTables() {
   // 1. Cells: x, y in [0, 10] around center (5, 5)
   for(int sym = 0; sym < 8; sym++) {
     for(int c = 0; c < Q4Board::NUM_CELLS; c++) {
@@ -131,7 +135,6 @@ void init() {
     }
   }
 
-  isInitialized = true;
 }
 
 int applyCell(int cell, int sym) {
@@ -216,6 +219,17 @@ Q4Board applyBoard(const Q4Board& board, int sym) {
   b.recomputeDistancesToCenter();
   b.hash = b.getHashFromScratch();
   return b;
+}
+
+Q4History applyHistory(const Q4History& history, int sym) {
+  Q4History out(applyBoard(history.initialBoard, sym), history.rules);
+  for(const Q4Event& ev : history.events) {
+    if(ev.isElimination)
+      out.eliminate(ev.eliminatedSeat);
+    else
+      out.play(applyAction(ev.action, sym));
+  }
+  return out;
 }
 
 }  // namespace Q4Symmetry

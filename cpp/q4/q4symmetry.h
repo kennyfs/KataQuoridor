@@ -2,6 +2,7 @@
 #define Q4_SYMMETRY_H_
 
 #include "q4board.h"
+#include "q4history.h"
 
 namespace Q4Symmetry {
   static constexpr int NUM_SYMMETRIES = 8;
@@ -27,6 +28,10 @@ namespace Q4Symmetry {
 
   // Board transformation: rotates/reflects the board geometry
   Q4Board applyBoard(const Q4Board& board, int sym);
+
+  // The same game seen through sym: transformed start board, transformed actions, same eliminations (seat identities
+  // do not change). Used to test that anything computed from a position is equivariant.
+  Q4History applyHistory(const Q4History& history, int sym);
 }
 
 #endif  // Q4_SYMMETRY_H_

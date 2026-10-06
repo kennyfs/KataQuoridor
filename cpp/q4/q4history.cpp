@@ -130,6 +130,15 @@ bool Q4History::undo() {
   return true;
 }
 
+int Q4History::currentPositionRepetitionCount() const {
+  int count = 0;
+  for(const auto& h : repetitionHashes) {
+    if(h == currentBoard.hash)
+      count++;
+  }
+  return count;
+}
+
 std::string Q4History::getResultString() const {
   if(winnerSeat >= 0)
     return Global::intToString(winnerSeat + 1) + "+";
