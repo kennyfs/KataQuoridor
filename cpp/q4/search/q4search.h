@@ -268,6 +268,7 @@ struct Search {
   SearchNode* allocateOrFindNode(SearchThread& thread, int nextSeat, int action, bool forceNonTerminal);
   void clearOldNNOutputs();
   void transferOldNNOutputs(SearchThread& thread);
+  void deleteAllOldOrAllNewTableNodesMulithreaded(bool old);
   void deleteAllTableNodesMulithreaded();
   void computeRootValues();
   bool playoutDescend(SearchThread& thread, SearchNode& node, bool isRoot);

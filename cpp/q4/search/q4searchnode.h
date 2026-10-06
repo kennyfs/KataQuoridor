@@ -189,6 +189,8 @@ struct ConstSearchNodeChildrenReference {
 };
 
 struct SearchNode {
+  static std::atomic<int64_t> liveNodeCount;
+
   // Locks
   mutable std::atomic_flag statsLock = ATOMIC_FLAG_INIT;
 

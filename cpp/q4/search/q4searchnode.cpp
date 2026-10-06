@@ -112,6 +112,8 @@ bool SearchChildPointer::compexweakEdgeVisits(int64_t& expected, int64_t desired
   return edgeVisits.compare_exchange_weak(expected, desired, std::memory_order_acq_rel);
 }
 
+std::atomic<int64_t> SearchNode::liveNodeCount(0);
+
 SearchNode::SearchNode(int nextSeat_, bool fnt, uint32_t mIdx)
   : nextSeat(nextSeat_),
     forceNonTerminal(fnt),
@@ -125,7 +127,9 @@ SearchNode::SearchNode(int nextSeat_, bool fnt, uint32_t mIdx)
     stats(),
     virtualLosses(0),
     dirtyCounter(0)
-{}
+{
+  liveNodeCount.fetch_add(1, std::memory_order_relaxed);
+}
 
 SearchNode::SearchNode(const SearchNode& other, bool fnt)
   : nextSeat(other.nextSeat),
@@ -141,6 +145,7 @@ SearchNode::SearchNode(const SearchNode& other, bool fnt)
     virtualLosses(other.virtualLosses.load(std::memory_order_acquire)),
     dirtyCounter(other.dirtyCounter.load(std::memory_order_acquire))
 {
+  liveNodeCount.fetch_add(1, std::memory_order_relaxed);
   std::shared_ptr<NNOutput>* otherVal = other.nnOutput.load(std::memory_order_acquire);
   if(otherVal != nullptr)
     nnOutput.store(new std::shared_ptr<NNOutput>(*otherVal), std::memory_order_release);
@@ -332,6 +337,7 @@ bool SearchNode::storeNNOutputIfNull(std::shared_ptr<NNOutput>* newNNOutput) {
 }
 
 SearchNode::~SearchNode() {
+  liveNodeCount.fetch_sub(1, std::memory_order_relaxed);
   if(children2 != nullptr)
     delete[] children2;
   if(children1 != nullptr)

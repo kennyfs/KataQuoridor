@@ -192,13 +192,17 @@ void Search::setNNEval(NNEvaluator* nnEval) {
 }
 
 void Search::clearSearch() {
-  if(rootNode != NULL) {
-    delete rootNode;
-    rootNode = NULL;
-  }
-  deleteAllTableNodesMulithreaded();
-  lastSearchNumPlayouts = 0;
   effectiveSearchTimeCarriedOver = 0.0;
+  if(rootNode != NULL) {
+    deleteAllTableNodesMulithreaded();
+    if(rootNode != NULL) {
+      delete rootNode;
+      rootNode = NULL;
+    }
+  }
+  clearOldNNOutputs();
+  searchNodeAge = 0;
+  lastSearchNumPlayouts = 0;
   rootHintAction = Q4Board::NULL_ACTION;
 }
 
@@ -244,7 +248,8 @@ bool Search::makeMove(int action) {
       rootNode = new SearchNode(*child, forceNonTerminal);
 
       applyRecursivelyAnyOrderMulithreaded({rootNode}, NULL);
-      deleteAllTableNodesMulithreaded();
+      bool old = true;
+      deleteAllOldOrAllNewTableNodesMulithreaded(old);
       delete oldRootNode;
     }
     else {
@@ -576,9 +581,32 @@ uint32_t Search::createMutexIdxForNode(SearchThread& thread) const {
 
 SearchNode* Search::allocateOrFindNode(SearchThread& thread, int nextSeat, int action, bool forceNonTerminal) {
   (void)action;
-  uint32_t mutexIdx = createMutexIdxForNode(thread);
-  SearchNode* node = new SearchNode(nextSeat, forceNonTerminal, mutexIdx);
-  return node;
+  Hash128 childHash = thread.state.board.hash ^ Hash128(thread.rand.nextUInt64(), thread.rand.nextUInt64());
+
+  uint32_t nodeTableIdx = nodeTable->getIndex(childHash.hash0);
+  std::mutex& mutex = nodeTable->mutexPool->getMutex(nodeTableIdx);
+  std::lock_guard<std::mutex> lock(mutex);
+
+  SearchNode* child = NULL;
+  std::map<Hash128, SearchNode*>& nodeMap = nodeTable->entries[nodeTableIdx];
+
+  while(true) {
+    auto insertLoc = nodeMap.lower_bound(childHash);
+
+    if(insertLoc != nodeMap.end() && insertLoc->first == childHash) {
+      if(insertLoc->second->nextSeat != nextSeat) {
+        childHash = thread.state.board.hash ^ Hash128(thread.rand.nextUInt64(), thread.rand.nextUInt64());
+        continue;
+      }
+      child = insertLoc->second;
+    }
+    else {
+      child = new SearchNode(nextSeat, forceNonTerminal, createMutexIdxForNode(thread));
+      nodeMap.insert(insertLoc, std::make_pair(childHash, child));
+    }
+    break;
+  }
+  return child;
 }
 
 void Search::clearOldNNOutputs() {
@@ -595,6 +623,28 @@ void Search::transferOldNNOutputs(SearchThread& thread) {
   for(size_t i = 0; i < thread.oldNNOutputsToCleanUp.size(); i++)
     oldNNOutputsToCleanUp.push_back(thread.oldNNOutputsToCleanUp[i]);
   thread.oldNNOutputsToCleanUp.clear();
+}
+
+void Search::deleteAllOldOrAllNewTableNodesMulithreaded(bool old) {
+  int numAdditionalThreads = numAdditionalThreadsToUseForTasks();
+  testAssert(numAdditionalThreads >= 0);
+  std::function<void(int)> g = [&](int threadIdx) {
+    size_t idx0 = (size_t)((uint64_t)(threadIdx) * nodeTable->entries.size() / (numAdditionalThreads + 1));
+    size_t idx1 = (size_t)((uint64_t)(threadIdx + 1) * nodeTable->entries.size() / (numAdditionalThreads + 1));
+    for(size_t i = idx0; i < idx1; i++) {
+      std::map<Hash128, SearchNode*>& nodeMap = nodeTable->entries[i];
+      for(auto it = nodeMap.cbegin(); it != nodeMap.cend();) {
+        SearchNode* node = it->second;
+        if(old == (node->nodeAge.load(std::memory_order_acquire) < searchNodeAge)) {
+          delete node;
+          it = nodeMap.erase(it);
+        }
+        else
+          ++it;
+      }
+    }
+  };
+  performTaskWithThreads(&g, 0x3FFFffff);
 }
 
 void Search::deleteAllTableNodesMulithreaded() {

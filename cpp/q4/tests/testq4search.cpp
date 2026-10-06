@@ -626,27 +626,84 @@ void testT25Threads(NNEvaluator* nnEval, Logger& logger) {
 void testT26TreeReuse(NNEvaluator* nnEval, Logger& logger) {
   cout << "Running T26 Tree reuse tests..." << endl;
 
+  cout << "T26 entry liveNodeCount: " << Q4S::SearchNode::liveNodeCount.load() << endl;
+  testAssert(Q4S::SearchNode::liveNodeCount.load() == 0);
+
   Q4Rules rules;
   Q4PlayState state(rules);
 
   SearchParams params = createTestSearchParams(200, 1);
-  Q4S::Search search(params, nnEval, &logger, "t26");
-  search.setPosition(state);
-  search.runWholeSearch();
+  {
+    std::unique_ptr<Q4S::Search> search(new Q4S::Search(params, nnEval, &logger, "t26"));
+    search->setPosition(state);
+    search->runWholeSearch();
 
-  std::vector<Q4S::AnalysisData> analysis;
-  search.getAnalysisData(analysis);
-  testAssert(!analysis.empty());
+    std::vector<Q4S::SearchNode*> reachableNodes = search->enumerateTreePostOrder();
+    int64_t liveAfterSearch = Q4S::SearchNode::liveNodeCount.load();
+    cout << "T26: Live nodes after runWholeSearch: " << liveAfterSearch
+         << ", reachable nodes: " << reachableNodes.size() << endl;
+    testAssert(liveAfterSearch == (int64_t)reachableNodes.size());
 
-  // Find the child move with the most visits
-  int bestMove = analysis[0].move;
-  int64_t childVisits = analysis[0].numVisits;
+    std::vector<Q4S::AnalysisData> analysis;
+    search->getAnalysisData(analysis);
+    testAssert(!analysis.empty());
 
-  // Make move and check new root visits
-  bool ok = search.makeMove(bestMove);
-  testAssert(ok);
-  int64_t newRootVisits = search.getRootVisits();
-  testAssert(newRootVisits == childVisits);
+    // Find the child move with the most visits
+    int bestMove = analysis[0].move;
+    int64_t childVisits = analysis[0].numVisits;
+
+    // Make move and check new root visits
+    bool ok = search->makeMove(bestMove);
+    testAssert(ok);
+    int64_t newRootVisits = search->getRootVisits();
+    testAssert(newRootVisits == childVisits);
+
+    std::vector<Q4S::SearchNode*> newReachableNodes = search->enumerateTreePostOrder();
+    int64_t liveAfterMove = Q4S::SearchNode::liveNodeCount.load();
+    cout << "T26: Live nodes after makeMove: " << liveAfterMove
+         << ", new reachable nodes: " << newReachableNodes.size() << endl;
+    testAssert(liveAfterMove == (int64_t)newReachableNodes.size());
+
+    // Test clearSearch()
+    search->clearSearch();
+    int64_t liveAfterClear = Q4S::SearchNode::liveNodeCount.load();
+    cout << "T26: Live nodes after clearSearch(): " << liveAfterClear << endl;
+    testAssert(liveAfterClear == 0);
+
+    // Run another search to allocate nodes, then destroy Search
+    search->setPosition(state);
+    search->runWholeSearch();
+    testAssert(Q4S::SearchNode::liveNodeCount.load() > 0);
+  }
+  // After destroying the Search, live count must be 0
+  int64_t liveAfterDestroy = Q4S::SearchNode::liveNodeCount.load();
+  cout << "T26: Live nodes after destroying Search: " << liveAfterDestroy << endl;
+  testAssert(liveAfterDestroy == 0);
+
+  // 30 consecutive searches of 1,000 visits on different positions with one Search object
+  {
+    SearchParams searchParams1000 = createTestSearchParams(1000, 1);
+    Q4S::Search search30(searchParams1000, nnEval, &logger, "t26_30");
+    Rand rand("testT26TreeReuse_30_searches");
+    for(int iter = 0; iter < 30; iter++) {
+      Q4PlayState randState(rules);
+      int numPlies = rand.nextInt(0, 10);
+      for(int p = 0; p < numPlies; p++) {
+        std::vector<int> legals;
+        randState.board.getLegalActions(randState.board.toMove, legals);
+        if(legals.empty() || randState.isFinished)
+          break;
+        int act = legals[rand.nextInt(0, (int)legals.size() - 1)];
+        randState.playAssumeLegal(act);
+      }
+      search30.setPosition(randState);
+      search30.runWholeSearch();
+      search30.clearSearch();
+      int64_t live = Q4S::SearchNode::liveNodeCount.load();
+      testAssert(live == 0);
+    }
+  }
+  testAssert(Q4S::SearchNode::liveNodeCount.load() == 0);
 
   cout << "T26 Tree reuse passed!" << endl;
 }
