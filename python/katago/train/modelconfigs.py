@@ -51,6 +51,10 @@ def is_quoridor(config: ModelConfig) -> bool:
     # config is an old/test Go config, not necessarily Quoridor.
     return config.get("game") == "quoridor"
 
+def is_quoridor4(config: ModelConfig) -> bool:
+    # Quoridor Four-at-a-Table (Q4), docs/q4/Q4IO.md.
+    return config.get("game") == "quoridor4"
+
 # Quoridor I/O versions (docs/QuoridorIOv2.md; QuoridorNN in cpp/neuralnet/quoridornn.h): 1 = KataQuoridor 0.1.0
 # nets, 2 = I/O v2 (legal-wall planes, plies-until-draw and komi inputs; utility-score, lead and remaining-plies heads),
 # 3 = I/O v3 = v2 + the repetition inputs (docs/QuoridorIOv3.md; same heads as v2).
@@ -59,6 +63,22 @@ QUORIDOR_TRAINING_IO_VERSION = 3
 QUORIDOR_NUM_BIN_INPUT_FEATURES = {1: 17, 2: 19, 3: 21}
 QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17, 3: 19}
 
+# Q4 I/O versions (docs/q4/Q4IO.md; constants mirrored in cpp/q4/nn/q4nnconstants.h, checked by test_q4_model.py).
+# The model file's option D is Q4_IO_VERSION_BASE + the Q4 I/O version.
+Q4_TRAINING_IO_VERSION = 1
+Q4_IO_VERSION_BASE = 100
+Q4_NUM_BIN_INPUT_FEATURES = {1: 27}
+Q4_NUM_GLOBAL_INPUT_FEATURES = {1: 28}
+Q4_NUM_VALUE_LOGITS = 5
+Q4_NUM_MISC = 6
+Q4_NUM_OWNERSHIP_CHANNELS = 1
+
+def get_q4_io_version(config: ModelConfig) -> int:
+    assert is_quoridor4(config)
+    io_version = config.get("q4_io_version", 1)
+    assert io_version in Q4_NUM_BIN_INPUT_FEATURES, f"unknown q4_io_version {io_version}"
+    return io_version
+
 def get_quoridor_io_version(config: ModelConfig) -> int:
     assert is_quoridor(config)
     io_version = config.get("quoridor_io_version", 1)
@@ -66,6 +86,8 @@ def get_quoridor_io_version(config: ModelConfig) -> int:
     return io_version
 
 def get_num_bin_input_features(config: ModelConfig):
+    if is_quoridor4(config):
+        return Q4_NUM_BIN_INPUT_FEATURES[get_q4_io_version(config)]
     if is_quoridor(config):
         return QUORIDOR_NUM_BIN_INPUT_FEATURES[get_quoridor_io_version(config)]
     version = get_version(config)
@@ -75,6 +97,8 @@ def get_num_bin_input_features(config: ModelConfig):
         assert(False)
 
 def get_num_global_input_features(config: ModelConfig):
+    if is_quoridor4(config):
+        return Q4_NUM_GLOBAL_INPUT_FEATURES[get_q4_io_version(config)]
     if is_quoridor(config):
         return QUORIDOR_NUM_GLOBAL_INPUT_FEATURES[get_quoridor_io_version(config)]
     version = get_version(config)
@@ -1948,7 +1972,40 @@ tf3_b5c256_quoridor_v3 = dict(tf3_b5c256_quoridor, quoridor_io_version=3)
 b2c64_quoridor_v3 = dict(b2c64_quoridor, quoridor_io_version=3)
 
 
+# Quoridor Four-at-a-Table (Q4) presets. The trunks are the Duel presets' trunks; only the game, the board size and
+# the heads (Q4PolicyHead: 2 variants x 3 planes, Q4ValueHead: 5 value logits, 6 misc, trajectories) differ.
+b1c32_q4 = {  # tests only
+    "game": "quoridor4",
+    "q4_io_version": 1,
+    "version": 17,
+    "norm_kind": "fixup",
+    "bnorm_epsilon": 1e-4,
+    "bnorm_running_avg_momentum": 0.001,
+    "initial_conv_1x1": False,
+    "gamma_weight_decay_center_1": True,
+    "trunk_num_channels": 32,
+    "mid_num_channels": 16,
+    "gpool_num_channels": 8,
+    "block_kind": [["block1", "bottlenest2"]],
+    "p1_num_channels": 16,
+    "g1_num_channels": 16,
+    "v1_num_channels": 16,
+    "v2_size": 32,
+    "num_policy_outputs": 6,
+    "num_value_outputs": 5,
+    "pos_len": 11,
+}
+b2c64_q4 = dict(
+    b2c64_quoridor, game="quoridor4", q4_io_version=1, pos_len=11, num_policy_outputs=6, num_value_outputs=5)
+tf2_b4c192_q4 = dict(
+    tf2_b4c192_quoridor, game="quoridor4", q4_io_version=1, pos_len=11, num_policy_outputs=6, num_value_outputs=5)
+
 base_config_of_name = {
+    # QUORIDOR FOUR-AT-A-TABLE MODELS =============================================
+    "b1c32_q4": b1c32_q4,
+    "b2c64_q4": b2c64_q4,
+    "tf2_b4c192_q4": tf2_b4c192_q4,
+
     # QUORIDOR MODELS =============================================================
     "tf2_b4c192_quoridor_v3": tf2_b4c192_quoridor_v3,
     "tf3_b5c256_quoridor_v3": tf3_b5c256_quoridor_v3,

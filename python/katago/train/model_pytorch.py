@@ -2700,6 +2700,75 @@ class TransformerFFNBlock(torch.nn.Module):
         return result
 
 
+class Q4PolicyHead(torch.nn.Module):
+    def __init__(self, c_in, c_p1, c_g1, config, activation):
+        super(Q4PolicyHead, self).__init__()
+        self.config = config
+        self.activation = activation
+        self.num_policy_outputs = 6  # 2 channels (search policy, style policy) x 3 planes (pawn, V-wall, H-wall)
+
+        self.conv1p = torch.nn.Conv2d(c_in, c_p1, kernel_size=1, padding="same", bias=False)
+        self.conv1g = torch.nn.Conv2d(c_in, c_g1, kernel_size=1, padding="same", bias=False)
+
+        self.biasg = BiasMask(
+            c_g1,
+            config=config,
+            is_after_batchnorm=True,
+        )
+        self.actg = act(self.activation)
+        self.gpool = KataGPool()
+
+        self.linear_g = torch.nn.Linear(3 * c_g1, c_p1, bias=False)
+
+        self.bias2 = BiasMask(
+            c_p1,
+            config=config,
+            is_after_batchnorm=True,
+        )
+        self.act2 = act(activation)
+        self.conv2p = torch.nn.Conv2d(c_p1, self.num_policy_outputs, kernel_size=1, padding="same", bias=False)
+
+    def initialize(self):
+        p_scale = 0.8
+        g_scale = 0.6
+        scale_output = 0.3
+        init_weights(self.conv1p.weight, self.activation, scale=p_scale)
+        init_weights(self.conv1g.weight, self.activation, scale=1.0)
+        init_weights(self.linear_g.weight, self.activation, scale=g_scale)
+        init_weights(self.conv2p.weight, "identity", scale=scale_output)
+
+    def add_reg_dict(self, reg_dict: Dict[str, List]):
+        reg_dict["output"].append(self.conv1p.weight)
+        reg_dict["output"].append(self.conv1g.weight)
+        reg_dict["output"].append(self.linear_g.weight)
+        reg_dict["output"].append(self.conv2p.weight)
+        self.biasg.add_reg_dict(reg_dict)
+        self.bias2.add_reg_dict(reg_dict)
+
+    def set_brenorm_params(self, renorm_avg_momentum: float, rmax: float, dmax: float):
+        pass
+
+    def add_brenorm_clippage(self, upper_rclippage, lower_rclippage, dclippage):
+        pass
+
+    def forward(self, x, mask, mask_sum_hw, mask_sum: float, extra_outputs: Optional[ExtraOutputs] = None):
+        outp1 = self.conv1p(x)
+        outg1 = self.conv1g(x)
+        outg1 = self.biasg(outg1, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
+        outg1 = self.actg(outg1)
+        outpooled = self.gpool(outg1, mask=mask, mask_sum_hw=mask_sum_hw).squeeze(-1).squeeze(-1)
+        outg_projected = self.linear_g(outpooled).unsqueeze(-1).unsqueeze(-1)
+        out2 = outp1 + outg_projected
+        out2 = self.bias2(out2, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
+        out2 = self.act2(out2)
+        out_policy = self.conv2p(out2)
+        if extra_outputs is not None:
+            extra_outputs.report("policy_head_conv2p", out_policy)
+        batch_size = x.shape[0]
+        out_policy = out_policy.view(batch_size, 2, 3, 11, 11)
+        return out_policy
+
+
 class PolicyHead(torch.nn.Module):
     def __init__(self, c_in, c_p1, c_g1, config, activation):
         super(PolicyHead, self).__init__()
@@ -2997,6 +3066,108 @@ class ValueHead(torch.nn.Module):
             out_seki,
             out_scorebelief_logprobs,
         )
+
+
+class Q4ValueHead(torch.nn.Module):
+    def __init__(self, c_in, c_v1, c_v2, config, activation, pos_len):
+        super(Q4ValueHead, self).__init__()
+        self.c_in = c_in
+        self.c_v1 = c_v1
+        self.c_v2 = c_v2
+        self.config = config
+        self.activation = activation
+        self.pos_len = pos_len
+        self.num_value_outputs = 5
+
+        self.conv1 = torch.nn.Conv2d(c_in, c_v1, kernel_size=1, padding="same", bias=False)
+        self.bias1 = BiasMask(
+            c_v1,
+            config=config,
+            is_after_batchnorm=True,
+        )
+        self.act1 = act(activation)
+        self.gpool = KataValueHeadGPool()
+
+        self.linear2 = torch.nn.Linear(3 * c_v1, c_v2, bias=True)
+        self.act2 = act(activation)
+
+        # 1. Main Game Outcome (5 logits: relative seats 0, 1, 2, 3, draw)
+        self.linear_value = torch.nn.Linear(c_v2, 5, bias=True)
+
+        # 2. Misc values (6 scalars: plies/100, walls-only dist slots 0..3 / 32, shortterm error)
+        self.linear_misc = torch.nn.Linear(c_v2, 6, bias=True)
+
+        # 3. My pawn's trajectory (1 x 11 x 11): exported, it is the ownership slot of the model file.
+        self.conv_trajectory = torch.nn.Conv2d(c_v1, 1, kernel_size=1, padding="same", bias=False)
+
+        # 4. Training-only spatial heads (docs/q4/Q4IO.md §5.3), not exported, all in relative seat order:
+        #    - the cells each seat's pawn visits from this row to the end of the game (4 planes);
+        #    - the walls placed from this row to the end, channel 2*seat + orientation (0 = vertical,
+        #      1 = horizontal), on the anchor grid (8 planes).
+        self.conv_all_trajectories = torch.nn.Conv2d(c_v1, 4, kernel_size=1, padding="same", bias=False)
+        self.conv_wall_placements = torch.nn.Conv2d(c_v1, 8, kernel_size=1, padding="same", bias=False)
+
+    def initialize(self):
+        bias_scale = 0.2
+        init_weights(self.conv1.weight, self.activation, scale=1.0)
+        init_weights(self.linear2.weight, self.activation, scale=1.0)
+        init_weights(self.linear2.bias, self.activation, scale=bias_scale, fan_tensor=self.linear2.weight)
+
+        init_weights(self.linear_value.weight, "identity", scale=1.0)
+        init_weights(self.linear_value.bias, "identity", scale=bias_scale, fan_tensor=self.linear_value.weight)
+
+        init_weights(self.linear_misc.weight, "identity", scale=1.0)
+        init_weights(self.linear_misc.bias, "identity", scale=bias_scale, fan_tensor=self.linear_misc.weight)
+
+        init_weights(self.conv_trajectory.weight, "identity", scale=0.5)
+        init_weights(self.conv_all_trajectories.weight, "identity", scale=0.5)
+        init_weights(self.conv_wall_placements.weight, "identity", scale=0.5)
+
+    def add_reg_dict(self, reg_dict: Dict[str, List]):
+        reg_dict["output"].append(self.conv1.weight)
+        reg_dict["output"].append(self.linear2.weight)
+        reg_dict["output_noreg"].append(self.linear2.bias)
+
+        reg_dict["output"].append(self.linear_value.weight)
+        reg_dict["output_noreg"].append(self.linear_value.bias)
+
+        reg_dict["output"].append(self.linear_misc.weight)
+        reg_dict["output_noreg"].append(self.linear_misc.bias)
+
+        reg_dict["output"].append(self.conv_trajectory.weight)
+        reg_dict["output"].append(self.conv_all_trajectories.weight)
+        reg_dict["output"].append(self.conv_wall_placements.weight)
+        self.bias1.add_reg_dict(reg_dict)
+
+    def set_brenorm_params(self, renorm_avg_momentum: float, rmax: float, dmax: float):
+        pass
+
+    def add_brenorm_clippage(self, upper_rclippage, lower_rclippage, dclippage):
+        pass
+
+    def forward(self, x, mask, mask_sum_hw, mask_sum: float, input_global, extra_outputs: Optional[ExtraOutputs] = None):
+        outv1 = x
+        outv1 = self.conv1(outv1)
+        outv1 = self.bias1(outv1, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
+        outv1 = self.act1(outv1)
+
+        outpooled = self.gpool(outv1, mask=mask, mask_sum_hw=mask_sum_hw).squeeze(-1).squeeze(-1)
+
+        outv2 = self.linear2(outpooled)
+        outv2 = self.act2(outv2)
+
+        out_value = self.linear_value(outv2)
+        out_misc = self.linear_misc(outv2)
+        out_trajectory = self.conv_trajectory(outv1)
+        out_all_trajectories = self.conv_all_trajectories(outv1)
+        out_wall_placements = self.conv_wall_placements(outv1)
+
+        if extra_outputs is not None:
+            extra_outputs.report("value_head_v1", outv1)
+            extra_outputs.report("value_head_pooled", outpooled)
+            extra_outputs.report("value_head_v2", outv2)
+
+        return out_value, out_misc, out_trajectory, out_all_trajectories, out_wall_placements
 
 
 class QuoridorValueHead(torch.nn.Module):
@@ -3358,7 +3529,7 @@ class Model(torch.nn.Module):
             self.variance_time_multiplier = 40.0
             self.shortterm_value_error_multiplier = 0.25
             self.shortterm_score_error_multiplier = 150.0
-        if modelconfigs.is_quoridor(config):
+        if modelconfigs.is_quoridor(config) or modelconfigs.is_quoridor4(config):
             # Quoridor post-processing multipliers, written into the v17 model header by the exporter and
             # applied identically by nneval.cpp:
             # - scoremean / lead = 1: whiteScoreMean and whiteLead are in moves, as the heads are trained (I/O v2:
@@ -3814,14 +3985,23 @@ class Model(torch.nn.Module):
             self.norm_trunkfinal = NormMask(self.c_trunk, self.config, fixup_use_gamma=False, is_last_batchnorm=True)
         self.act_trunkfinal = act(self.activation)
 
-        self.policy_head = PolicyHead(
+        self.policy_head = (Q4PolicyHead if modelconfigs.is_quoridor4(self.config) else PolicyHead)(
             self.c_trunk,
             self.c_p1,
             self.c_g1,
             self.config,
             self.activation,
         )
-        if modelconfigs.is_quoridor(self.config):
+        if modelconfigs.is_quoridor4(self.config):
+            self.value_head = Q4ValueHead(
+                self.c_trunk,
+                self.c_v1,
+                self.c_v2,
+                self.config,
+                self.activation,
+                self.pos_len,
+            )
+        elif modelconfigs.is_quoridor(self.config):
             self.value_head = QuoridorValueHead(
                 self.c_trunk,
                 self.c_v1,
@@ -3841,17 +4021,27 @@ class Model(torch.nn.Module):
                 self.activation,
                 self.pos_len,
             )
+
         if self.has_intermediate_head:
             self.norm_intermediate_trunkfinal = NormMask(self.c_trunk, self.config, fixup_use_gamma=False, is_last_batchnorm=True)
             self.act_intermediate_trunkfinal = act(self.activation)
-            self.intermediate_policy_head = PolicyHead(
+            self.intermediate_policy_head = (Q4PolicyHead if modelconfigs.is_quoridor4(self.config) else PolicyHead)(
                 self.c_trunk,
                 self.c_p1,
                 self.c_g1,
                 self.config,
                 self.activation,
             )
-            if modelconfigs.is_quoridor(self.config):
+            if modelconfigs.is_quoridor4(self.config):
+                self.intermediate_value_head = Q4ValueHead(
+                    self.c_trunk,
+                    self.c_v1,
+                    self.c_v2,
+                    self.config,
+                    self.activation,
+                    self.pos_len,
+                )
+            elif modelconfigs.is_quoridor(self.config):
                 self.intermediate_value_head = QuoridorValueHead(
                     self.c_trunk,
                     self.c_v1,
@@ -4234,7 +4424,7 @@ class Model(torch.nn.Module):
                     mask_sum=mask_sum_fp32,
                     extra_outputs=extra_outputs
                 )
-                if modelconfigs.is_quoridor(self.config):
+                if modelconfigs.is_quoridor(self.config) or modelconfigs.is_quoridor4(self.config):
                     iout_quoridor_value = self.intermediate_value_head(
                         iout_fp32,
                         mask=mask_fp32,
@@ -4356,7 +4546,7 @@ class Model(torch.nn.Module):
                 mask_sum=mask_sum_fp32,
                 extra_outputs=extra_outputs
             )
-            if modelconfigs.is_quoridor(self.config):
+            if modelconfigs.is_quoridor(self.config) or modelconfigs.is_quoridor4(self.config):
                 out_quoridor_value = self.value_head(
                     out,
                     mask=mask_fp32,
@@ -4384,7 +4574,7 @@ class Model(torch.nn.Module):
                     extra_outputs=extra_outputs
                 )
 
-        if modelconfigs.is_quoridor(self.config):
+        if modelconfigs.is_quoridor(self.config) or modelconfigs.is_quoridor4(self.config):
             # (policy,) + QuoridorValueHead's outputs: value, td_value, variance_time, utility_score, misc,
             # trajectory, wall_graph, lead, remaining_turns.
             if self.has_intermediate_head:
@@ -4464,6 +4654,7 @@ class Model(torch.nn.Module):
         # compiled as one graph, as before the upstream merge.
         return (
             not modelconfigs.is_quoridor(self.config)
+            and not modelconfigs.is_quoridor4(self.config)
             and all(bk[1] in _TRANSFORMER_SEQ_LAYOUT_KINDS for bk in self.block_kind)
             and not self.has_intermediate_head
             and not self.use_trunk_channel_gate
@@ -4568,7 +4759,7 @@ class Model(torch.nn.Module):
         return tuple(self.float32ify_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def float32ify_single_heads_output(self, outputs):
-        if modelconfigs.is_quoridor(self.config):
+        if modelconfigs.is_quoridor(self.config) or modelconfigs.is_quoridor4(self.config):
             return tuple(out.to(torch.float32) for out in outputs)
         (
             out_policy,
@@ -4597,6 +4788,23 @@ class Model(torch.nn.Module):
         return tuple(self.postprocess_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def postprocess_single_heads_output(self, outputs):
+        if modelconfigs.is_quoridor4(self.config):
+            (
+                out_policy,
+                out_value,
+                out_misc,
+                out_trajectory,
+                out_all_trajectories,
+                out_wall_placements,
+            ) = outputs
+            return (
+                out_policy,
+                out_value,
+                out_misc,
+                out_trajectory,
+                out_all_trajectories,
+                out_wall_placements,
+            )
         if modelconfigs.is_quoridor(self.config):
             (
                 out_policy,

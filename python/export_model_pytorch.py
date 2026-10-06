@@ -363,7 +363,7 @@ def main(args):
             raise Exception(f"Unknown model config name: {export_random_initialized_model}")
         model_config = modelconfigs.config_of_name[export_random_initialized_model]
         logging.info(f"Exporting freshly random-initialized model with config: {export_random_initialized_model}")
-        pos_len = 9 if modelconfigs.is_quoridor(model_config) else 19
+        pos_len = 11 if modelconfigs.is_quoridor4(model_config) else (9 if modelconfigs.is_quoridor(model_config) else 19)
         model = Model(model_config, pos_len=pos_len)
         model.initialize()
         model.to("cpu")
@@ -424,7 +424,7 @@ def main(args):
     def writestr(s):
         f.write(s.encode(encoding="ascii",errors="backslashreplace"))
 
-    if modelconfigs.is_quoridor(model_config):
+    if modelconfigs.is_quoridor(model_config) or modelconfigs.is_quoridor4(model_config):
         # Quoridor models are always KataGo architecture version 17 (see docs/
         # KataQuoridor_Review_and_Roadmap.md §4.2): the Quoridor I/O version is a separate number,
         # written below as model option D.
@@ -515,8 +515,12 @@ def main(args):
         else:
             writeln(0)
         # Model option D: Quoridor I/O version (0 = not a Quoridor network, i.e. a Go network; else the config's
-        # quoridor_io_version, 1, 2 or 3). Options E-H are unused spare slots for future model options.
-        writeln(modelconfigs.get_quoridor_io_version(model_config) if modelconfigs.is_quoridor(model_config) else 0)
+        # quoridor_io_version, 1, 2 or 3; Q4 four-player networks: 100 + q4_io_version, docs/q4/Q4IO.md).
+        # Options E-H are unused spare slots for future model options.
+        if modelconfigs.is_quoridor4(model_config):
+            writeln(modelconfigs.Q4_IO_VERSION_BASE + modelconfigs.get_q4_io_version(model_config))
+        else:
+            writeln(modelconfigs.get_quoridor_io_version(model_config) if modelconfigs.is_quoridor(model_config) else 0)
         writeln(0)
         writeln(0)
         writeln(0)
@@ -877,7 +881,10 @@ def main(args):
     def write_policy_head(name,policyhead):
         writeln(name)
         if version >= 17:
-            if modelconfigs.is_quoridor(model_config):
+            if modelconfigs.is_quoridor4(model_config):
+                assert policyhead.conv2p.weight.shape[0] == 6
+                writeln(2) # search policy and style policy, each with 3 planes (see policy option A below)
+            elif modelconfigs.is_quoridor(model_config):
                 assert policyhead.conv2p.weight.shape[0] == 18
                 writeln(2) # regular and (short-term) optimistic policy, each with 3 planes (see policy option A below)
             else:
@@ -888,7 +895,7 @@ def main(args):
                     writeln(4) # we're going to write 4 policy output channels - regular, optimistic, q winloss, q score (see below)
             # Policy option A: numPolicyPlanes, packed variant-major (channel = variant*numPolicyPlanes
             # + plane). 3 for Quoridor (pawn, vertical wall, horizontal wall); 0 (meaning 1) for Go.
-            writeln(3 if modelconfigs.is_quoridor(model_config) else 0)
+            writeln(3 if modelconfigs.is_quoridor(model_config) or modelconfigs.is_quoridor4(model_config) else 0)
             # Options B and C are unused spare slots for future policy-head options.
             writeln(0)
             writeln(0)
@@ -906,7 +913,18 @@ def main(args):
         # [policy, opp reply, soft, soft opp reply, long-term-optimistic, short-term-optimistic] x
         # 3 planes each; channels [0,1,2] are target 0 (policy) and [15,16,17] are target 5
         # (short-term optimistic), matching how upstream Go picks channels 0 and 5.
-        if modelconfigs.is_quoridor(model_config):
+        if modelconfigs.is_quoridor4(model_config):
+            # Q4: Q4PolicyHead's 6 outputs are already [search policy, style policy] x 3 planes (variant-major).
+            assert policyhead.conv2p.weight.shape[0] == 6
+            write_conv_weight(name+".conv2p", policyhead.conv2p.weight)
+            c_g1 = policyhead.conv1g.weight.shape[0]
+            c_p1 = int(policyhead.linear_g.weight.shape[0])
+            # Zero-weight pass layers, as for Duel: there is no pass move.
+            write_matmul(name+".linear_pass", torch.zeros((c_p1, 3 * c_g1), dtype=torch.float32))
+            write_matbias(name+".linear_pass_bias", torch.zeros((c_p1,), dtype=torch.float32))
+            write_activation(name+".act_pass", torch.nn.Identity())
+            write_matmul(name+".linear_pass2", torch.zeros((2, c_p1), dtype=torch.float32))
+        elif modelconfigs.is_quoridor(model_config):
             assert policyhead.conv2p.weight.shape[0] == 18
             write_conv_weight(
                 name+".conv2p",
@@ -982,6 +1000,19 @@ def main(args):
         write_matmul(name+".linear2", valuehead.linear2.weight)
         write_matbias(name+".bias2", valuehead.linear2.bias)
         write_activation(name+".act2", valuehead.act2)
+
+        if modelconfigs.is_quoridor4(model_config):
+            # Q4: 5 value logits (me, next, across, previous, draw), 6 misc values, and my pawn's trajectory in the
+            # ownership slot. Q4ValueHead's training-only heads (all-seat trajectories, wall placements) are not exported.
+            assert valuehead.linear_value.weight.shape[0] == modelconfigs.Q4_NUM_VALUE_LOGITS
+            assert valuehead.linear_misc.weight.shape[0] == modelconfigs.Q4_NUM_MISC
+            assert valuehead.conv_trajectory.weight.shape[0] == modelconfigs.Q4_NUM_OWNERSHIP_CHANNELS
+            write_matmul(name+".linear_valuehead", valuehead.linear_value.weight)
+            write_matbias(name+".bias_valuehead", valuehead.linear_value.bias)
+            write_matmul(name+".linear_miscvaluehead", valuehead.linear_misc.weight)
+            write_matbias(name+".bias_miscvaluehead", valuehead.linear_misc.bias)
+            write_conv_weight(name+".conv_ownership", valuehead.conv_trajectory.weight)
+            return
 
         if modelconfigs.is_quoridor(model_config):
             # v17 value channels: [win, loss, noResult]. noResult gets zero weights and bias -30
