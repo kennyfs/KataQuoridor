@@ -232,11 +232,9 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
     weightSum += weight;
   }
 
-  double sumVal = 0.0;
-  for(int k = 0; k < 5; k++) sumVal += valueSum[k];
   double valueAvg[5];
   for(int k = 0; k < 5; k++)
-    valueAvg[k] = (sumVal > 0.0) ? (valueSum[k] / sumVal) : (valueSum[k] / weightSum);
+    valueAvg[k] = valueSum[k] / weightSum;
 
   double utilityAvg[4];
   double utilitySqAvg[4];

@@ -65,6 +65,22 @@ double Search::getExploreSelectionValueInverse(
   return childWeight;
 }
 
+static void maybeApplyWideRootNoise(
+  double& childUtility,
+  float& nnPolicyProb,
+  const SearchParams& searchParams,
+  SearchThread* thread,
+  const SearchNode& parent
+) {
+  (void)parent;
+  // For very large wideRootNoise, go ahead and also smooth out the policy
+  nnPolicyProb = (float)pow(nnPolicyProb, 1.0 / (4.0 * searchParams.wideRootNoise + 1.0));
+  if(thread->rand.nextBool(0.5)) {
+    double bonus = searchParams.wideRootNoise * std::fabs(thread->rand.nextGaussian());
+    childUtility += bonus;
+  }
+}
+
 double Search::getExploreSelectionValueOfChild(
   const SearchNode& parent, const float* parentPolicyProbs, const SearchNode* child,
   int action,
@@ -130,17 +146,15 @@ double Search::getExploreSelectionValueOfChild(
         const SearchNode* c = childPointer.getIfAllocated();
         if(c == NULL)
           break;
-        if(childPointer.getActionRelaxed() != rootHintAction) {
-          int64_t cVisits = c->stats.visits.load(std::memory_order_acquire);
-          double cWeight = c->stats.weightSum.load(std::memory_order_acquire);
-          if(cVisits > 0 && cWeight > 0.0) {
-            double cAverageWeightPerVisit = cWeight / cVisits;
-            if(childVisits * averageWeightPerVisit < cVisits * cAverageWeightPerVisit * 0.75) {
-              return 1e20;
-            }
-          }
-        }
+        int64_t cEdgeVisits = childPointer.getEdgeVisits();
+        double cWeight = c->stats.getChildWeight(cEdgeVisits);
+        if(childWeight + averageWeightPerVisit < cWeight * 0.8)
+          return 1e20;
       }
+    }
+
+    if(searchParams.wideRootNoise > 0.0 && nnPolicyProb >= 0) {
+      maybeApplyWideRootNoise(childUtility, nnPolicyProb, searchParams, thread, parent);
     }
   }
 
@@ -166,6 +180,9 @@ double Search::getNewExploreSelectionValue(
       double estimatedRequiredVisits = requiredWeight * averageVisitsPerWeight;
       if(thread->upperBoundVisitsLeft < estimatedRequiredVisits)
         return FUTILE_VISITS_PRUNE_VALUE;
+    }
+    if(searchParams.wideRootNoise > 0.0) {
+      maybeApplyWideRootNoise(childUtility, nnPolicyProb, searchParams, thread, parent);
     }
   }
   return getExploreSelectionValue(exploreScaling, nnPolicyProb, childWeight, childUtility);
