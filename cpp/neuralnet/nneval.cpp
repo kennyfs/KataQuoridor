@@ -1,6 +1,7 @@
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/modelversion.h"
 #include "../neuralnet/quoridornn.h"
+#include "../q4/nn/q4rawsymmetry.h"
 #include "../core/test.h"
 
 #include <algorithm>
@@ -389,6 +390,15 @@ void NNEvaluator::clearStats() {
 void NNEvaluator::clearCache() {
   if(nnCacheTable != NULL)
     nnCacheTable->clear();
+}
+
+bool NNEvaluator::getCacheTableEntry(Hash128 nnHash, shared_ptr<NNOutput>& ret) {
+  if(nnCacheTable == NULL)
+    return false;
+  bool found = nnCacheTable->get(nnHash, ret);
+  if(found)
+    m_numCacheHits.fetch_add(1, std::memory_order_relaxed);
+  return found;
 }
 
 
@@ -970,15 +980,25 @@ void NNEvaluator::serve(
       // The backend may have scaled the net's activations down (ModelDesc::applyScale8ToReduceActivations, the GPU
       // backends do this); the client undoes it on all logits. Duel rows do this in the postprocessing of evaluate();
       // Q4 rows are returned raw, so it is done here, once, before they are cached.
-      if(isQ4 && postProcessParams.outputScaleMultiplier != 1.0f) {
-        const float scale = postProcessParams.outputScaleMultiplier;
+      if(isQ4) {
+        if(postProcessParams.outputScaleMultiplier != 1.0f) {
+          const float scale = postProcessParams.outputScaleMultiplier;
+          for(int row = 0; row < numRows; row++) {
+            Q4RawNNOutput* raw = outputBuf[row]->q4Raw.get();
+            testAssert(raw != NULL);
+            for(float& v : raw->policyLogits) v *= scale;
+            for(float& v : raw->valueLogits) v *= scale;
+            for(float& v : raw->miscValues) v *= scale;
+            for(float& v : raw->trajectoryLogits) v *= scale;
+          }
+        }
         for(int row = 0; row < numRows; row++) {
-          Q4RawNNOutput* raw = outputBuf[row]->q4Raw.get();
-          testAssert(raw != NULL);
-          for(float& v : raw->policyLogits) v *= scale;
-          for(float& v : raw->valueLogits) v *= scale;
-          for(float& v : raw->miscValues) v *= scale;
-          for(float& v : raw->trajectoryLogits) v *= scale;
+          int sym = resultBufs[row]->quoridorSymmetry;
+          if(sym != 0) {
+            Q4RawNNOutput* raw = outputBuf[row]->q4Raw.get();
+            testAssert(raw != NULL);
+            Q4RawSymmetry::unapplyInPlace(*raw, sym);
+          }
         }
       }
 
@@ -1597,7 +1617,8 @@ void NNEvaluator::evaluateQ4Raw(
   const float* rowGlobal,
   Hash128 nnHash,
   NNResultBuf& buf,
-  bool skipCache
+  bool skipCache,
+  int symmetry
 ) {
   testAssert(!isKilled);
   buf.hasResult = false;
@@ -1625,7 +1646,7 @@ void NNEvaluator::evaluateQ4Raw(
   buf.hasRowMeta = false;
   // The row has its symmetry applied by the caller; the backend always evaluates symmetry 0.
   buf.symmetry = 0;
-  buf.quoridorSymmetry = 0;
+  buf.quoridorSymmetry = symmetry;
   buf.policyOptimism = 0.0;
 
   unique_lock<std::mutex> lock(bufferMutex);

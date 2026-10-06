@@ -184,6 +184,9 @@ class NNEvaluator {
   // Clear all entires cached in the table
   void clearCache();
 
+  // Check if an entry is in the cache table. Returns true and sets ret on hit. Thread-safe.
+  bool getCacheTableEntry(Hash128 nnHash, std::shared_ptr<NNOutput>& ret);
+
   // Queue a position for the next neural net batch evaluation and wait for it. Upon evaluation, result
   // will be supplied in NNResultBuf& buf, the shared_ptr there can grabbed via std::move if desired.
   // logStream is for some error logging, can be NULL.
@@ -216,7 +219,8 @@ class NNEvaluator {
     const float* rowGlobal,
     Hash128 nnHash,
     NNResultBuf& buf,
-    bool skipCache
+    bool skipCache,
+    int symmetry = 0
   );
   std::shared_ptr<NNOutput>* averageMultipleSymmetries(
     const Board& board,
@@ -256,6 +260,8 @@ class NNEvaluator {
   int getDefaultSymmetry() const;
   void setDoRandomize(bool b);
   void setDefaultSymmetry(int s);
+
+  const ModelPostProcessParams& getPostProcessParams() const { return postProcessParams; }
 
   // Benchmark raw NN forward throughput, bypassing the query queue and search.
   // Spins up one thread per configured NN server thread, each with its own compute handle,

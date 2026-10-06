@@ -390,7 +390,7 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
           throw StringError("Game is already finished");
         NNResultBuf buf;
         Q4NN::Eval eval;
-        Q4NN::evaluate(*nnEval, buf, history, sym, false, eval);
+        Q4NN::evaluate(*nnEval, buf, history, sym, true, eval);
         std::vector<int> legalActions;
         history.currentBoard.getLegalActions(history.currentBoard.toMove, legalActions);
         respondSuccess(Q4NN::formatEval(eval, legalActions, 10));

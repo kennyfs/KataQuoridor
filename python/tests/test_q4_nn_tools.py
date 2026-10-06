@@ -38,7 +38,7 @@ def test_nn_cache_hits_and_misses_t18(model, kind):
         assert r["hit"] == r["expectedHit"], f"{r['scenario']}: hit={r['hit']}, expected {r['expectedHit']}"
     print(f"T18 ({kind}): {len(rows)} scenarios")
     # the scenarios of T18 are all there
-    for needed in ["same position, same symmetry hits", "same position, another symmetry misses",
+    for needed in ["same position, same symmetry hits", "same position, another symmetry hits",
                    "same board, ply count 8 instead of 0, misses", "other maxPlies misses",
                    "other repetitionDrawCount misses", "repetition rule off misses",
                    "transposition: other order hits", "same board and ply count, other repetition state, misses"]:
