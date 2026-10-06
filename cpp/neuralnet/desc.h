@@ -477,7 +477,7 @@ struct ValueHeadDesc {
 
   ValueHeadDesc();
   ~ValueHeadDesc();
-  ValueHeadDesc(std::istream& in, int modelVersion, bool binaryFloats);
+  ValueHeadDesc(std::istream& in, int modelVersion, bool binaryFloats, int quoridorIOVersion = 0);
   ValueHeadDesc(ValueHeadDesc&& other);
 
   ValueHeadDesc(const ValueHeadDesc&) = delete;

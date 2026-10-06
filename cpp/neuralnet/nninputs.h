@@ -9,6 +9,7 @@
 #include "../game/board.h"
 #include "../game/boardhistory.h"
 #include "../game/rules.h"
+#include "../q4/nn/q4nnconstants.h"
 
 namespace NNPos {
   constexpr int MAX_BOARD_LEN = Board::MAX_LEN;
@@ -117,6 +118,22 @@ namespace NNInputs {
   inline void fillScoring(const Board&, const Color*, bool, float*) {}
 }
 
+//Raw outputs of a Q4 (four-player) net, undecoded and not rotated back from the evaluated symmetry (docs/q4/Q4IO.md §6).
+struct Q4RawNNOutput {
+  float policyLogits[Q4NNConst::POLICY_SLOTS] = {}; //[variant][plane][y][x], variant-major
+  float valueLogits[Q4NNConst::NUM_VALUE_LOGITS] = {};
+  float miscValues[Q4NNConst::NUM_MISC] = {};
+  float trajectoryLogits[Q4NNConst::TRAJECTORY_SLOTS] = {};
+};
+
+struct NNOutput;
+//Backends call this for each row of a Q4 net: copies one row of their raw output buffers into output->q4Raw.
+//policyRow holds the 6 policy channels (variant*3 + plane) of that row, NHWC ([pos][channel]) or NCHW ([channel][pos]).
+void setQ4RawNNOutput(
+  NNOutput* output, const float* policyRow, bool policyIsNHWC,
+  const float* valueRow, const float* miscRow, const float* ownershipRow
+);
+
 struct NNOutput {
   Hash128 nnHash; //NNInputs - getHash
 
@@ -152,6 +169,9 @@ struct NNOutput {
 
   //If not NULL, then contains policy with dirichlet noise or any other noise adjustments for this node
   float* noisedPolicyProbs;
+
+  //Only set by Q4 evaluations (NNEvaluator::evaluateQ4Raw); all the fields above are unused then.
+  std::shared_ptr<Q4RawNNOutput> q4Raw;
 
   NNOutput(); //Does NOT initialize values
   NNOutput(const NNOutput& other);

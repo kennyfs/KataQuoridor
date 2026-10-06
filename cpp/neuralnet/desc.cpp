@@ -10,6 +10,7 @@
 #include "../neuralnet/sgfmetadata.h"
 #include "../neuralnet/nninterface.h"
 #include "../neuralnet/quoridornn.h"
+#include "../q4/nn/q4nnconstants.h"
 
 #include "../core/test.h"
 
@@ -2254,7 +2255,7 @@ void PolicyHeadDesc::releaseWeights() {
 
 ValueHeadDesc::ValueHeadDesc() : modelVersion(-1) {}
 
-ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats) {
+ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats, int quoridorIOVersion) {
   in >> name;
   modelVersion = vrsn;
 
@@ -2307,10 +2308,12 @@ ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats) {
     throw StringError(
       name +
       Global::strprintf(": v2Mul.outChannels (%d) != v3Mul.inChannels (%d)", v2Mul.outChannels, v3Mul.inChannels));
-  if(v3Mul.outChannels != 3)
-    throw StringError(name + Global::strprintf(": v3Mul.outChannels (%d) != 3", v3Mul.outChannels));
-  if(v3Bias.numChannels != 3)
-    throw StringError(name + Global::strprintf(": v3Bias.numChannels (%d) != 3", v3Bias.numChannels));
+  // Q4 nets have one logit per relative seat plus draw; everything else has win/loss/no-result.
+  const int numValueLogits = Q4NNConst::isQ4IOVersion(quoridorIOVersion) ? Q4NNConst::NUM_VALUE_LOGITS : 3;
+  if(v3Mul.outChannels != numValueLogits)
+    throw StringError(name + Global::strprintf(": v3Mul.outChannels (%d) != %d", v3Mul.outChannels, numValueLogits));
+  if(v3Bias.numChannels != numValueLogits)
+    throw StringError(name + Global::strprintf(": v3Bias.numChannels (%d) != %d", v3Bias.numChannels, numValueLogits));
 
   if(sv3Mul.inChannels != v2Mul.outChannels)
     throw StringError(
@@ -2602,12 +2605,26 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
       throw StringError(name + ": model failed to parse model option D (quoridorIOVersion)");
     if(quoridorIOVersion == 0)
       throw StringError(name + ": model option D (quoridorIOVersion) is 0: this is a Go network, not a KataQuoridor network");
-    if(quoridorIOVersion < 0 || quoridorIOVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION)
+    const bool isQ4 = Q4NNConst::isQ4IOVersion(quoridorIOVersion);
+    if(isQ4 && quoridorIOVersion != Q4NNConst::Q4_IO_VERSION_1)
+      throw StringError(
+        name + ": Q4 model option D (quoridorIOVersion) unsupported, you may need a newer KataQuoridor version, value was: " +
+        Global::intToString(quoridorIOVersion));
+    if(isQ4 && (numInputChannels != Q4NNConst::NUM_SPATIAL_CHANNELS || numInputGlobalChannels != Q4NNConst::NUM_GLOBAL_FEATURES))
+      throw StringError(
+        name + Global::strprintf(
+                 ": Q4 I/O version %d expects %d spatial and %d global input channels, model has %d and %d",
+                 quoridorIOVersion,
+                 Q4NNConst::NUM_SPATIAL_CHANNELS,
+                 Q4NNConst::NUM_GLOBAL_FEATURES,
+                 numInputChannels,
+                 numInputGlobalChannels));
+    if(!isQ4 && (quoridorIOVersion < 0 || quoridorIOVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION))
       throw StringError(
         name + ": model option D (quoridorIOVersion) unsupported, you may need a newer KataQuoridor version, value was: " +
         Global::intToString(quoridorIOVersion));
-    if(numInputChannels != QuoridorNN::numSpatialFeatures(quoridorIOVersion) ||
-       numInputGlobalChannels != QuoridorNN::numGlobalFeatures(quoridorIOVersion))
+    if(!isQ4 && (numInputChannels != QuoridorNN::numSpatialFeatures(quoridorIOVersion) ||
+                 numInputGlobalChannels != QuoridorNN::numGlobalFeatures(quoridorIOVersion)))
       throw StringError(
         name + Global::strprintf(
                  ": Quoridor I/O version %d expects %d spatial and %d global input channels, model has %d and %d",
@@ -2639,7 +2656,7 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
 
   trunk = TrunkDesc(in, modelVersion, binaryFloats, metaEncoderVersion);
   policyHead = PolicyHeadDesc(in, modelVersion, binaryFloats);
-  valueHead = ValueHeadDesc(in, modelVersion, binaryFloats);
+  valueHead = ValueHeadDesc(in, modelVersion, binaryFloats, quoridorIOVersion);
 
   numPolicyChannels = policyHead.policyOutChannels;
   numValueChannels = valueHead.v3Mul.outChannels;
@@ -2680,6 +2697,18 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
                ": trunk.trunkNumChannels (%d) != valueHead.v1Conv.inChannels (%d)",
                trunk.trunkNumChannels,
                valueHead.v1Conv.inChannels));
+
+  if(Q4NNConst::isQ4IOVersion(quoridorIOVersion)) {
+    // Q4 head layout (docs/q4/Q4IO.md §5): 2 policy variants x 3 planes, 5 value logits, 6 misc values, 1 trajectory plane.
+    if(policyHead.policyOutChannels != Q4NNConst::NUM_POLICY_VARIANTS)
+      throw StringError(name + Global::strprintf(": Q4 model expects %d policy variants, got %d", Q4NNConst::NUM_POLICY_VARIANTS, policyHead.policyOutChannels));
+    if(policyHead.numPolicyPlanes != Q4NNConst::NUM_POLICY_PLANES)
+      throw StringError(name + Global::strprintf(": Q4 model expects %d policy planes, got %d", Q4NNConst::NUM_POLICY_PLANES, policyHead.numPolicyPlanes));
+    if(numScoreValueChannels != Q4NNConst::NUM_MISC)
+      throw StringError(name + Global::strprintf(": Q4 model expects %d misc values, got %d", Q4NNConst::NUM_MISC, numScoreValueChannels));
+    if(numOwnershipChannels != Q4NNConst::NUM_OWNERSHIP_CHANNELS)
+      throw StringError(name + Global::strprintf(": Q4 model expects %d ownership channels, got %d", Q4NNConst::NUM_OWNERSHIP_CHANNELS, numOwnershipChannels));
+  }
 }
 
 ModelDesc::~ModelDesc() {}

@@ -34,12 +34,17 @@ NNResultBuf::~NNResultBuf() {
 
 //-------------------------------------------------------------------------------------
 
+// Side length of the board the loaded model works on: the 9 x 9 Duel board or the 11 x 11 Q4 board.
+static int modelBoardLen(int inputsVersion) {
+  return Q4NNConst::isQ4IOVersion(inputsVersion) ? Q4NNConst::POS_LEN : QuoridorNN::MODEL_LEN;
+}
+
 NNServerBuf::NNServerBuf(const NNEvaluator& nnEval, const LoadedModel* model)
   :inputBuffers(NULL)
 {
   int maxBatchSize = nnEval.getMaxBatchSize();
-  int modelXLen = QuoridorNN::MODEL_LEN;
-  int modelYLen = QuoridorNN::MODEL_LEN;
+  int modelXLen = modelBoardLen(nnEval.getInputsVersion());
+  int modelYLen = modelBoardLen(nnEval.getInputsVersion());
   if(model != NULL)
     inputBuffers = NeuralNet::createInputBuffers(model,maxBatchSize,modelXLen,modelYLen);
 }
@@ -145,13 +150,13 @@ NNEvaluator::NNEvaluator(
     internalModelName = desc.name;
     modelVersion = desc.modelVersion;
     inputsVersion = desc.quoridorIOVersion;
-    if(inputsVersion < 1 || inputsVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION)
+    if(inputsVersion < 1 || (inputsVersion > QuoridorNN::MAX_SUPPORTED_IO_VERSION && !Q4NNConst::isQ4IOVersion(inputsVersion)))
       throw StringError(
         "KataQuoridor: model " + modelFileName + " has unsupported Quoridor I/O version " +
         Global::intToString(inputsVersion) + " (model option D)");
     numInputMetaChannels = desc.numInputMetaChannels;
-    int modelXLen = QuoridorNN::MODEL_LEN;
-    int modelYLen = QuoridorNN::MODEL_LEN;
+    int modelXLen = modelBoardLen(inputsVersion);
+    int modelYLen = modelBoardLen(inputsVersion);
     computeContext = NeuralNet::createComputeContext(
       gpuIdxs,logger,modelXLen,modelYLen,
       homeDataDirOverride,
@@ -319,6 +324,10 @@ bool NNEvaluator::modelHasAnyNestedBottleneckBlocks() const {
 
 enabled_t NNEvaluator::getUsingFP16Mode() const {
   return usingFP16Mode;
+}
+
+bool NNEvaluator::getInputsUseNHWC() const {
+  return inputsUseNHWC;
 }
 
 bool NNEvaluator::supportsShorttermError() const {
@@ -490,6 +499,14 @@ void NNEvaluator::fillRowBufs(
   const MiscNNInputParams& nnInputParams,
   NNResultBuf& buf
 ) const {
+  if(Q4NNConst::isQ4IOVersion(inputsVersion)) {
+    // Q4 inputs come from Q4NN::fillRow (evaluateQ4Raw), which neuralnet/ cannot call. The only callers here are the
+    // warmup and the benchmark, which run neutral all-zero rows: the content does not matter for them.
+    buf.rowSpatialBuf.assign((size_t)Q4NNConst::NUM_SPATIAL_CHANNELS * Q4NNConst::POS_AREA, 0.0f);
+    buf.rowGlobalBuf.assign(Q4NNConst::NUM_GLOBAL_FEATURES, 0.0f);
+    buf.hasRowMeta = false;
+    return;
+  }
   const int modelXLen = QuoridorNN::MODEL_LEN;
   const int modelYLen = QuoridorNN::MODEL_LEN;
   const int rowSpatialLen = QuoridorNN::numSpatialFeatures(inputsVersion) * modelXLen * modelYLen;
@@ -546,7 +563,9 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
 
   // Empty board of the configured size, default rules/params. Outputs are discarded; we only want
   // the forward passes to trigger graph compilation for every batch size that will be seen.
-  Board board(nnXLen, nnYLen);
+  // (Q4 models: fillRowBufs ignores the board and builds neutral rows; the Duel board is a placeholder.)
+  const bool isQ4 = Q4NNConst::isQ4IOVersion(inputsVersion);
+  Board board(isQ4 ? QuoridorNN::MODEL_LEN : nnXLen, isQ4 ? QuoridorNN::MODEL_LEN : nnYLen);
   //Featurize the way this model expects (a no-op under Tromp-Taylorish rules, but robust if the
   //warmup rules ever change).
   BoardHistory history(
@@ -565,8 +584,8 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
   // SDPA) leniently, falling back to a custom kernel instead of failing hard. Restored when done.
   bool prevIsWarmup = NeuralNet::setIsWarmup(gpuHandle, true);
 
-  int modelXLen = QuoridorNN::MODEL_LEN;
-  int modelYLen = QuoridorNN::MODEL_LEN;
+  int modelXLen = modelBoardLen(inputsVersion);
+  int modelYLen = modelBoardLen(inputsVersion);
   InputBuffers* inputBuffers = NeuralNet::createInputBuffers(loadedModel, maxBatchSize, modelXLen, modelYLen);
 
   // Reusable per-row input; identical for every row since it's an empty board.
@@ -927,9 +946,12 @@ void NNEvaluator::serve(
         outputBuf.push_back(emptyOutput);
       }
 
+      // Q4 rows (evaluateQ4Raw) arrive with their symmetry already applied by Q4NN: the backend always gets
+      // symmetry 0 and the Duel symmetry handling below does not apply.
+      const bool isQ4 = Q4NNConst::isQ4IOVersion(inputsVersion);
       // Quoridor has only two symmetries (identity and x-mirror: no transpose, no y-flip - the
       // canonical row-flip for whose turn it is is already baked into QuoridorNN::fillRow).
-      for(int row = 0; row<numRows; row++) {
+      for(int row = 0; row<numRows && !isQ4; row++) {
         if(resultBufs[row]->symmetry == NNInputs::SYMMETRY_NOTSPECIFIED) {
           resultBufs[row]->symmetry = doRandomize ? rand.nextUInt(2) : (defaultSymmetry >= 0 ? (defaultSymmetry % 2) : 0);
         }
@@ -944,6 +966,21 @@ void NNEvaluator::serve(
 
       NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
       testAssert(outputBuf.size() == numRows);
+
+      // The backend may have scaled the net's activations down (ModelDesc::applyScale8ToReduceActivations, the GPU
+      // backends do this); the client undoes it on all logits. Duel rows do this in the postprocessing of evaluate();
+      // Q4 rows are returned raw, so it is done here, once, before they are cached.
+      if(isQ4 && postProcessParams.outputScaleMultiplier != 1.0f) {
+        const float scale = postProcessParams.outputScaleMultiplier;
+        for(int row = 0; row < numRows; row++) {
+          Q4RawNNOutput* raw = outputBuf[row]->q4Raw.get();
+          testAssert(raw != NULL);
+          for(float& v : raw->policyLogits) v *= scale;
+          for(float& v : raw->valueLogits) v *= scale;
+          for(float& v : raw->miscValues) v *= scale;
+          for(float& v : raw->trajectoryLogits) v *= scale;
+        }
+      }
 
       m_numRowsProcessed.fetch_add(numRows, std::memory_order_relaxed);
       m_numBatchesProcessed.fetch_add(1, std::memory_order_relaxed);
@@ -1109,6 +1146,11 @@ void NNEvaluator::evaluate(
 ) {
   testAssert(!isKilled);
   buf.hasResult = false;
+
+  if(Q4NNConst::isQ4IOVersion(inputsVersion))
+    throw StringError(
+      "KataQuoridor: model " + modelName + " is a Q4 (four-player) network (option D " + Global::intToString(inputsVersion) +
+      ") and cannot be evaluated on the Duel path; use the Q4 tools (q4qtp, q4tool)");
 
   if(board.x_size > nnXLen || board.y_size > nnYLen)
     throw StringError("NNEvaluator was configured with nnXLen = " + Global::intToString(nnXLen) +
@@ -1548,6 +1590,59 @@ void NNEvaluator::evaluate(
   if(nnCacheTable != NULL)
     nnCacheTable->set(buf.result);
 
+}
+
+void NNEvaluator::evaluateQ4Raw(
+  const float* rowSpatial,
+  const float* rowGlobal,
+  Hash128 nnHash,
+  NNResultBuf& buf,
+  bool skipCache
+) {
+  testAssert(!isKilled);
+  buf.hasResult = false;
+
+  if(!Q4NNConst::isQ4IOVersion(inputsVersion))
+    throw StringError(
+      "KataQuoridor: model " + modelName + " is not a Q4 (four-player) network (option D " + Global::intToString(inputsVersion) +
+      ", expected a value >= " + Global::intToString(Q4NNConst::Q4_IO_VERSION_BASE) + ") and cannot be evaluated on the Q4 path");
+  if(nnXLen != Q4NNConst::POS_LEN || nnYLen != Q4NNConst::POS_LEN)
+    throw StringError(
+      "NNEvaluator for a Q4 model must be created with nnXLen = nnYLen = " + Global::intToString(Q4NNConst::POS_LEN) +
+      ", got " + Global::intToString(nnXLen) + " x " + Global::intToString(nnYLen));
+
+  if(nnCacheTable != NULL && !skipCache && nnCacheTable->get(nnHash, buf.result)) {
+    m_numCacheHits.fetch_add(1, std::memory_order_relaxed);
+    buf.hasResult = true;
+    return;
+  }
+  buf.includeOwnerMap = false;
+  buf.boardXSizeForServer = nnXLen;
+  buf.boardYSizeForServer = nnYLen;
+
+  buf.rowSpatialBuf.assign(rowSpatial, rowSpatial + (size_t)Q4NNConst::NUM_SPATIAL_CHANNELS * Q4NNConst::POS_AREA);
+  buf.rowGlobalBuf.assign(rowGlobal, rowGlobal + Q4NNConst::NUM_GLOBAL_FEATURES);
+  buf.hasRowMeta = false;
+  // The row has its symmetry applied by the caller; the backend always evaluates symmetry 0.
+  buf.symmetry = 0;
+  buf.quoridorSymmetry = 0;
+  buf.policyOptimism = 0.0;
+
+  unique_lock<std::mutex> lock(bufferMutex);
+  numOngoingEvals += 1;
+  lock.unlock();
+
+  bool suc = queryQueue.forcePush(&buf);
+  testAssert(suc);
+
+  unique_lock<std::mutex> resultLock(buf.resultMutex);
+  while(!buf.hasResult)
+    buf.clientWaitingForResult.wait(resultLock);
+  resultLock.unlock();
+
+  buf.result->nnHash = nnHash;
+  if(nnCacheTable != NULL)
+    nnCacheTable->set(buf.result);
 }
 
 // Uncomment this to lower the effective hash size down to one where we get true collisions

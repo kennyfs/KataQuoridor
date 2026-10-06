@@ -4434,6 +4434,7 @@ struct Model {
   const int numValueChannels;
   const int numScoreValueChannels;
   const int numOwnershipChannels;
+  const int quoridorIOVersion;
   const bool usingFP16;
   const bool usingNHWC;
   const bool inputsUsingNHWC;
@@ -4470,6 +4471,7 @@ struct Model {
     numValueChannels(desc->numValueChannels),
     numScoreValueChannels(desc->numScoreValueChannels),
     numOwnershipChannels(desc->numOwnershipChannels),
+    quoridorIOVersion(desc->quoridorIOVersion),
     usingFP16(useFP16),
     usingNHWC(useNHWC),
     inputsUsingNHWC(inputsUseNHWC)
@@ -5644,6 +5646,19 @@ void NeuralNet::getOutput(
   const int totalPolicyChannels = numPolicyChannels * numPolicyPlanes;
   for(int row = 0; row < batchSize; row++) {
     NNOutput* output = outputs[row];
+
+    if(Q4NNConst::isQ4IOVersion(gpuHandle->model->quoridorIOVersion)) {
+      // Q4 nets: hand the raw logits to the client. No Duel post-processing, no symmetry.
+      setQ4RawNNOutput(
+        output,
+        inputBuffers->policyResults + row * totalPolicyChannels * posArea, gpuHandle->usingNHWC,
+        inputBuffers->valueResults + row * gpuHandle->model->numValueChannels,
+        inputBuffers->scoreValueResults + row * gpuHandle->model->numScoreValueChannels,
+        inputBuffers->ownershipResults + row * posArea
+      );
+      continue;
+    }
+
     assert(numPolicyPlanes * posArea <= NNPos::MAX_NN_POLICY_SIZE);
     float policyOptimism = (float)inputBufs[row]->policyOptimism;
 

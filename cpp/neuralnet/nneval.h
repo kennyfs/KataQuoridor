@@ -162,6 +162,7 @@ class NNEvaluator {
   bool modelHasAnyTransformerBlocks() const;
   bool modelHasAnyNestedBottleneckBlocks() const;
   enabled_t getUsingFP16Mode() const;
+  bool getInputsUseNHWC() const;
 
   // Check if the loaded neural net supports shorttermError fields
   bool supportsShorttermError() const;
@@ -205,6 +206,17 @@ class NNEvaluator {
     NNResultBuf& buf,
     bool skipCache,
     bool includeOwnerMap
+  );
+  // Raw evaluation entry point for Q4 (four-player) models only (docs/q4/Q4IO.md §6): the caller (Q4NN) fills the
+  // spatial (27 x 11 x 11, in the backend's layout) and global (28) rows with the symmetry already applied and
+  // passes the cache key. Batching, the cache and the server threads are shared with the Duel path; the result is
+  // buf.result->q4Raw. Throws if the loaded model is not a Q4 model.
+  void evaluateQ4Raw(
+    const float* rowSpatial,
+    const float* rowGlobal,
+    Hash128 nnHash,
+    NNResultBuf& buf,
+    bool skipCache
   );
   std::shared_ptr<NNOutput>* averageMultipleSymmetries(
     const Board& board,

@@ -202,6 +202,22 @@ double ScoreValue::getScoreStdev(double scoreMean, double scoreMeanSq) {
 //-----------------------------------------------------------------------------------------------------------
 
 
+void setQ4RawNNOutput(
+  NNOutput* output, const float* policyRow, bool policyIsNHWC,
+  const float* valueRow, const float* miscRow, const float* ownershipRow
+) {
+  using namespace Q4NNConst;
+  std::shared_ptr<Q4RawNNOutput> raw = std::make_shared<Q4RawNNOutput>();
+  const int numChannels = NUM_POLICY_VARIANTS * NUM_POLICY_PLANES;
+  for(int ch = 0; ch < numChannels; ch++)
+    for(int pos = 0; pos < POS_AREA; pos++)
+      raw->policyLogits[ch * POS_AREA + pos] = policyIsNHWC ? policyRow[pos * numChannels + ch] : policyRow[ch * POS_AREA + pos];
+  std::copy(valueRow, valueRow + NUM_VALUE_LOGITS, raw->valueLogits);
+  std::copy(miscRow, miscRow + NUM_MISC, raw->miscValues);
+  std::copy(ownershipRow, ownershipRow + TRAJECTORY_SLOTS, raw->trajectoryLogits);
+  output->q4Raw = raw;
+}
+
 NNOutput::NNOutput()
   :whiteOwnerMap(NULL),noisedPolicyProbs(NULL)
 {}
@@ -232,6 +248,8 @@ NNOutput::NNOutput(const NNOutput& other) {
   }
   else
     noisedPolicyProbs = NULL;
+
+  q4Raw = other.q4Raw;
 
   std::copy(other.policyProbs, other.policyProbs+NNPos::MAX_NN_POLICY_SIZE, policyProbs);
   policyOptimismUsed = other.policyOptimismUsed;
@@ -381,6 +399,8 @@ NNOutput& NNOutput::operator=(const NNOutput& other) {
   }
   else
     noisedPolicyProbs = NULL;
+
+  q4Raw = other.q4Raw;
 
   std::copy(other.policyProbs, other.policyProbs+NNPos::MAX_NN_POLICY_SIZE, policyProbs);
   policyOptimismUsed = other.policyOptimismUsed;
