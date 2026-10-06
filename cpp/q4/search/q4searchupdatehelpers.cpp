@@ -29,6 +29,7 @@ void Search::addLeafValue(
   double weightSq = weight * weight;
 
   if(assumeNoExistingWeight) {
+    while(node.statsLock.test_and_set(std::memory_order_acquire));
     for(int k = 0; k < 5; k++)
       node.stats.valueAvg[k].store(value[k], std::memory_order_release);
     for(int s = 0; s < 4; s++) {
@@ -37,9 +38,15 @@ void Search::addLeafValue(
     }
     node.stats.weightSqSum.store(weightSq, std::memory_order_release);
     node.stats.weightSum.store(weight, std::memory_order_release);
-    node.stats.visits.fetch_add(1, std::memory_order_release);
+    int64_t oldVisits = node.stats.visits.fetch_add(1, std::memory_order_release);
+    node.statsLock.clear(std::memory_order_release);
+    if(oldVisits != 0) {
+      if(logger != nullptr)
+        logger->write("WARNING: assumeNoExistingWeight for leaf but leaf already has visits");
+    }
   }
   else {
+    while(node.statsLock.test_and_set(std::memory_order_acquire));
     double oldWeightSum = node.stats.weightSum.load(std::memory_order_relaxed);
     double newWeightSum = oldWeightSum + weight;
 
@@ -56,6 +63,7 @@ void Search::addLeafValue(
     node.stats.weightSqSum.store(node.stats.weightSqSum.load(std::memory_order_relaxed) + weightSq, std::memory_order_release);
     node.stats.weightSum.store(newWeightSum, std::memory_order_release);
     node.stats.visits.fetch_add(1, std::memory_order_release);
+    node.statsLock.clear(std::memory_order_release);
   }
 }
 
@@ -237,6 +245,7 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
     utilitySqAvg[s] = utilitySqSum[s] / weightSum;
   }
 
+  while(node.statsLock.test_and_set(std::memory_order_acquire));
   for(int k = 0; k < 5; k++)
     node.stats.valueAvg[k].store(valueAvg[k], std::memory_order_release);
   for(int s = 0; s < 4; s++) {
@@ -246,6 +255,7 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
   node.stats.weightSqSum.store(weightSqSum, std::memory_order_release);
   node.stats.weightSum.store(weightSum, std::memory_order_release);
   node.stats.visits.fetch_add(numVisitsToAdd, std::memory_order_release);
+  node.statsLock.clear(std::memory_order_release);
 }
 
 void Search::downweightBadChildrenAndNormalizeWeight(

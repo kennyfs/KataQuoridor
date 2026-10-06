@@ -139,12 +139,12 @@ Search::Search(
 }
 
 Search::~Search() {
-  killThreads();
   clearSearch();
   delete valueWeightDistribution;
   delete nodeTable;
   delete mutexPool;
   clearOldNNOutputs();
+  killThreads();
 }
 
 double Search::computeSeatUtility(

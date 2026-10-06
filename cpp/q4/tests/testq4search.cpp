@@ -651,9 +651,34 @@ void testT24Cache(NNEvaluator* nnEval, Logger& logger) {
 void testT25Threads(NNEvaluator* nnEval, Logger& logger) {
   cout << "Running T25 Multithreading tests..." << endl;
 
+  // 1. Position with many terminal nodes: pawns next to center, small maxPlies
+  {
+    Q4Rules termRules;
+    termRules.maxPlies = 6;
+    Q4PlayState termState(termRules);
+    termState.plies = 4;
+    termState.board.pawn[0] = 49;
+    termState.board.pawn[1] = 59;
+    termState.board.pawn[2] = 71;
+    termState.board.pawn[3] = 61;
+    termState.board.toMove = 0;
+    termState.board.wallsLeft[0] = 0;
+    termState.board.wallsLeft[1] = 0;
+    termState.board.wallsLeft[2] = 0;
+    termState.board.wallsLeft[3] = 0;
+
+    SearchParams termParams = createTestSearchParams(3000, 8);
+    Q4S::Search termSearch(termParams, nnEval, &logger, "t25_term_8threads");
+    termSearch.setPosition(termState);
+    termSearch.runWholeSearch();
+
+    int64_t rootVisits = termSearch.getRootVisits();
+    testAssert(rootVisits > 100);
+  }
+
   Rand rand(777);
   Q4Rules rules;
-  SearchParams params = createTestSearchParams(4000, 4);
+  SearchParams params = createTestSearchParams(3000, 8);
 
   // Run on positions to test multithreaded descent and stats recomputation
   for(int i = 0; i < 5; i++) {
