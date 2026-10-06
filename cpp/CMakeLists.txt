@@ -1124,11 +1124,13 @@ add_executable(katago
   command/writetrainingdata.cpp
   q4/q4rules.cpp
   q4/q4board.cpp
+  q4/q4playstate.cpp
   q4/q4history.cpp
   q4/q4notation.cpp
   q4/q4symmetry.cpp
   q4/q4record.cpp
   q4/q4bots.cpp
+  q4/nn/q4rawsymmetry.cpp
   q4/nn/q4nn.cpp
   q4/command/q4nntool.cpp
   q4/command/q4qtp.cpp

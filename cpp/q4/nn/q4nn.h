@@ -3,13 +3,17 @@
 
 #include "../q4board.h"
 #include "../q4history.h"
+#include "../q4playstate.h"
 #include "../q4rules.h"
 #include "../q4symmetry.h"
 #include "q4nnconstants.h"
+#include "q4rawsymmetry.h"
 #include "../../neuralnet/nneval.h"
 #include "../../core/global.h"
 #include "../../core/hash.h"
+#include "../../core/rand.h"
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -31,10 +35,26 @@ namespace Q4NN {
   // The float feature of a raw distance: 1.0 if unreachable, else min(d, 64) / 64.
   inline float dist01(uint8_t d) { return d == 255 ? 1.0f : (float)(d < 64 ? d : 64) / 64.0f; }
 
+  // Short-term value error decoding from misc slot 5 (Plan §7 item 4)
+  inline float decodeShorttermValueError(float rawMisc5, double multiplier) {
+    double x = 0.5 * (double)rawMisc5;
+    double s = (x > 40.0) ? x : std::log(1.0 + std::exp(x));
+    return (float)std::sqrt(s * s * multiplier);
+  }
+
   void computeRawDistances(const Q4Board& board, RawDistances& out);
 
   // Fill the spatial (27 x 11 x 11) and global (28) input rows of the position (symmetry 0, seat = board.toMove).
   // The spatial row is NCHW, or NHWC if inputsUseNHWC. If rawDist is not null it also receives the raw distances.
+  void fillRow(
+    const Q4PlayState& state,
+    bool inputsUseNHWC,
+    float* rowSpatial,
+    float* rowGlobal,
+    RawDistances* rawDist = nullptr
+  );
+
+  // Compatibility overload for Q4History
   void fillRow(
     const Q4Board& board,
     const Q4History& history,
@@ -65,32 +85,74 @@ namespace Q4NN {
   // Rotate relative probabilities [me, next, across, previous, draw] to absolute [seat0..seat3, draw].
   void rotateValueToAbsolute(const float* relativeProbs, int toMove, float* outAbsProbs);
 
+  // Mask eliminated seats to 0 and renormalize (Plan §7 item 3).
+  void computeMaskedValue(const Q4Board& board, const float* valueAbs, float* valueAbsMasked);
+
   // Trajectory logits (11 x 11, evaluated under sym) -> probabilities per game cell.
   void decodeTrajectory(const float* rawTrajectory, int sym, float* outTrajectory);
 
-  // 128-bit key of the (position, symmetry) NN evaluation (docs/q4/Q4IO.md §7).
-  Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int sym);
+  // 128-bit key of the NN evaluation without symmetry (docs/q4/Q4IO.md §7, Plan §7 item 1).
+  Hash128 getCacheHash(const Q4PlayState& state);
+  Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int sym = 0);
 
   // Everything one evaluation returns, in game space.
   struct Eval {
     int toMove;
     int sym;
     float policyLogits[NUM_POLICY_VARIANTS][NUM_ACTIONS];  // per game action (not masked)
+    float policyProbs[NUM_POLICY_VARIANTS][NUM_ACTIONS];   // softmax over legal actions
     float valueLogits[NUM_VALUE_LOGITS];                   // relative seats, as the net returns them
     float valueRel[NUM_VALUE_LOGITS];                      // softmax, relative seats
     float valueAbs[NUM_VALUE_LOGITS];                      // softmax, absolute seats; [4] = draw
+    float valueAbsMasked[NUM_VALUE_LOGITS];                // eliminated seats set to 0 and renormalized
     float misc[NUM_MISC];
+    float shorttermWinlossError;                           // decoded from misc slot 5
     float trajectory[POS_AREA];                            // probability that my pawn visits the game cell
   };
 
   // Fill the rows (with symmetry sym), run them through the evaluator's Q4 raw path and decode.
+  // Performs cache lookup before filling input rows.
+  void evaluate(
+    NNEvaluator& nnEval,
+    NNResultBuf& buf,
+    const Q4PlayState& state,
+    int sym,
+    bool skipCache,
+    Eval& out,
+    Rand* rand = nullptr,
+    float nnPolicyTemperature = 1.0f
+  );
+
   void evaluate(
     NNEvaluator& nnEval,
     NNResultBuf& buf,
     const Q4History& history,
     int sym,
     bool skipCache,
-    Eval& out
+    Eval& out,
+    Rand* rand = nullptr,
+    float nnPolicyTemperature = 1.0f
+  );
+
+  // Average multiple distinct symmetries without replacement (Plan §7 item 1).
+  void averageMultipleSymmetries(
+    NNEvaluator& nnEval,
+    NNResultBuf& buf,
+    const Q4PlayState& state,
+    Rand& rand,
+    int numSymmetries,
+    Eval& out,
+    float nnPolicyTemperature = 1.0f
+  );
+
+  void averageMultipleSymmetries(
+    NNEvaluator& nnEval,
+    NNResultBuf& buf,
+    const Q4History& history,
+    Rand& rand,
+    int numSymmetries,
+    Eval& out,
+    float nnPolicyTemperature = 1.0f
   );
 
   // Absolute seat names (seat 0 starts at f1 = South, then clockwise).

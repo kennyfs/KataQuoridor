@@ -237,7 +237,9 @@ void evalNN(const ModelOptions& o) {
     const Q4History& history = positions[i];
     NNResultBuf buf;
     Q4NN::Eval eval;
-    Q4NN::evaluate(*nnEval, buf, history, sym, false, eval);
+    bool skipCache = true;
+    if(raws[i].contains("skipCache")) skipCache = raws[i]["skipCache"].get<bool>();
+    Q4NN::evaluate(*nnEval, buf, history, sym, skipCache, eval);
     const Q4RawNNOutput* raw = buf.result->q4Raw.get();
     std::vector<int> legalActions;
     history.currentBoard.getLegalActions(history.currentBoard.toMove, legalActions);
@@ -262,6 +264,8 @@ void evalNN(const ModelOptions& o) {
         {"searchPolicyProbs", probs},
         {"valueRel", toVec(eval.valueRel, Q4NN::NUM_VALUE_LOGITS)},
         {"valueAbs", toVec(eval.valueAbs, Q4NN::NUM_VALUE_LOGITS)},
+        {"valueAbsMasked", toVec(eval.valueAbsMasked, Q4NN::NUM_VALUE_LOGITS)},
+        {"shorttermWinlossError", eval.shorttermWinlossError},
         {"trajectory", toVec(eval.trajectory, Q4NN::POS_AREA)}
       };
       std::cout << j.dump() << "\n" << std::flush;
@@ -348,8 +352,7 @@ void nnCache(const ModelOptions& o) {
   Q4History start(rules);
   report("first evaluation misses", evalHit(start, 0), false);
   report("same position, same symmetry hits", evalHit(start, 0), true);
-  report("same position, another symmetry misses", evalHit(start, 3), false);
-  report("same position, another symmetry hits again", evalHit(start, 3), true);
+  report("same position, another symmetry hits", evalHit(start, 3), true);
 
   // The same position reached by two move orders (walls placed by different seats): identical inputs, hits.
   Q4History a(rules), b(rules);

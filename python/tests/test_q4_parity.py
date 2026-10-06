@@ -33,7 +33,8 @@ import pytest
 
 from q4_testutil import (dump_positions, export_model, find_katago, make_random_model, run_evalnn,
                          torch_raw_outputs)
-from q4.features import decode_trajectory, extract_features, map_policy_to_game
+from q4.features import (decode_shortterm_value_error, decode_trajectory, extract_features,
+                         map_policy_to_game, unapply_raw_policy, unapply_raw_trajectory)
 from q4.reference import action_to_index, legal_moves
 
 CONFIGS = ["b1c32_q4", "b2c64_q4", "tf2_b4c192_q4"]
@@ -103,15 +104,16 @@ def softmax(x):
     return e / e.sum()
 
 
-def decode_reference(pos, sym, policy6, value, traj):
+def decode_reference(pos, sym, policy6, value, misc, traj):
     """Python decoding: search-policy probabilities over the legal actions (dict action -> p), value probabilities by
-    absolute seat + draw, trajectory probabilities in game space."""
+    absolute seat + draw, trajectory probabilities in game space, and shorttermWinlossError."""
     logits = map_policy_to_game(policy6, sym)[0]
     legal = sorted(action_to_index(m) for m in legal_moves(pos))
     probs = dict(zip(legal, softmax(logits[legal])))
     rel = softmax(value)
     absolute = np.array([rel[(s - pos.to_move) % 4] for s in range(4)] + [rel[4]])
-    return probs, absolute, decode_trajectory(traj, sym)
+    st_err = decode_shortterm_value_error(misc[5], multiplier=0.25)
+    return probs, absolute, decode_trajectory(traj, sym), st_err
 
 
 def check(name, ref, cpp, tol, worst, rel=False):
@@ -140,19 +142,22 @@ def test_nn_parity_t17(net, positions, reference, backend):
     for row, ((i, sym), res) in enumerate(zip(reference["rows"], results)):
         pos = positions[i][1]
         raw = res["raw"]
+        ref_policy = unapply_raw_policy(reference["policy"][row], sym)
+        ref_traj_raw = unapply_raw_trajectory(reference["traj"][row], sym)
         ok = True
-        ok &= check("policy logits", reference["policy"][row], np.array(raw["policy"]).reshape(6, 11, 11), logit_tol, worst, rel=True)
+        ok &= check("policy logits", ref_policy, np.array(raw["policy"]).reshape(6, 11, 11), logit_tol, worst, rel=True)
         ok &= check("value logits", reference["value"][row], raw["value"], logit_tol, worst, rel=True)
         ok &= check("misc", reference["misc"][row], raw["misc"], logit_tol, worst, rel=True)
-        ok &= check("trajectory logits", reference["traj"][row], np.array(raw["trajectory"]).reshape(11, 11), logit_tol, worst, rel=True)
+        ok &= check("trajectory logits", ref_traj_raw, np.array(raw["trajectory"]).reshape(11, 11), logit_tol, worst, rel=True)
 
-        ref_probs, ref_abs, ref_traj = decode_reference(pos, sym, reference["policy"][row], reference["value"][row], reference["traj"][row])
+        ref_probs, ref_abs, ref_traj, ref_st_err = decode_reference(pos, 0, ref_policy, reference["value"][row], reference["misc"][row], ref_traj_raw)
         dec = res["decoded"]
         legal = dec["legalActions"]
         assert sorted(legal) == sorted(ref_probs), f"legal actions differ (position {i})"
         cpp_probs = np.array(dec["searchPolicyProbs"])
         ok &= check("policy probabilities", [ref_probs[a] for a in legal], [cpp_probs[a] for a in legal], prob_tol, worst)
         ok &= check("value probabilities (absolute seats)", ref_abs, dec["valueAbs"], prob_tol, worst)
+        ok &= check("short-term value error", ref_st_err, dec["shorttermWinlossError"], prob_tol, worst)
         ok &= check("trajectory probabilities", ref_traj, np.array(dec["trajectory"]).reshape(11, 11), prob_tol, worst)
         top_disagree += max(ref_probs, key=ref_probs.get) != max(legal, key=lambda a: cpp_probs[a])
         if not ok:

@@ -186,7 +186,7 @@ def extract_features(pos: Pos, symmetry: int = 0) -> Tuple[np.ndarray, np.ndarra
             g[16 + k] = 1.0
         else:
             estimate = ((d - 1) * n_alive + order[s] + 1) / 64.0
-            g[16 + k] = estimate
+            g[16 + k] = min(1.0, estimate)
             if leader < 0 or estimate < leader_estimate:
                 leader, leader_estimate = k, estimate
     if leader >= 0:
@@ -266,4 +266,52 @@ def decode_trajectory(raw_trajectory: np.ndarray, sym: int) -> np.ndarray:
             logit = raw[ty, tx]
             out[y, x] = 1.0 / (1.0 + np.exp(-logit))
     return out
+
+
+def decode_shortterm_value_error(raw_misc_5: float, multiplier: float = 0.25) -> float:
+    """Decodes short-term value error from misc slot 5 (Plan §7 item 4)."""
+    x = 0.5 * float(raw_misc_5)
+    s = x if x > 40.0 else np.log1p(np.exp(x))
+    return float(np.sqrt(s * s * multiplier))
+
+
+def unapply_raw_policy(raw_policy: np.ndarray, sym: int) -> np.ndarray:
+    """Turns raw policy logits [6, 11, 11] under symmetry sym into symmetry 0 orientation."""
+    if sym == 0:
+        return raw_policy.copy()
+    was_4d = False
+    if raw_policy.shape == (2, 3, POS_LEN, POS_LEN):
+        was_4d = True
+        src = raw_policy
+    else:
+        src = raw_policy.reshape(2, 3, POS_LEN, POS_LEN)
+    dst = np.zeros_like(src)
+    for ch in range(2):
+        # Plane 0: pawn moves
+        for y in range(POS_LEN):
+            for x in range(POS_LEN):
+                tx, ty = apply_cell(x, y, sym)
+                dst[ch, 0, y, x] = src[ch, 0, ty, tx]
+        # Planes 1 & 2: V and H walls
+        for ay in range(NUM_ANCHORS):
+            for ax in range(NUM_ANCHORS):
+                tax_v, tay_v, is_h_v = apply_anchor(ax, ay, False, sym)
+                dst[ch, 1, ay, ax] = src[ch, 2 if is_h_v else 1, tay_v, tax_v]
+                tax_h, tay_h, is_h_h = apply_anchor(ax, ay, True, sym)
+                dst[ch, 2, ay, ax] = src[ch, 2 if is_h_h else 1, tay_h, tax_h]
+    return dst if was_4d else dst.reshape(6, POS_LEN, POS_LEN)
+
+
+def unapply_raw_trajectory(raw_trajectory: np.ndarray, sym: int) -> np.ndarray:
+    """Turns raw trajectory logits [11, 11] under symmetry sym into symmetry 0 orientation."""
+    if sym == 0:
+        return raw_trajectory.copy()
+    src = raw_trajectory.reshape(POS_LEN, POS_LEN)
+    dst = np.zeros_like(src)
+    for y in range(POS_LEN):
+        for x in range(POS_LEN):
+            tx, ty = apply_cell(x, y, sym)
+            dst[y, x] = src[ty, tx]
+    return dst.reshape(raw_trajectory.shape)
+
 

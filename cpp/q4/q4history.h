@@ -3,6 +3,7 @@
 
 #include "q4board.h"
 #include "q4rules.h"
+#include "q4playstate.h"
 
 #include <string>
 #include <vector>
@@ -18,6 +19,9 @@ public:
   Q4Rules rules;
   Q4Board initialBoard;
   Q4Board currentBoard;
+
+  // Search playout state representing current position
+  Q4PlayState state;
 
   std::vector<Q4Board> boardHistory; // Stored state BEFORE each event
   std::vector<Q4Event> events;
@@ -44,8 +48,7 @@ public:
   std::string getResultString() const;
 
 private:
-  void recordRepetition();
-  void checkTerminal();
+  void syncFromState();
 };
 
 #endif  // Q4_HISTORY_H_

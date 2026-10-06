@@ -108,7 +108,7 @@ Seats in slots 0–3 are relative (me, next, across, previous). `n` = number of 
 | 4–7 | **has at least one wall left** | `1.0` if `wallsLeft > 0`, else `0.0` (0 for an eliminated seat) |
 | 8–11 | alive flags | `1.0` / `0.0` |
 | 12–15 | distance of the pawn to the center | `dist01(d)`; `0.0` if eliminated |
-| 16–19 | arrival estimate in plies from now if nobody walls and pawns do not interact | `((d − 1) · n + order + 1) / 64` where `order` is the seat's position in the upcoming alive turn order (me = 0); `1.0` if unreachable; `0.0` if eliminated. Not clamped. |
+| 16–19 | arrival estimate in plies from now if nobody walls and pawns do not interact | `min(1.0, ((d − 1) · n + order + 1) / 64)` where `order` is the seat's position in the upcoming alive turn order (me = 0); `1.0` if unreachable; `0.0` if eliminated. Clamped to 1.0. |
 | 20–23 | race leader one-hot | `1.0` for the alive, reachable seat with the smallest arrival estimate (the estimates of two seats never tie), else all zero |
 | 24 | alive seats | `n / 4` |
 | 25 | plies until the draw | `max(0, maxPlies − plies) / 400` (absolute scale, as Duel) |
@@ -173,32 +173,34 @@ heads.
 ## 6. Raw evaluation entry point and output block (C++)
 
 `NNEvaluator::evaluateQ4Raw` is used only when the loaded model's option D is a Q4 version. The caller (`Q4NN`)
-fills the spatial and global rows with the symmetry already applied and passes the 128-bit cache key; batching,
-the cache and the server threads are the existing ones, and the server hands the backend symmetry 0. A Q4 row
+fills the spatial and global rows with the symmetry already applied, passing the symmetry and the 128-bit cache key;
+batching, the cache and the server threads are the existing ones, and the server hands the backend symmetry 0. A Q4 row
 result carries a `Q4RawNNOutput` (`NNOutput::q4Raw`): both policy variants as raw logits (`2 × 3 × 121`), the 5
-value logits, the 6 misc values and the 121 trajectory logits, undecoded and not rotated back.
+value logits, the 6 misc values and the 121 trajectory logits.
 
 The GPU backends may run a net with all activations scaled down by 1/8 (`ModelDesc::applyScale8ToReduceActivations`, which
 raises `postProcessParams.outputScaleMultiplier` to 8). The evaluator's server thread multiplies every raw Q4 output
-(policy, value, misc, trajectory) by that multiplier before the result is cached, so `q4Raw` always holds the logits of
-the exported net. Misc values are otherwise not post-processed: the Duel multipliers in the model header (score mean,
-lead, ...) do not apply to Q4.
+(policy, value, misc, trajectory) by that multiplier, and un-symmetrizes the raw output into symmetry-0 orientation
+using `Q4RawSymmetry` before the result is cached. Therefore, cached results and returned results are always in
+symmetry-0 orientation. Decoding in `Q4NN` always uses symmetry 0.
 
 Tools (`katago q4tool ...`, `cpp/q4/command/q4nntool.cpp`): `dumpinputs` (inputs of sampled positions, all 8
 symmetries), `evalnn -model` (raw and decoded outputs), `symavg -model` (invariance of the 8-symmetry average),
 `nncache -model` (cache hits and misses), `nnbench` (input-fill time, NN evaluations per second).
 `katago q4qtp -bot nnpolicy -model <file>` plays the argmax (or, with `-temp`, a sample) of the search-policy
-probabilities over the legal actions; `q4-rawnn [symmetry]` prints the decoded outputs.
+probabilities over the legal actions; `q4-rawnn [symmetry]` evaluates under `symmetry` with `skipCache = true` and
+prints the decoded outputs.
 
 ## 7. NN cache key
 
 The key covers everything the inputs read:
 
 > `key = board.hash` (pawns, walls, wall supply, alive flags, seat to move) `⊕ H(maxPlies, repetitionDrawCount)`
-> `⊕ H(max(0, maxPlies − plies))` `⊕ H(repetition state)` `⊕ H(symmetry)`.
+> `⊕ H(max(0, maxPlies − plies))` `⊕ H(repetition state)`.
 
 - *Repetition state* (only if `repetitionDrawCount >= 2`): the occurrence count of the current position and, for
   every legal pawn destination that repeats an earlier position, `(destination, occurrences)`.
-- The symmetry is in the key because the cache stores the raw output at the transformed input.
+- The symmetry is **not** in the key because the evaluator un-symmetrizes the raw output before caching it, so
+  any symmetry produces a symmetry-0 result that serves subsequent queries under any symmetry.
 - `initialWalls` is not in the key: the inputs only read the current wall supply, which is in `board.hash`.
 - From round 6 the style features join the key.
