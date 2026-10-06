@@ -159,6 +159,7 @@ namespace Tests {
   //q4 tests
   void runQ4BoardTests();
   void runQ4SlowTests();
+  void runQ4NNTests();
 }
 
 namespace TestCommon {

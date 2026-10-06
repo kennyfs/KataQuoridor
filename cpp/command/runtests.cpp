@@ -73,6 +73,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("q4board"))
     Tests::runQ4BoardTests();
 
+  if(shouldRun("q4nn"))
+    Tests::runQ4NNTests();
+
   if(runAll ? false : shouldRun("q4slow"))
     Tests::runQ4SlowTests();
 

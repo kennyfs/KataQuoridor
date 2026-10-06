@@ -1,7 +1,11 @@
 #include "../core/config_parser.h"
 #include "../core/global.h"
+#include "../core/rand.h"
 #include "../external/nlohmann_json/json.hpp"
 #include "../main.h"
+#include "../neuralnet/nneval.h"
+#include "../program/setup.h"
+#include "nn/q4nn.h"
 #include "q4board.h"
 #include "q4bots.h"
 #include "q4history.h"
@@ -9,6 +13,7 @@
 #include "q4record.h"
 #include "q4rules.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -36,26 +41,39 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
     subArgs = std::vector<std::string>(subArgs.begin() + 1, subArgs.end());
 
   std::string configFile = "";
+  std::string modelFile = "";
   std::string botType = "greedy";
+  double temperature = 0.0;
   uint64_t seed = 42;
 
   for(size_t i = 0; i < subArgs.size(); i++) {
     if(subArgs[i] == "-config" && i + 1 < subArgs.size()) {
       configFile = subArgs[++i];
     }
+    else if(subArgs[i] == "-model" && i + 1 < subArgs.size()) {
+      modelFile = subArgs[++i];
+    }
     else if(subArgs[i] == "-bot" && i + 1 < subArgs.size()) {
       botType = subArgs[++i];
+    }
+    else if(subArgs[i] == "-temp" && i + 1 < subArgs.size()) {
+      temperature = Global::stringToDouble(subArgs[++i]);
     }
     else if(subArgs[i] == "-seed" && i + 1 < subArgs.size()) {
       seed = (uint64_t)Global::stringToInt64(subArgs[++i]);
     }
   }
 
+  ConfigParser cfg;
   if(!configFile.empty()) {
     try {
-      ConfigParser cfg(configFile);
+      cfg.initialize(configFile);
       if(cfg.contains("bot"))
         botType = cfg.getString("bot");
+      if(cfg.contains("model"))
+        modelFile = cfg.getString("model");
+      if(cfg.contains("temperature"))
+        temperature = cfg.getDouble("temperature");
       if(cfg.contains("seed"))
         seed = (uint64_t)cfg.getInt64("seed");
     }
@@ -64,9 +82,30 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
     }
   }
 
+  if(botType == "nnpolicy" && modelFile.empty()) {
+    std::cerr << "Error: bot = nnpolicy needs a model (-model <file> or model = <file> in the config)" << std::endl;
+    return 1;
+  }
+
+  // The evaluator keeps a pointer to its logger until it is deleted, so the logger lives as long as the command.
+  Logger logger;
+  NNEvaluator* nnEval = nullptr;
+  if(!modelFile.empty()) {
+    if(!cfg.contains("nnCacheSizePowerOfTwo")) cfg.overrideKey("nnCacheSizePowerOfTwo", "16");
+    if(!cfg.contains("nnMutexPoolSizePowerOfTwo")) cfg.overrideKey("nnMutexPoolSizePowerOfTwo", "12");
+    Rand seedRand(seed);
+    nnEval = Setup::initializeNNEvaluator(
+      modelFile, modelFile, "", cfg, logger, seedRand, 1, Q4NNConst::POS_LEN, Q4NNConst::POS_LEN,
+      Setup::MaxBatchSizeRequest::explicitSize(16), true, false, Setup::SETUP_FOR_GTP
+    );
+  }
+
+  Rand rand(seed);
   Q4Rules rules;
   Q4History history(rules);
-  std::unique_ptr<Q4Bot> bot = Q4Bots::makeBot(botType, seed);
+  std::unique_ptr<Q4Bot> bot = nullptr;
+  if(botType != "nnpolicy")
+    bot = Q4Bots::makeBot(botType, seed);
 
   std::string line;
   while(std::getline(std::cin, line)) {
@@ -114,7 +153,7 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
                         c == "winner" || c == "walls" || c == "dist" ||
                         c == "to_move" || c == "get_rules" || c == "set_rule" ||
                         c == "set_rules" || c == "printrecord" || c == "loadrecord" ||
-                        c == "genmove");
+                        c == "genmove" || c == "q4-rawnn" || c == "q4-set-temperature");
           respondSuccess(known ? "true" : "false");
         }
       }
@@ -122,7 +161,7 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
         std::string list = "protocol_version\nname\nversion\nknown_command\nlist_commands\nquit\n"
                            "clear_board\nplay\nlegal_moves\neliminate\nundo\nshowboard\n"
                            "winner\nwalls\ndist\nto_move\nget_rules\nset_rule\nset_rules\n"
-                           "printrecord\nloadrecord\ngenmove";
+                           "printrecord\nloadrecord\ngenmove\nq4-rawnn\nq4-set-temperature";
         respondSuccess(list);
       }
       else if(cmd == "quit") {
@@ -291,11 +330,70 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
             throw StringError("Requested seat " + Global::intToString(reqSeat + 1) +
                               " is not to move (seat " + Global::intToString(seat + 1) + " is)");
         }
-        int action = bot->getMove(history.currentBoard);
+        int action = Q4Board::NULL_ACTION;
+        if(botType == "nnpolicy") {
+          // The policy (variant 0, symmetry 0) over the legal actions: the argmax, or a sample at the temperature.
+          NNResultBuf buf;
+          Q4NN::Eval eval;
+          Q4NN::evaluate(*nnEval, buf, history, 0, false, eval);
+          std::vector<int> legalActions;
+          history.currentBoard.getLegalActions(seat, legalActions);
+          if(legalActions.empty())
+            throw StringError("No legal move available");
+          std::vector<float> probs(Q4Board::NUM_ACTIONS);
+          Q4NN::softmaxLegal(eval.policyLogits[0], legalActions, probs.data(), (float)temperature);
+          if(temperature <= 1e-4) {
+            float best = -1.0f;
+            for(int a : legalActions) {
+              if(probs[a] > best) {
+                best = probs[a];
+                action = a;
+              }
+            }
+          }
+          else {
+            float r = (float)rand.nextDouble();
+            float cumulative = 0.0f;
+            for(size_t i = 0; i < legalActions.size(); i++) {
+              cumulative += probs[legalActions[i]];
+              if(r <= cumulative || i + 1 == legalActions.size()) {
+                action = legalActions[i];
+                break;
+              }
+            }
+          }
+        }
+        else {
+          action = bot->getMove(history.currentBoard);
+        }
         if(action == Q4Board::NULL_ACTION)
           throw StringError("No legal move available");
         history.play(action);
         respondSuccess(Q4Notation::actionToString(action));
+      }
+      else if(cmd == "q4-set-temperature") {
+        if(cmdArgs.empty())
+          throw StringError("Usage: q4-set-temperature <temperature>");
+        temperature = Global::stringToDouble(cmdArgs[0]);
+        respondSuccess();
+      }
+      else if(cmd == "q4-rawnn") {
+        if(nnEval == nullptr)
+          throw StringError("No NN model loaded (use -model <file>)");
+        int sym = 0;
+        if(!cmdArgs.empty()) {
+          sym = Global::stringToInt(cmdArgs[0]);
+          if(sym < 0 || sym >= Q4Symmetry::NUM_SYMMETRIES)
+            throw StringError("Symmetry must be in 0..7");
+        }
+        if(history.isFinished)
+          throw StringError("Game is already finished");
+        NNResultBuf buf;
+        Q4NN::Eval eval;
+        Q4NN::evaluate(*nnEval, buf, history, sym, false, eval);
+        std::vector<int> legalActions;
+        history.currentBoard.getLegalActions(history.currentBoard.toMove, legalActions);
+        respondSuccess(Q4NN::formatEval(eval, legalActions, 10));
       }
       else {
         respondError("unknown command: " + cmd);
@@ -306,5 +404,6 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
     }
   }
 
+  delete nnEval;
   return 0;
 }

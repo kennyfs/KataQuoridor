@@ -1129,11 +1129,14 @@ add_executable(katago
   q4/q4symmetry.cpp
   q4/q4record.cpp
   q4/q4bots.cpp
+  q4/nn/q4nn.cpp
+  q4/command/q4nntool.cpp
   q4/command/q4qtp.cpp
   q4/command/q4tool.cpp
   q4/command/q4match.cpp
   q4/tests/testq4board.cpp
   q4/tests/testq4slow.cpp
+  q4/tests/testq4nn.cpp
   main.cpp
   )
 

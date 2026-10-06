@@ -3,6 +3,8 @@
 #include "../core/timer.h"
 #include "../external/nlohmann_json/json.hpp"
 #include "../main.h"
+#include "command/q4json.h"
+#include "command/q4nntool.h"
 #include "q4board.h"
 #include "q4bots.h"
 #include "q4history.h"
@@ -34,6 +36,8 @@ uint64_t runPerft(const Q4Board& board, int depth) {
   }
   return total;
 }
+
+}  // namespace
 
 Q4Board parseBoardFromJson(const json& j) {
   Q4Board board;
@@ -178,7 +182,88 @@ Q4Board parseBoardFromJson(const json& j) {
   return fresh;
 }
 
-}  // namespace
+json boardToJson(const Q4Board& board) {
+  json j;
+  json pawns = json::array();
+  for(int s = 0; s < 4; s++) {
+    if(board.pawn[s] >= 0) {
+      pawns.push_back({Q4Board::cellX(board.pawn[s]), Q4Board::cellY(board.pawn[s])});
+    } else {
+      pawns.push_back(nullptr);
+    }
+  }
+  j["pawns"] = pawns;
+
+  json alive = json::array();
+  for(int s = 0; s < 4; s++) {
+    alive.push_back(board.isAlive(s));
+  }
+  j["alive"] = alive;
+
+  json wallsLeft = json::array();
+  for(int s = 0; s < 4; s++) {
+    wallsLeft.push_back(board.wallsLeft[s]);
+  }
+  j["wallsLeft"] = wallsLeft;
+
+  json hwalls = json::array();
+  json vwalls = json::array();
+  for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
+    for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
+      int a = Q4Board::anchorOf(ax, ay);
+      if(board.hWalls.test(a)) hwalls.push_back({ax, ay});
+      if(board.vWalls.test(a)) vwalls.push_back({ax, ay});
+    }
+  }
+  j["hwalls"] = hwalls;
+  j["vwalls"] = vwalls;
+  j["toMove"] = board.toMove;
+  return j;
+}
+
+Q4History parseHistoryFromJson(const json& j) {
+  Q4Rules rules;
+  if(j.contains("rules")) {
+    const auto& r = j["rules"];
+    if(r.contains("maxPlies")) rules.maxPlies = r["maxPlies"].get<int>();
+    if(r.contains("repetitionDrawCount")) rules.repetitionDrawCount = r["repetitionDrawCount"].get<int>();
+    if(r.contains("initialWalls") && r["initialWalls"].is_array()) {
+      for(int s = 0; s < 4; s++) rules.initialWalls[s] = r["initialWalls"][s].get<int>();
+    }
+  }
+  else {
+    if(j.contains("maxPlies")) rules.maxPlies = j["maxPlies"].get<int>();
+    if(j.contains("repetitionDrawCount")) rules.repetitionDrawCount = j["repetitionDrawCount"].get<int>();
+  }
+  Q4History history(rules);
+  if(j.contains("initialBoard")) {
+    Q4Board initB = parseBoardFromJson(j["initialBoard"]);
+    history.clear(initB, rules);
+  }
+  else if(j.contains("board") && (!j.contains("events") || j["events"].empty())) {
+    Q4Board b = parseBoardFromJson(j["board"]);
+    history.clear(b, rules);
+    return history;
+  }
+  else if(!j.contains("events")) {
+    Q4Board b = parseBoardFromJson(j);
+    history.clear(b, rules);
+    return history;
+  }
+
+  if(j.contains("events") && j["events"].is_array()) {
+    for(const auto& ev : j["events"]) {
+      if(ev.contains("elim")) {
+        history.eliminate(ev["elim"].get<int>());
+      }
+      else if(ev.contains("a") || ev.contains("action")) {
+        std::string aStr = ev.contains("a") ? ev["a"].get<std::string>() : ev["action"].get<std::string>();
+        history.play(Q4Notation::stringToAction(aStr));
+      }
+    }
+  }
+  return history;
+}
 
 int MainCmds::q4tool(const std::vector<std::string>& args) {
   std::vector<std::string> subArgs = args;
@@ -189,6 +274,11 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
     std::cout << "Usage: katago q4tool <subcommand> [options]\n"
               << "Subcommands:\n"
               << "  legal                 Read JSON positions from stdin, output legal action names\n"
+              << "  dumpinputs            Dump NN inputs for positions (all 8 symmetries)\n"
+              << "  evalnn                Evaluate positions with NN model (-model <file>)\n"
+              << "  symavg                Invariance of the 8-symmetry average (-model <file>)\n"
+              << "  nncache               NN cache hits and misses (-model <file>)\n"
+              << "  nnbench               Input-fill time, NN evaluations per second (-model <file>)\n"
               << "  perft <depth>         Run perft from start position\n"
               << "  bench                 Run performance benchmarks (movegen and playouts)\n";
     return 0;
@@ -281,6 +371,9 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
       }
     }
     return 0;
+  }
+  else if(subcmd == "dumpinputs" || subcmd == "evalnn" || subcmd == "symavg" || subcmd == "nncache" || subcmd == "nnbench") {
+    return Q4NNTool::run(subcmd, subArgs);
   }
   else if(subcmd == "perft") {
     int depth = 1;
