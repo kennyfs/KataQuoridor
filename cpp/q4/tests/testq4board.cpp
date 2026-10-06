@@ -526,6 +526,65 @@ void testPerft() {
   }
 }
 
+// A5: on 2,000 random games (with eliminations, small maxPlies, repetition rule on with N = 2 and 3),
+// Q4PlayState driven by playAssumeLegal and Q4History driven by play agree on board hash, plies,
+// isFinished, winner, draw and repetition count after every event.
+void testPlayStateConsistency() {
+  cout << "Running Q4PlayState consistency tests against Q4History (A5)..." << endl;
+  Rand rand("testPlayStateConsistency_seed42");
+  for(int g = 0; g < 2000; g++) {
+    Q4Rules rules;
+    rules.maxPlies = (int)rand.nextInt(10, 40);
+    rules.repetitionDrawCount = (rand.nextUInt(2) == 0) ? 2 : 3;
+
+    Q4Board board(rules);
+    Q4History hist(board, rules);
+    Q4PlayState state(board, rules);
+
+    while(!hist.isFinished) {
+      testAssert(state.board.hash == hist.currentBoard.hash);
+      testAssert(state.plies == hist.plies);
+      testAssert(state.isFinished == hist.isFinished);
+      testAssert(state.winnerSeat == hist.winnerSeat);
+      testAssert(state.isDraw == hist.isDraw);
+      testAssert(state.currentPositionRepetitionCount() == hist.currentPositionRepetitionCount());
+
+      // Occasionally eliminate a random alive seat
+      if(state.board.getNumAlive() > 2 && rand.nextUInt(20) == 0) {
+        int victim = (int)rand.nextUInt(4);
+        if(state.board.isAlive(victim)) {
+          hist.eliminate(victim);
+          state.eliminate(victim);
+          testAssert(state.board.hash == hist.currentBoard.hash);
+          testAssert(state.plies == hist.plies);
+          testAssert(state.isFinished == hist.isFinished);
+          testAssert(state.winnerSeat == hist.winnerSeat);
+          testAssert(state.isDraw == hist.isDraw);
+          testAssert(state.currentPositionRepetitionCount() == hist.currentPositionRepetitionCount());
+          if(hist.isFinished)
+            break;
+        }
+      }
+
+      int toMove = state.board.toMove;
+      vector<int> legal;
+      state.board.getLegalActions(toMove, legal);
+      if(legal.empty())
+        break;
+      int act = legal[rand.nextUInt(legal.size())];
+      hist.play(act);
+      state.playAssumeLegal(act);
+    }
+
+    testAssert(state.board.hash == hist.currentBoard.hash);
+    testAssert(state.plies == hist.plies);
+    testAssert(state.isFinished == hist.isFinished);
+    testAssert(state.winnerSeat == hist.winnerSeat);
+    testAssert(state.isDraw == hist.isDraw);
+    testAssert(state.currentPositionRepetitionCount() == hist.currentPositionRepetitionCount());
+  }
+}
+
 }  // namespace
 
 void Tests::runQ4BoardTests() {
@@ -538,6 +597,7 @@ void Tests::runQ4BoardTests() {
   testHashingAndUndo();
   testTerminalRules();
   testPerft();
+  testPlayStateConsistency();
 
   cout << "All Q4 Board tests PASSED!" << endl;
 }

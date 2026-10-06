@@ -239,9 +239,9 @@ void testCacheKey() {
   Hash128 base = Q4NN::getCacheHash(hist.currentBoard, hist, 0);
   testAssert(base == Q4NN::getCacheHash(hist.currentBoard, hist, 0));
 
-  // The symmetry is part of the key; every symmetry differs.
+  // A1: Symmetry is no longer part of the key.
   for(int sym = 1; sym < 8; sym++)
-    testAssert(Q4NN::getCacheHash(hist.currentBoard, hist, sym) != base);
+    testAssert(Q4NN::getCacheHash(hist.currentBoard, hist, sym) == base);
   // The position (and with it the seat to move) is part of the key.
   { Q4History h2 = hist; vector<int> a; h2.currentBoard.getLegalActions(0, a); h2.play(a[0]);
     testAssert(Q4NN::getCacheHash(h2.currentBoard, h2, 0) != base); }
@@ -275,6 +275,89 @@ void testCacheKey() {
   testAssert(pairsDifferentInputsSameBoard > 0);
 }
 
+// A1: Test that Q4RawSymmetry tables equal Q4Symmetry's on every cell, anchor and action.
+void testRawSymmetry() {
+  for(int sym = 0; sym < 8; sym++) {
+    for(int c = 0; c < Q4NNConst::POS_AREA; c++)
+      testAssert(Q4RawSymmetry::applyCell(c, sym) == Q4Symmetry::applyCell(c, sym));
+
+    for(int ay = 0; ay < 10; ay++) {
+      for(int ax = 0; ax < 10; ax++) {
+        for(int isH = 0; isH < 2; isH++) {
+          int outAxR, outAyR;
+          bool outIsHR;
+          Q4RawSymmetry::applyAnchor(ax, ay, isH == 1, sym, outAxR, outAyR, outIsHR);
+
+          int outAxS, outAyS;
+          bool outIsHS;
+          Q4Symmetry::applyAnchor(ax, ay, isH == 1, sym, outAxS, outAyS, outIsHS);
+
+          testAssert(outAxR == outAxS);
+          testAssert(outAyR == outAyS);
+          testAssert(outIsHR == outIsHS);
+        }
+      }
+    }
+
+    for(int d = 0; d < 4; d++)
+      testAssert(Q4RawSymmetry::applyDirection(d, sym) == Q4Symmetry::applyDirection(d, sym));
+
+    testAssert(Q4RawSymmetry::inverse(sym) == Q4Symmetry::inverse(sym));
+    for(int s2 = 0; s2 < 8; s2++)
+      testAssert(Q4RawSymmetry::compose(sym, s2) == Q4Symmetry::compose(sym, s2));
+
+    // Test unapply: mapping policy and trajectory through symmetry 0 of unapplied output
+    // equals mapping the raw output through symmetry sym.
+    Q4RawNNOutput raw;
+    for(int i = 0; i < Q4NNConst::POLICY_SLOTS; i++) raw.policyLogits[i] = (float)(i + 1) * 0.01f;
+    for(int i = 0; i < Q4NNConst::NUM_VALUE_LOGITS; i++) raw.valueLogits[i] = (float)(i + 1);
+    for(int i = 0; i < Q4NNConst::NUM_MISC; i++) raw.miscValues[i] = (float)(i + 1);
+    for(int i = 0; i < Q4NNConst::TRAJECTORY_SLOTS; i++) raw.trajectoryLogits[i] = (float)(i + 1) * 0.02f;
+
+    Q4RawNNOutput sym0;
+    Q4RawSymmetry::unapply(raw, sym0, sym);
+
+    float actionLogitsSym[Q4NNConst::NUM_POLICY_VARIANTS * Q4NNConst::NUM_ACTIONS];
+    float actionLogits0[Q4NNConst::NUM_POLICY_VARIANTS * Q4NNConst::NUM_ACTIONS];
+    Q4NN::mapPolicyToGame(raw.policyLogits, sym, actionLogitsSym);
+    Q4NN::mapPolicyToGame(sym0.policyLogits, 0, actionLogits0);
+    for(int a = 0; a < Q4NNConst::NUM_POLICY_VARIANTS * Q4NNConst::NUM_ACTIONS; a++)
+      testAssert(std::abs(actionLogits0[a] - actionLogitsSym[a]) < 1e-6f);
+
+    float trajSym[Q4NNConst::POS_AREA], traj0[Q4NNConst::POS_AREA];
+    Q4NN::decodeTrajectory(raw.trajectoryLogits, sym, trajSym);
+    Q4NN::decodeTrajectory(sym0.trajectoryLogits, 0, traj0);
+    for(int c = 0; c < Q4NNConst::POS_AREA; c++)
+      testAssert(std::abs(traj0[c] - trajSym[c]) < 1e-6f);
+  }
+}
+
+// A4: Masked value test with eliminated seats.
+void testMaskedValue() {
+  Q4Rules rules;
+  Q4History hist(rules);
+  // Eliminate seat 1 and seat 3
+  hist.eliminate(1);
+  hist.eliminate(3);
+  testAssert(!hist.state.board.isAlive(1));
+  testAssert(!hist.state.board.isAlive(3));
+  testAssert(hist.state.board.isAlive(0));
+  testAssert(hist.state.board.isAlive(2));
+
+  // Compute masked values via Q4NN
+  float valueAbs[5] = {0.2f, 0.3f, 0.4f, 0.05f, 0.05f};
+  float masked[5];
+  Q4NN::computeMaskedValue(hist.state.board, valueAbs, masked);
+
+  // Independent manual calculation:
+  // alive seats are 0 and 2; draw is 4.
+  // sum = 0.2 + 0.4 + 0.05 = 0.65
+  float expected[5] = {0.2f / 0.65f, 0.0f, 0.4f / 0.65f, 0.0f, 0.05f / 0.65f};
+  for(int i = 0; i < 5; i++) {
+    testAssert(std::abs(masked[i] - expected[i]) < 1e-6f);
+  }
+}
+
 }  // namespace
 
 void Tests::runQ4NNTests() {
@@ -286,5 +369,7 @@ void Tests::runQ4NNTests() {
   testRawOutputLayouts();
   testValueRotationAndSoftmax();
   testCacheKey();
+  testRawSymmetry();
+  testMaskedValue();
   cout << "Q4 NN I/O tests passed" << endl;
 }
