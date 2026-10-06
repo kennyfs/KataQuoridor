@@ -51,7 +51,9 @@ namespace Q4NN {
     bool inputsUseNHWC,
     float* rowSpatial,
     float* rowGlobal,
-    RawDistances* rawDist = nullptr
+    RawDistances* rawDist = nullptr,
+    int* outLegalActions = nullptr,
+    int* outNumLegalActions = nullptr
   );
 
   // Compatibility overload for Q4History
@@ -61,7 +63,9 @@ namespace Q4NN {
     bool inputsUseNHWC,
     float* rowSpatial,
     float* rowGlobal,
-    RawDistances* rawDist = nullptr
+    RawDistances* rawDist = nullptr,
+    int* outLegalActions = nullptr,
+    int* outNumLegalActions = nullptr
   );
 
   // Apply symmetry sym (0..7) to a spatial row (same layout in and out; src and dst must not overlap unless sym == 0).
@@ -72,6 +76,13 @@ namespace Q4NN {
   void mapPolicyToGame(const float* rawPolicyLogits, int sym, float* outActionLogits);
 
   // Softmax over the legal actions only; the other entries of outProbs (NUM_ACTIONS floats) are 0.
+  void softmaxLegal(
+    const float* actionLogits,
+    const int* legalActions,
+    int numLegalActions,
+    float* outProbs,
+    float temperature = 1.0f
+  );
   void softmaxLegal(
     const float* actionLogits,
     const std::vector<int>& legalActions,
@@ -108,6 +119,8 @@ namespace Q4NN {
     float misc[NUM_MISC];
     float shorttermWinlossError;                           // decoded from misc slot 5
     float trajectory[POS_AREA];                            // probability that my pawn visits the game cell
+    int numLegalActions;
+    int legalActions[NUM_ACTIONS];
   };
 
   // Fill the rows (with symmetry sym), run them through the evaluator's Q4 raw path and decode.

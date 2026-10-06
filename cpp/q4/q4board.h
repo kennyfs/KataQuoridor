@@ -98,7 +98,9 @@ struct Q4Board {
   bool isLegalWall(int ax, int ay, bool isHorizontal) const;
 
   // Legal moves generation
+  int getPawnMoves(int seat, int* outMoves) const;
   void getPawnMoves(int seat, std::vector<int>& outMoves) const;
+  int getLegalActions(int seat, int* outActions) const;
   void getLegalActions(int seat, std::vector<int>& outActions) const;
   bool isLegalAction(int action, int seat) const;
 

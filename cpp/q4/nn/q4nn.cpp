@@ -92,18 +92,19 @@ void fillRow(
   bool inputsUseNHWC,
   float* rowSpatial,
   float* rowGlobal,
-  RawDistances* rawDistOut
+  RawDistances* rawDistOut,
+  int* outLegalActions,
+  int* outNumLegalActions
 ) {
   const Q4Board& board = state.board;
   const int toMove = board.toMove;
-  std::vector<float> nchwSpatial;
+  static thread_local float nchwSpatialBuf[NUM_SPATIAL_CHANNELS * POS_AREA];
   float* sp = rowSpatial;
   if(inputsUseNHWC) {
-    nchwSpatial.assign(NUM_SPATIAL_CHANNELS * POS_AREA, 0.0f);
-    sp = nchwSpatial.data();
+    sp = nchwSpatialBuf;
   }
-  std::fill(sp, sp + NUM_SPATIAL_CHANNELS * POS_AREA, 0.0f);
-  std::fill(rowGlobal, rowGlobal + NUM_GLOBAL_FEATURES, 0.0f);
+  std::fill_n(sp, NUM_SPATIAL_CHANNELS * POS_AREA, 0.0f);
+  std::fill_n(rowGlobal, (size_t)NUM_GLOBAL_FEATURES, 0.0f);
   auto S = [&](int ch, int c) -> float& { return sp[ch * POS_AREA + c]; };
 
   for(int c = 0; c < POS_AREA; c++)
@@ -145,23 +146,12 @@ void fillRow(
     }
   }
 
-  for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
-    for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
-      int a = Q4Board::anchorOf(ax, ay);
-      int c = ay * POS_LEN + ax;
-      if(board.vWalls.test(a)) S(CH_VWALL, c) = 1.0f;
-      if(board.hWalls.test(a)) S(CH_HWALL, c) = 1.0f;
-      S(CH_ANCHOR_DOMAIN, c) = 1.0f;
-      if(board.isGeometricallyLegalWall(ax, ay, false)) S(CH_LEGAL_VWALL, c) = 1.0f;
-      if(board.isGeometricallyLegalWall(ax, ay, true)) S(CH_LEGAL_HWALL, c) = 1.0f;
-    }
-  }
-
   const int repN = state.rules.repetitionDrawCount;
   const bool repOn = repN >= 2;
-  std::vector<int> pawnDests;
-  board.getPawnMoves(toMove, pawnDests);
-  for(int c : pawnDests) {
+  int pawnDests[16];
+  int numPawnDests = board.getPawnMoves(toMove, pawnDests);
+  for(int i = 0; i < numPawnDests; i++) {
+    int c = pawnDests[i];
     S(CH_LEGAL_PAWN, c) = 1.0f;
     if(repOn) {
       int occ = occurrencesAfterPawnMove(state, c);
@@ -171,6 +161,37 @@ void fillRow(
         S(CH_DRAWING_PAWN, c) = 1.0f;
     }
   }
+
+  int legalActionCount = 0;
+  if(outLegalActions != nullptr) {
+    for(int i = 0; i < numPawnDests; i++)
+      outLegalActions[legalActionCount++] = pawnDests[i];
+  }
+
+  bool canPlaceWalls = board.wallsLeft[toMove] > 0;
+  for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
+    for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
+      int a = Q4Board::anchorOf(ax, ay);
+      int c = ay * POS_LEN + ax;
+      if(board.vWalls.test(a)) S(CH_VWALL, c) = 1.0f;
+      if(board.hWalls.test(a)) S(CH_HWALL, c) = 1.0f;
+      S(CH_ANCHOR_DOMAIN, c) = 1.0f;
+      bool vLegal = board.isGeometricallyLegalWall(ax, ay, false);
+      if(vLegal) {
+        S(CH_LEGAL_VWALL, c) = 1.0f;
+        if(outLegalActions != nullptr && canPlaceWalls)
+          outLegalActions[legalActionCount++] = Q4Board::actionOfVWall(a);
+      }
+      bool hLegal = board.isGeometricallyLegalWall(ax, ay, true);
+      if(hLegal) {
+        S(CH_LEGAL_HWALL, c) = 1.0f;
+        if(outLegalActions != nullptr && canPlaceWalls)
+          outLegalActions[legalActionCount++] = Q4Board::actionOfHWall(a);
+      }
+    }
+  }
+  if(outNumLegalActions != nullptr)
+    *outNumLegalActions = legalActionCount;
 
   // Global features
   const int nAlive = board.getNumAlive();
@@ -228,7 +249,9 @@ void fillRow(
   bool inputsUseNHWC,
   float* rowSpatial,
   float* rowGlobal,
-  RawDistances* rawDistOut
+  RawDistances* rawDistOut,
+  int* outLegalActions,
+  int* outNumLegalActions
 ) {
   Q4PlayState s = history.state;
   s.board = board;
@@ -238,51 +261,18 @@ void fillRow(
   s.winnerSeat = history.winnerSeat;
   s.isDraw = history.isDraw;
   s.repetitionHashes = history.repetitionHashes;
-  fillRow(s, inputsUseNHWC, rowSpatial, rowGlobal, rawDistOut);
+  fillRow(s, inputsUseNHWC, rowSpatial, rowGlobal, rawDistOut, outLegalActions, outNumLegalActions);
 }
 
-void applyInputSymmetry(const float* src, float* dst, int sym, bool nhwc) {
+static int inputSymMap[8][2][NUM_SPATIAL_CHANNELS * POS_AREA];
+static int16_t policySlotMap[8][NUM_ACTIONS];
+static std::once_flag precomputedTablesFlag;
+
+static void initPrecomputedTables() {
   Q4Symmetry::init();
-  if(sym == 0) {
-    if(src != dst)
-      std::copy(src, src + NUM_SPATIAL_CHANNELS * POS_AREA, dst);
-    return;
-  }
-  std::fill(dst, dst + NUM_SPATIAL_CHANNELS * POS_AREA, 0.0f);
+  Q4RawSymmetry::init();
 
-  // Cell channels: plain cell map.
-  static const int cellChannels[] = {0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 24, 25, 26};
-  for(int c = 0; c < POS_AREA; c++) {
-    int nc = Q4Symmetry::applyCell(c, sym);
-    for(int ch : cellChannels)
-      dst[idx(ch, nc, nhwc)] = src[idx(ch, c, nhwc)];
-    // Blocked-direction channels are permuted along with the cell.
-    for(int d = 0; d < 4; d++)
-      dst[idx(CH_BLOCKED + Q4Symmetry::applyDirection(d, sym), nc, nhwc)] = src[idx(CH_BLOCKED + d, c, nhwc)];
-  }
-
-  // Anchor channels: the anchor map, and V <-> H when the symmetry exchanges the axes.
-  for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
-    for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
-      int c = ay * POS_LEN + ax;
-      for(int orient = 0; orient < 2; orient++) {  // 0 = vertical, 1 = horizontal
-        int nax, nay;
-        bool nIsH;
-        Q4Symmetry::applyAnchor(ax, ay, orient == 1, sym, nax, nay, nIsH);
-        int nc = nay * POS_LEN + nax;
-        dst[idx(CH_VWALL + (nIsH ? 1 : 0), nc, nhwc)] = src[idx(CH_VWALL + orient, c, nhwc)];
-        dst[idx(CH_LEGAL_VWALL + (nIsH ? 1 : 0), nc, nhwc)] = src[idx(CH_LEGAL_VWALL + orient, c, nhwc)];
-      }
-      dst[idx(CH_ANCHOR_DOMAIN, c, nhwc)] = src[idx(CH_ANCHOR_DOMAIN, c, nhwc)];
-    }
-  }
-}
-
-void mapPolicyToGame(const float* raw, int sym, float* out) {
-  Q4Symmetry::init();
-  for(int variant = 0; variant < NUM_POLICY_VARIANTS; variant++) {
-    const float* rawVariant = raw + variant * POLICY_SLOTS_PER_VARIANT;
-    float* outVariant = out + variant * NUM_ACTIONS;
+  for(int sym = 0; sym < 8; sym++) {
     for(int act = 0; act < NUM_ACTIONS; act++) {
       int a = Q4Symmetry::applyAction(act, sym);
       int plane, cell;
@@ -300,27 +290,118 @@ void mapPolicyToGame(const float* raw, int sym, float* out) {
         int anchor = a - 221;
         cell = Q4Board::anchorY(anchor) * POS_LEN + Q4Board::anchorX(anchor);
       }
-      outVariant[act] = rawVariant[plane * POS_AREA + cell];
+      policySlotMap[sym][act] = (int16_t)(plane * POS_AREA + cell);
+    }
+  }
+
+  static const int cellChannels[] = {0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 24, 25, 26};
+  for(int sym = 0; sym < 8; sym++) {
+    for(int nhwc = 0; nhwc < 2; nhwc++) {
+      int* map = inputSymMap[sym][nhwc];
+      std::fill_n(map, NUM_SPATIAL_CHANNELS * POS_AREA, -1);
+
+      if(sym == 0) {
+        for(int i = 0; i < NUM_SPATIAL_CHANNELS * POS_AREA; i++)
+          map[i] = i;
+        continue;
+      }
+
+      for(int c = 0; c < POS_AREA; c++) {
+        int nc = Q4Symmetry::applyCell(c, sym);
+        for(int ch : cellChannels) {
+          int dstI = idx(ch, nc, nhwc != 0);
+          int srcI = idx(ch, c, nhwc != 0);
+          map[dstI] = srcI;
+        }
+        for(int d = 0; d < 4; d++) {
+          int dstI = idx(CH_BLOCKED + Q4Symmetry::applyDirection(d, sym), nc, nhwc != 0);
+          int srcI = idx(CH_BLOCKED + d, c, nhwc != 0);
+          map[dstI] = srcI;
+        }
+      }
+
+      for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
+        for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
+          int c = ay * POS_LEN + ax;
+          for(int orient = 0; orient < 2; orient++) {
+            int nax, nay;
+            bool nIsH;
+            Q4Symmetry::applyAnchor(ax, ay, orient == 1, sym, nax, nay, nIsH);
+            int nc = nay * POS_LEN + nax;
+            int dstV = idx(CH_VWALL + (nIsH ? 1 : 0), nc, nhwc != 0);
+            int srcV = idx(CH_VWALL + orient, c, nhwc != 0);
+            map[dstV] = srcV;
+            int dstL = idx(CH_LEGAL_VWALL + (nIsH ? 1 : 0), nc, nhwc != 0);
+            int srcL = idx(CH_LEGAL_VWALL + orient, c, nhwc != 0);
+            map[dstL] = srcL;
+          }
+          int dstA = idx(CH_ANCHOR_DOMAIN, c, nhwc != 0);
+          int srcA = idx(CH_ANCHOR_DOMAIN, c, nhwc != 0);
+          map[dstA] = srcA;
+        }
+      }
     }
   }
 }
 
-void softmaxLegal(const float* logits, const std::vector<int>& legal, float* out, float temperature) {
-  std::fill(out, out + NUM_ACTIONS, 0.0f);
-  if(legal.empty())
+void applyInputSymmetry(const float* src, float* dst, int sym, bool nhwc) {
+  std::call_once(precomputedTablesFlag, initPrecomputedTables);
+  if(sym == 0) {
+    if(src != dst)
+      std::copy(src, src + NUM_SPATIAL_CHANNELS * POS_AREA, dst);
+    return;
+  }
+  std::fill_n(dst, NUM_SPATIAL_CHANNELS * POS_AREA, 0.0f);
+  const int* map = inputSymMap[sym][nhwc ? 1 : 0];
+  for(int i = 0; i < NUM_SPATIAL_CHANNELS * POS_AREA; i++) {
+    int s = map[i];
+    if(s >= 0)
+      dst[i] = src[s];
+  }
+}
+
+void mapPolicyToGame(const float* raw, int sym, float* out) {
+  std::call_once(precomputedTablesFlag, initPrecomputedTables);
+  const int16_t* map = policySlotMap[sym];
+  for(int variant = 0; variant < NUM_POLICY_VARIANTS; variant++) {
+    const float* rawVariant = raw + variant * POLICY_SLOTS_PER_VARIANT;
+    float* outVariant = out + variant * NUM_ACTIONS;
+    for(int act = 0; act < NUM_ACTIONS; act++) {
+      outVariant[act] = rawVariant[map[act]];
+    }
+  }
+}
+
+void softmaxLegal(
+  const float* logits,
+  const int* legal,
+  int numLegal,
+  float* out,
+  float temperature
+) {
+  std::fill_n(out, NUM_ACTIONS, 0.0f);
+  if(numLegal <= 0)
     return;
   float maxLogit = logits[legal[0]];
-  for(int a : legal)
-    maxLogit = std::max(maxLogit, logits[a]);
+  for(int i = 1; i < numLegal; i++)
+    maxLogit = std::max(maxLogit, logits[legal[i]]);
   const float invTemp = 1.0f / std::max(1e-4f, temperature);
   double sum = 0.0;
-  for(int a : legal) {
+  for(int i = 0; i < numLegal; i++) {
+    int a = legal[i];
     float p = std::exp((logits[a] - maxLogit) * invTemp);
     out[a] = p;
     sum += p;
   }
-  for(int a : legal)
-    out[a] = (float)(out[a] / sum);
+  float invSum = (float)(1.0 / sum);
+  for(int i = 0; i < numLegal; i++) {
+    int a = legal[i];
+    out[a] *= invSum;
+  }
+}
+
+void softmaxLegal(const float* logits, const std::vector<int>& legal, float* out, float temperature) {
+  softmaxLegal(logits, legal.data(), (int)legal.size(), out, temperature);
 }
 
 void softmaxValue(const float* logits, float* out) {
@@ -361,9 +442,15 @@ void computeMaskedValue(const Q4Board& board, const float* valueAbs, float* valu
 }
 
 void decodeTrajectory(const float* raw, int sym, float* out) {
-  Q4Symmetry::init();
-  for(int c = 0; c < POS_AREA; c++)
-    out[c] = 1.0f / (1.0f + std::exp(-raw[Q4Symmetry::applyCell(c, sym)]));
+  if(sym == 0) {
+    for(int c = 0; c < POS_AREA; c++)
+      out[c] = 1.0f / (1.0f + std::exp(-raw[c]));
+    return;
+  }
+  for(int c = 0; c < POS_AREA; c++) {
+    int sc = Q4RawSymmetry::applyCell(c, sym);
+    out[c] = 1.0f / (1.0f + std::exp(-raw[sc]));
+  }
 }
 
 Hash128 getCacheHash(const Q4PlayState& state) {
@@ -378,9 +465,10 @@ Hash128 getCacheHash(const Q4PlayState& state) {
 
   if(state.rules.repetitionDrawCount >= 2) {
     uint64_t rep = Hash::splitMix64(0x5245504554ULL ^ (uint64_t)state.currentPositionRepetitionCount());
-    std::vector<int> dests;
-    state.board.getPawnMoves(state.board.toMove, dests);
-    for(int c : dests) {
+    int dests[16];
+    int numDests = state.board.getPawnMoves(state.board.toMove, dests);
+    for(int i = 0; i < numDests; i++) {
+      int c = dests[i];
       int occ = occurrencesAfterPawnMove(state, c);
       if(occ > 0)
         rep = Hash::splitMix64(rep ^ ((uint64_t)c << 16) ^ (uint64_t)occ);
@@ -424,6 +512,7 @@ void evaluate(
   if(hit) {
     buf.hasResult = true;
     symUsed = 0;
+    out.numLegalActions = state.board.getLegalActions(state.board.toMove, out.legalActions);
   } else {
     int symToUse = sym;
     if(symToUse < 0 || symToUse > 7) {
@@ -437,11 +526,12 @@ void evaluate(
     }
     symUsed = symToUse;
 
-    std::vector<float> spatial(NUM_SPATIAL_CHANNELS * POS_AREA), symSpatial(NUM_SPATIAL_CHANNELS * POS_AREA);
-    std::vector<float> global(NUM_GLOBAL_FEATURES);
-    fillRow(state, nhwc, spatial.data(), global.data());
-    applyInputSymmetry(spatial.data(), symSpatial.data(), symToUse, nhwc);
-    nnEval.evaluateQ4Raw(symSpatial.data(), global.data(), key, buf, skipCache, symToUse);
+    static thread_local float spatialBuf[NUM_SPATIAL_CHANNELS * POS_AREA];
+    static thread_local float symSpatialBuf[NUM_SPATIAL_CHANNELS * POS_AREA];
+    static thread_local float globalBuf[NUM_GLOBAL_FEATURES];
+    fillRow(state, nhwc, spatialBuf, globalBuf, nullptr, out.legalActions, &out.numLegalActions);
+    applyInputSymmetry(spatialBuf, symSpatialBuf, symToUse, nhwc);
+    nnEval.evaluateQ4Raw(symSpatialBuf, globalBuf, key, buf, skipCache, symToUse);
   }
 
   const Q4RawNNOutput* raw = buf.result->q4Raw.get();
@@ -468,10 +558,8 @@ void evaluate(
   decodeTrajectory(raw->trajectoryLogits, 0, out.trajectory);
 
   // Policy probabilities over legal actions
-  std::vector<int> legalActions;
-  state.board.getLegalActions(state.board.toMove, legalActions);
-  softmaxLegal(out.policyLogits[0], legalActions, out.policyProbs[0], nnPolicyTemperature);
-  softmaxLegal(out.policyLogits[1], legalActions, out.policyProbs[1], 1.0f);
+  softmaxLegal(out.policyLogits[0], out.legalActions, out.numLegalActions, out.policyProbs[0], nnPolicyTemperature);
+  softmaxLegal(out.policyLogits[1], out.legalActions, out.numLegalActions, out.policyProbs[1], 1.0f);
 }
 
 void evaluate(
@@ -526,6 +614,10 @@ void averageMultipleSymmetries(
   for(int i = 0; i < numToSample; i++) {
     Eval single;
     evaluate(nnEval, buf, state, symIndices[i], /*skipCache=*/true, single, &rand, nnPolicyTemperature);
+    if(i == 0) {
+      out.numLegalActions = single.numLegalActions;
+      std::copy(single.legalActions, single.legalActions + single.numLegalActions, out.legalActions);
+    }
     for(int v = 0; v < NUM_POLICY_VARIANTS; v++) {
       for(int a = 0; a < NUM_ACTIONS; a++) {
         out.policyLogits[v][a] += single.policyLogits[v][a];

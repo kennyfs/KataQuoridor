@@ -349,6 +349,8 @@ void Search::runWholeSearch(
     this, &timer, &numPlayoutsShared, numNonPlayoutVisits, &tcMaxTime, &upperBoundVisitsLeftDueToTime, &tc,
     hasMaxTime, hasTc, &shouldStopNow, shouldStopEarly, maxVisits, maxPlayouts, maxTime, searchFactor
   ](int threadIdx) {
+    struct timespec tsStart, tsEnd;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tsStart);
     SearchThread* stbuf = new SearchThread(threadIdx, *this);
     int64_t numPlayouts = numPlayoutsShared.load(std::memory_order_relaxed);
     try {
@@ -404,6 +406,9 @@ void Search::runWholeSearch(
       }
     }
     catch(...) {
+      clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tsEnd);
+      int64_t ns = (int64_t)(tsEnd.tv_sec - tsStart.tv_sec) * 1000000000LL + (int64_t)(tsEnd.tv_nsec - tsStart.tv_nsec);
+      totalSearchThreadCpuTimeNs.fetch_add(ns, std::memory_order_relaxed);
       transferOldNNOutputs(*stbuf);
       delete stbuf;
       throw;
@@ -411,6 +416,9 @@ void Search::runWholeSearch(
 
     transferOldNNOutputs(*stbuf);
     delete stbuf;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tsEnd);
+    int64_t ns = (int64_t)(tsEnd.tv_sec - tsStart.tv_sec) * 1000000000LL + (int64_t)(tsEnd.tv_nsec - tsStart.tv_nsec);
+    totalSearchThreadCpuTimeNs.fetch_add(ns, std::memory_order_relaxed);
   };
 
   performTaskWithThreads(&searchLoop, capThreads);

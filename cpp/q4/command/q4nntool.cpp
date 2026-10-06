@@ -398,6 +398,147 @@ void nnBench(const ModelOptions& o) {
     double secs = t.getSeconds();
     double perPosUs = secs / (reps * positions.size()) * 1e6;
     std::cout << json({{"what", "fillRow"}, {"positions", reps * positions.size()}, {"microsecondsPerPosition", perPosUs}}).dump() << "\n";
+
+    // Per-channel-group timing breakdown
+    {
+      ClockTimer gt;
+      for(int r = 0; r < reps; r++) {
+        for(const Q4History& h : positions) {
+          const Q4Board& b = h.currentBoard;
+          int toMove = b.toMove;
+          for(int c = 0; c < Q4NNConst::POS_AREA; c++) {
+            spatial[c] = 1.0f; // CH_ON_BOARD
+            for(int d = 0; d < 4; d++)
+              if(b.blocked[c] & (1 << d)) spatial[(6 + d) * Q4NNConst::POS_AREA + c] = 1.0f;
+          }
+          for(int k = 0; k < 4; k++) {
+            int s = (toMove + k) % 4;
+            if(b.isAlive(s)) spatial[(1 + k) * Q4NNConst::POS_AREA + b.pawn[s]] = 1.0f;
+          }
+          spatial[5 * Q4NNConst::POS_AREA + Q4Board::CENTER_CELL] = 1.0f;
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "occupancy_and_blocked (ch 0..9)"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
+    {
+      ClockTimer gt;
+      Q4NN::RawDistances rd;
+      for(int r = 0; r < reps; r++) {
+        for(const Q4History& h : positions) {
+          const Q4Board& b = h.currentBoard;
+          Q4NN::computeRawDistances(b, rd);
+          for(int c = 0; c < Q4NNConst::POS_AREA; c++) {
+            spatial[10 * Q4NNConst::POS_AREA + c] = (float)rd.d[0][c] / 20.0f;
+            for(int k = 0; k < 4; k++)
+              spatial[(11 + k) * Q4NNConst::POS_AREA + c] = (float)rd.d[1 + k][c] / 20.0f;
+          }
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "distances (ch 10..14)"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
+    {
+      ClockTimer gt;
+      Q4NN::RawDistances rd;
+      for(int r = 0; r < reps; r++) {
+        for(const Q4History& h : positions) {
+          const Q4Board& b = h.currentBoard;
+          int toMove = b.toMove;
+          for(int k = 0; k < 4; k++) {
+            int s = (toMove + k) % 4;
+            if(!b.isAlive(s)) continue;
+            uint8_t pawnToCenter = b.distToCenter[b.pawn[s]];
+            if(pawnToCenter == 255) continue;
+            for(int c = 0; c < Q4NNConst::POS_AREA; c++) {
+              uint8_t df = rd.d[1 + k][c];
+              uint8_t dc = b.distToCenter[c];
+              if(df != 255 && dc != 255 && (int)df + (int)dc == (int)pawnToCenter)
+                spatial[(15 + k) * Q4NNConst::POS_AREA + c] = 1.0f;
+            }
+          }
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "shortest_paths (ch 15..18)"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
+    {
+      ClockTimer gt;
+      for(int r = 0; r < reps; r++) {
+        for(const Q4History& h : positions) {
+          const Q4Board& b = h.currentBoard;
+          for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
+            for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
+              int a = Q4Board::anchorOf(ax, ay);
+              int c = ay * Q4NNConst::POS_LEN + ax;
+              if(b.vWalls.test(a)) spatial[19 * Q4NNConst::POS_AREA + c] = 1.0f;
+              if(b.hWalls.test(a)) spatial[20 * Q4NNConst::POS_AREA + c] = 1.0f;
+              spatial[21 * Q4NNConst::POS_AREA + c] = 1.0f;
+              if(b.isGeometricallyLegalWall(ax, ay, false)) spatial[22 * Q4NNConst::POS_AREA + c] = 1.0f;
+              if(b.isGeometricallyLegalWall(ax, ay, true)) spatial[23 * Q4NNConst::POS_AREA + c] = 1.0f;
+            }
+          }
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "walls_and_anchors (ch 19..23)"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
+    {
+      ClockTimer gt;
+      int pawnDests[16];
+      for(int r = 0; r < reps; r++) {
+        for(const Q4History& h : positions) {
+          const Q4Board& b = h.currentBoard;
+          int nPawn = b.getPawnMoves(b.toMove, pawnDests);
+          const int repN = h.rules.repetitionDrawCount;
+          for(int i = 0; i < nPawn; i++) {
+            int c = pawnDests[i];
+            spatial[24 * Q4NNConst::POS_AREA + c] = 1.0f;
+            if(repN >= 2) {
+              Hash128 destH = h.state.board.getHashAfterPawnMove(c);
+              int occ = 0;
+              for(const auto& repH : h.state.repetitionHashes)
+                if(repH == destH) occ++;
+              if(occ > 0) spatial[25 * Q4NNConst::POS_AREA + c] = 1.0f;
+              if(occ + 1 >= repN) spatial[26 * Q4NNConst::POS_AREA + c] = 1.0f;
+            }
+          }
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "pawn_moves_and_rep (ch 24..26)"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
+    {
+      ClockTimer gt;
+      for(int r = 0; r < reps; r++) {
+        for(const Q4History& h : positions) {
+          const Q4Board& b = h.currentBoard;
+          int nAlive = b.getNumAlive();
+          for(int k = 0; k < 4; k++) {
+            int s = (b.toMove + k) % 4;
+            global[k] = (float)b.wallsLeft[s] / 10.0f;
+            global[4 + k] = b.wallsLeft[s] > 0 ? 1.0f : 0.0f;
+            global[8 + k] = b.isAlive(s) ? 1.0f : 0.0f;
+          }
+          global[24] = (float)nAlive / 4.0f;
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "global_features"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
+    {
+      ClockTimer gt;
+      std::vector<float> nhwcSpatial(spatial.size());
+      for(int r = 0; r < reps; r++) {
+        for(size_t p = 0; p < positions.size(); p++) {
+          for(int c = 0; c < Q4NNConst::POS_AREA; c++)
+            for(int ch = 0; ch < Q4NNConst::NUM_SPATIAL_CHANNELS; ch++)
+              nhwcSpatial[(size_t)c * Q4NNConst::NUM_SPATIAL_CHANNELS + ch] = spatial[(size_t)ch * Q4NNConst::POS_AREA + c];
+        }
+      }
+      double gUs = gt.getSeconds() / (reps * positions.size()) * 1e6;
+      std::cout << json({{"what", "channel_group"}, {"name", "nhwc_transpose"}, {"microsecondsPerPosition", gUs}}).dump() << "\n";
+    }
     // The other CPU work around one evaluation: the symmetry of the input row and the decoding of the policy.
     std::vector<float> symSpatial(spatial.size()), policy(Q4NN::POLICY_SLOTS, 0.5f), decoded(Q4NN::NUM_POLICY_VARIANTS * Q4NN::NUM_ACTIONS);
     const int symReps = 20000;

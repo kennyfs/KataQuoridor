@@ -564,9 +564,10 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
     if(!cfg.contains("ignoreAllHistory")) cfg.overrideKey("ignoreAllHistory", "false");
 
     Rand evalSeed(seed + 100);
+    int maxBatchSize = std::max(32, numThreads);
     NNEvaluator* nnEval = Setup::initializeNNEvaluator(
       modelPath, modelPath, "", cfg, logger, evalSeed, 1, Q4NNConst::POS_LEN, Q4NNConst::POS_LEN,
-      Setup::MaxBatchSizeRequest::explicitSize(16), true, false, Setup::SETUP_FOR_BENCHMARK
+      Setup::MaxBatchSizeRequest::explicitSize(maxBatchSize), true, false, Setup::SETUP_FOR_BENCHMARK
     );
 
     SearchParams params = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_BENCHMARK);
@@ -600,6 +601,7 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
     search.clearSearch();
 
     int64_t totalVisits = 0;
+    search.resetSearchThreadCpuTimeNs();
     auto t0 = std::chrono::high_resolution_clock::now();
     for(size_t i = 0; i < positions.size(); i++) {
       search.setPosition(positions[i]);
@@ -610,6 +612,8 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
     auto t1 = std::chrono::high_resolution_clock::now();
     double secs = std::chrono::duration<double>(t1 - t0).count();
     double pps = (double)totalVisits / secs;
+    int64_t totalCpuNs = search.getSearchThreadCpuTimeNs();
+    double cpuUsPerPlayout = totalVisits > 0 ? ((double)totalCpuNs / (totalVisits * 1000.0)) : 0.0;
 
     std::cout << "=== Q4 Search Benchmark ===" << std::endl;
     std::cout << "Model: " << modelPath << std::endl;
@@ -618,6 +622,7 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
     std::cout << "Positions: " << positions.size() << std::endl;
     std::cout << "Total visits: " << totalVisits << " in " << std::fixed << std::setprecision(3) << secs << " s" << std::endl;
     std::cout << "Playouts per second: " << std::fixed << std::setprecision(1) << pps << " visits/sec" << std::endl;
+    std::cout << "Search thread CPU time per playout: " << std::fixed << std::setprecision(1) << cpuUsPerPlayout << " us" << std::endl;
 
     delete nnEval;
     return 0;

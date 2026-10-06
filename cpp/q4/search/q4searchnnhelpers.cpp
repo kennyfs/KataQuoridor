@@ -48,17 +48,10 @@ bool Search::initNodeNNOutput(
   std::shared_ptr<NNOutput>* result = new std::shared_ptr<NNOutput>(new NNOutput());
   NNOutput* out = result->get();
 
-  std::vector<int> legalActions;
-  thread.state.getLegalActions(legalActions);
-  std::vector<bool> isLegal(Q4Board::NUM_ACTIONS, false);
-  for(int a : legalActions)
-    isLegal[a] = true;
-
-  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++) {
-    if(isLegal[a])
-      out->policyProbs[a] = eval.policyProbs[0][a];
-    else
-      out->policyProbs[a] = -1.0f;
+  std::fill_n(out->policyProbs, (int)Q4Board::NUM_ACTIONS, -1.0f);
+  for(int i = 0; i < eval.numLegalActions; i++) {
+    int a = eval.legalActions[i];
+    out->policyProbs[a] = eval.policyProbs[0][a];
   }
 
   for(int i = 0; i < 5; i++)

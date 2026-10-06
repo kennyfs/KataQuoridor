@@ -158,6 +158,10 @@ struct Search {
   ) const;
   void getPolicySurpriseAndEntropy(double& policySurprise, double& policyEntropy) const;
 
+  mutable std::atomic<int64_t> totalSearchThreadCpuTimeNs{0};
+  int64_t getSearchThreadCpuTimeNs() const { return totalSearchThreadCpuTimeNs.load(std::memory_order_relaxed); }
+  void resetSearchThreadCpuTimeNs() { totalSearchThreadCpuTimeNs.store(0, std::memory_order_relaxed); }
+
   // Utility and weighting helpers (Plan §8.3)
   static double computeSeatUtility(
     int seat,

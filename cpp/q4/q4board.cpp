@@ -206,6 +206,18 @@ bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
   q[tail++] = CENTER_CELL;
   visited[CENTER_CELL] = true;
 
+  int neededMask = 0;
+  for(int s = 0; s < NUM_SEATS; s++) {
+    if(isAlive(s)) {
+      int p = pawn[s];
+      if(p >= 0 && p != CENTER_CELL)
+        neededMask |= (1 << s);
+    }
+  }
+  if(neededMask == 0)
+    return true;
+
+  int foundMask = 0;
   while(head < tail) {
     int curr = q[head++];
     for(int dir = 0; dir < 4; dir++) {
@@ -213,21 +225,19 @@ bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
         int nxt = curr + DIR_OFFSET[dir];
         if(!visited[nxt]) {
           visited[nxt] = true;
+          int occ = occupant[nxt];
+          if(occ >= 0 && (neededMask & (1 << occ))) {
+            foundMask |= (1 << occ);
+            if(foundMask == neededMask)
+              return true;
+          }
           q[tail++] = nxt;
         }
       }
     }
   }
 
-  for(int s = 0; s < NUM_SEATS; s++) {
-    if(isAlive(s)) {
-      int p = pawn[s];
-      if(p >= 0 && !visited[p]) {
-        return false;
-      }
-    }
-  }
-  return true;
+  return false;
 }
 
 bool Q4Board::isLegalWall(int ax, int ay, bool isHorizontal) const {
@@ -302,13 +312,12 @@ void Q4Board::recomputeCachedPaths() {
   }
 }
 
-void Q4Board::getPawnMoves(int seat, std::vector<int>& outMoves) const {
-  outMoves.clear();
+int Q4Board::getPawnMoves(int seat, int* outMoves) const {
   if(!isAlive(seat))
-    return;
+    return 0;
   int me = pawn[seat];
   if(me < 0)
-    return;
+    return 0;
 
   int ordinary[16];
   int numOrdinary = 0;
@@ -368,12 +377,13 @@ void Q4Board::getPawnMoves(int seat, std::vector<int>& outMoves) const {
     }
   }
 
+  int count = 0;
   bool seen[NUM_CELLS] = {false};
   for(int i = 0; i < numOrdinary; i++) {
     int c = ordinary[i];
     if(!seen[c]) {
       seen[c] = true;
-      outMoves.push_back(c);
+      outMoves[count++] = c;
     }
   }
   if(canTwoPawn) {
@@ -381,34 +391,44 @@ void Q4Board::getPawnMoves(int seat, std::vector<int>& outMoves) const {
       int c = twoPawn[i];
       if(!seen[c]) {
         seen[c] = true;
-        outMoves.push_back(c);
+        outMoves[count++] = c;
       }
     }
   }
-  std::sort(outMoves.begin(), outMoves.end());
+  std::sort(outMoves, outMoves + count);
+  return count;
 }
 
-void Q4Board::getLegalActions(int seat, std::vector<int>& outActions) const {
-  outActions.clear();
-  if(isFinished() || !isAlive(seat))
-    return;
+void Q4Board::getPawnMoves(int seat, std::vector<int>& outMoves) const {
+  outMoves.resize(16);
+  int n = getPawnMoves(seat, outMoves.data());
+  outMoves.resize(n);
+}
 
-  std::vector<int> pawnDests;
-  getPawnMoves(seat, pawnDests);
-  for(int c : pawnDests)
-    outActions.push_back(actionOfPawn(c));
+int Q4Board::getLegalActions(int seat, int* outActions) const {
+  if(isFinished() || !isAlive(seat))
+    return 0;
+
+  int count = getPawnMoves(seat, outActions);
 
   if(wallsLeft[seat] > 0) {
     for(int ay = 0; ay < NUM_ANCHORS; ay++) {
       for(int ax = 0; ax < NUM_ANCHORS; ax++) {
         int a = anchorOf(ax, ay);
         if(isGeometricallyLegalWall(ax, ay, false))
-          outActions.push_back(actionOfVWall(a));
+          outActions[count++] = actionOfVWall(a);
         if(isGeometricallyLegalWall(ax, ay, true))
-          outActions.push_back(actionOfHWall(a));
+          outActions[count++] = actionOfHWall(a);
       }
     }
   }
+  return count;
+}
+
+void Q4Board::getLegalActions(int seat, std::vector<int>& outActions) const {
+  outActions.resize(NUM_ACTIONS);
+  int n = getLegalActions(seat, outActions.data());
+  outActions.resize(n);
 }
 
 bool Q4Board::isLegalAction(int action, int seat) const {
