@@ -1,72 +1,81 @@
-#include "../program/selfplaymanager.h"
+#include "q4selfplaymanager.h"
 
-#include "../core/test.h"
+#include <cmath>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
 
-using namespace std;
+#include "../../core/test.h"
 
-SelfplayManager::ModelData::ModelData(
-  const string& name, NNEvaluator* neval, int maxDQueueSize,
-  TrainingDataWriter* tdWriter, ofstream* sOut,
-  double initialTime,
+namespace Q4Play {
+
+Q4SelfPlayManager::ModelData::ModelData(
+  const std::string& name,
+  NNEvaluator* neval,
+  int maxDataQueueSize,
+  Q4TrainingDataWriter* tdWriter,
+  std::ofstream* recOut,
+  double initialLastReleaseTime,
   bool hasDataLoop
-):
-  modelName(name),
-  nnEval(neval),
-  gameStartedCount(0),
-  gamesFinishedCount(0),
-  movesPlayedCount(0),
-  gamesDrawnCount(0),
-  gamesRepetitionDrawnCount(0),
-  gamesCutoffCount(0),
-  movesPlayedCutoffCount(0),
-  lastReleaseTime(initialTime),
-  hasDataWriteLoop(hasDataLoop),
-  finishedGameQueue(maxDQueueSize),
-  acquireCount(0),
-  tdataWriter(tdWriter),
-  sgfOut(sOut)
-{
+) : modelName(name),
+    nnEval(neval),
+    gameStartedCount(0),
+    gamesFinishedCount(0),
+    movesPlayedCount(0),
+    gamesCutoffCount(0),
+    movesPlayedCutoffCount(0),
+    q4Stats(),
+    lastReleaseTime(initialLastReleaseTime),
+    hasDataWriteLoop(hasDataLoop),
+    finishedGameQueue(maxDataQueueSize),
+    acquireCount(0),
+    tdataWriter(tdWriter),
+    recordsOut(recOut)
+{}
+
+Q4SelfPlayManager::ModelData::~ModelData() {
+  if(tdataWriter != nullptr) {
+    tdataWriter->flushIfNonempty();
+    delete tdataWriter;
+    tdataWriter = nullptr;
+  }
+  if(recordsOut != nullptr) {
+    recordsOut->close();
+    delete recordsOut;
+    recordsOut = nullptr;
+  }
+  if(nnEval != nullptr) {
+    delete nnEval;
+    nnEval = nullptr;
+  }
 }
 
-SelfplayManager::ModelData::~ModelData() {
-  delete nnEval;
-  delete tdataWriter;
-  if(sgfOut != NULL)
-    delete sgfOut;
-}
-
-//------------------------------------------------------------------------------------
-
-SelfplayManager::SelfplayManager(
-  int maxDQueueSize,
-  Logger* lg,
-  int64_t logEvery,
+Q4SelfPlayManager::Q4SelfPlayManager(
+  int maxQueueSize,
+  Logger* log,
+  int64_t logGamesEv,
   bool autoCleanup
-):
-  maxDataQueueSize(maxDQueueSize),
-  logger(lg),
-  logGamesEvery(logEvery),
-  autoCleanupAllButLatestIfUnused(autoCleanup),
-  timer(),
-  managerMutex(),
-  modelDatas(),
-  numDataWriteLoopsActive(0),
-  dataWriteLoopsAreDone(),
-  totalNumRowsProcessed(0)
-{
-}
+) : maxDataQueueSize(maxQueueSize),
+    logger(log),
+    logGamesEvery(logGamesEv),
+    autoCleanupAllButLatestIfUnused(autoCleanup),
+    timer(),
+    managerMutex(),
+    modelDatas(),
+    numDataWriteLoopsActive(0),
+    dataWriteLoopsAreDone(),
+    totalNumRowsProcessed(0)
+{}
 
-SelfplayManager::~SelfplayManager() {
+Q4SelfPlayManager::~Q4SelfPlayManager() {
   std::unique_lock<std::mutex> lock(managerMutex);
-  for(size_t i = 0; i<modelDatas.size(); i++) {
-    //If a client tries to delete this while something is still acquired, there's something wrong.
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     testAssert(modelDatas[i]->acquireCount == 0);
-    //Trigger data writing loop to quit once it reaches end of its queue
     modelDatas[i]->finishedGameQueue.setReadOnly();
     totalNumRowsProcessed += modelDatas[i]->nnEval->numRowsProcessed();
-    //Data write loop is responsible for deleting ModelData, if it exists
-    if(!modelDatas[i]->hasDataWriteLoop)
+    if(!modelDatas[i]->hasDataWriteLoop) {
       delete modelDatas[i];
+    }
   }
   modelDatas.clear();
   while(numDataWriteLoopsActive > 0) {
@@ -74,63 +83,104 @@ SelfplayManager::~SelfplayManager() {
   }
 }
 
-uint64_t SelfplayManager::getTotalNumRowsProcessed() const {
+uint64_t Q4SelfPlayManager::getTotalNumRowsProcessed() const {
   std::lock_guard<std::mutex> lock(managerMutex);
   uint64_t total = totalNumRowsProcessed;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     total += modelDatas[i]->nnEval->numRowsProcessed();
   }
   return total;
 }
 
-
-static void dataWriteLoop(SelfplayManager* manager, SelfplayManager::ModelData* modelData) {
+static void dataWriteLoopFunc(Q4SelfPlayManager* manager, Q4SelfPlayManager::ModelData* modelData) {
   manager->runDataWriteLoop(modelData);
 }
 
-void SelfplayManager::maybeAutoCleanupAlreadyLocked() {
-  if(autoCleanupAllButLatestIfUnused && modelDatas.size() > 0) {
-    for(size_t i = 0; i<modelDatas.size()-1; i++) {
+void Q4SelfPlayManager::loadModelAndStartDataWriting(
+  NNEvaluator* nnEval,
+  Q4TrainingDataWriter* tdataWriter,
+  std::ofstream* recordsOut
+) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  std::string modelName = nnEval->getModelName();
+  for(size_t i = 0; i < modelDatas.size(); i++) {
+    if(modelDatas[i]->modelName == modelName) {
+      throw StringError("Model with name " + modelName + " already loaded into SelfPlayManager");
+    }
+  }
+
+  ModelData* modelData = new ModelData(
+    modelName, nnEval, maxDataQueueSize, tdataWriter, recordsOut, timer.getSeconds(), true
+  );
+  modelDatas.push_back(modelData);
+  maybeAutoCleanupAlreadyLocked();
+
+  numDataWriteLoopsActive++;
+  std::thread dataWriteLoopThread(dataWriteLoopFunc, this, modelData);
+  dataWriteLoopThread.detach();
+}
+
+void Q4SelfPlayManager::loadModelNoDataWritingLoop(
+  NNEvaluator* nnEval,
+  Q4TrainingDataWriter* tdataWriter,
+  std::ofstream* recordsOut
+) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  std::string modelName = nnEval->getModelName();
+  for(size_t i = 0; i < modelDatas.size(); i++) {
+    if(modelDatas[i]->modelName == modelName) {
+      throw StringError("Model with name " + modelName + " already loaded into SelfPlayManager");
+    }
+  }
+
+  ModelData* modelData = new ModelData(
+    modelName, nnEval, maxDataQueueSize, tdataWriter, recordsOut, timer.getSeconds(), false
+  );
+  modelDatas.push_back(modelData);
+  maybeAutoCleanupAlreadyLocked();
+}
+
+void Q4SelfPlayManager::maybeAutoCleanupAlreadyLocked() {
+  if(autoCleanupAllButLatestIfUnused && modelDatas.size() > 1) {
+    for(size_t i = 0; i < modelDatas.size() - 1; i++) {
       ModelData* foundData = modelDatas[i];
       if(foundData->acquireCount <= 0) {
         testAssert(foundData->acquireCount == 0);
-        //Trigger data writing loop to quit once it reaches end of its queue
         foundData->finishedGameQueue.setReadOnly();
         totalNumRowsProcessed += foundData->nnEval->numRowsProcessed();
-        //Data write loop is responsible for deleting ModelData, if it exists
-        if(!foundData->hasDataWriteLoop)
+        if(!foundData->hasDataWriteLoop) {
           delete foundData;
-        modelDatas.erase(modelDatas.begin()+i);
+        }
+        modelDatas.erase(modelDatas.begin() + i);
         i--;
       }
     }
   }
 }
 
-
-void SelfplayManager::cleanupUnusedModelsOlderThan(double seconds) {
+void Q4SelfPlayManager::cleanupUnusedModelsOlderThan(double seconds) {
   std::lock_guard<std::mutex> lock(managerMutex);
   double now = timer.getSeconds();
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     ModelData* foundData = modelDatas[i];
     if(foundData->acquireCount <= 0 && now - foundData->lastReleaseTime > seconds) {
       testAssert(foundData->acquireCount == 0);
-      logger->write("Unloading network that hasn't been used in a while: " + foundData->modelName);
-      //Trigger data writing loop to quit once it reaches end of its queue
+      if(logger != nullptr)
+        logger->write("Unloading network that hasn't been used in a while: " + foundData->modelName);
       foundData->finishedGameQueue.setReadOnly();
       totalNumRowsProcessed += foundData->nnEval->numRowsProcessed();
-      //Data write loop is responsible for deleting ModelData, if it exists
-      if(!foundData->hasDataWriteLoop)
+      if(!foundData->hasDataWriteLoop) {
         delete foundData;
-      modelDatas.erase(modelDatas.begin()+i);
+      }
+      modelDatas.erase(modelDatas.begin() + i);
       i--;
     }
   }
 }
 
-void SelfplayManager::clearUnusedModelCaches() {
+void Q4SelfPlayManager::clearUnusedModelCaches() {
   std::lock_guard<std::mutex> lock(managerMutex);
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     ModelData* foundData = modelDatas[i];
     if(foundData->acquireCount <= 0) {
       foundData->nnEval->clearCache();
@@ -138,424 +188,291 @@ void SelfplayManager::clearUnusedModelCaches() {
   }
 }
 
-
-void SelfplayManager::loadModelAndStartDataWriting(
-  NNEvaluator* nnEval,
-  TrainingDataWriter* tdataWriter,
-  ofstream* sgfOut
-) {
-  string modelName = nnEval->getModelName();
+std::vector<std::string> Q4SelfPlayManager::modelNames() const {
   std::lock_guard<std::mutex> lock(managerMutex);
-  for(size_t i = 0; i<modelDatas.size(); i++) {
-    if(modelDatas[i]->modelName == modelName) {
-      throw StringError("SelfplayManager::loadModelAndStartDataWriting: Duplicate model name: " + modelName);
-    }
-  }
-
-  double initialTime = timer.getSeconds();
-  bool hasDataWriteLoop = true;
-  ModelData* newModel = new ModelData(modelName,nnEval,maxDataQueueSize,tdataWriter,sgfOut,initialTime,hasDataWriteLoop);
-  modelDatas.push_back(newModel);
-  numDataWriteLoopsActive++;
-  std::thread newThread(dataWriteLoop,this,newModel);
-  newThread.detach();
-
-  maybeAutoCleanupAlreadyLocked();
-}
-
-void SelfplayManager::loadModelNoDataWritingLoop(
-  NNEvaluator* nnEval,
-  TrainingDataWriter* tdataWriter,
-  ofstream* sgfOut
-) {
-  string modelName = nnEval->getModelName();
-  std::lock_guard<std::mutex> lock(managerMutex);
-  for(size_t i = 0; i<modelDatas.size(); i++) {
-    if(modelDatas[i]->modelName == modelName) {
-      throw StringError("SelfplayManager::loadModelAndStartDataWriting: Duplicate model name: " + modelName);
-    }
-  }
-
-  double initialTime = timer.getSeconds();
-  bool hasDataWriteLoop = false;
-  ModelData* newModel = new ModelData(modelName,nnEval,maxDataQueueSize,tdataWriter,sgfOut,initialTime,hasDataWriteLoop);
-  modelDatas.push_back(newModel);
-  maybeAutoCleanupAlreadyLocked();
-}
-
-size_t SelfplayManager::numModels() const {
-  std::lock_guard<std::mutex> lock(managerMutex);
-  return modelDatas.size();
-}
-
-vector<string> SelfplayManager::modelNames() const {
-  std::lock_guard<std::mutex> lock(managerMutex);
-  vector<string> names;
-  names.reserve(modelDatas.size());
-  for(size_t i = 0; i<modelDatas.size(); i++)
+  std::vector<std::string> names;
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     names.push_back(modelDatas[i]->modelName);
+  }
   return names;
 }
 
-string SelfplayManager::getLatestModelName() const {
+std::string Q4SelfPlayManager::getLatestModelName() const {
   std::lock_guard<std::mutex> lock(managerMutex);
-  if(modelDatas.size() <= 0)
-    throw StringError("SelfplayManager::getLatestModelName: no models loaded");
-  return modelDatas[modelDatas.size()-1]->modelName;
+  if(modelDatas.empty())
+    return std::string();
+  return modelDatas.back()->modelName;
 }
 
-bool SelfplayManager::hasModel(const std::string& modelName) const {
+bool Q4SelfPlayManager::hasModel(const std::string& modelName) const {
   std::lock_guard<std::mutex> lock(managerMutex);
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->modelName == modelName)
       return true;
   }
   return false;
 }
 
+size_t Q4SelfPlayManager::numModels() const {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  return modelDatas.size();
+}
 
-NNEvaluator* SelfplayManager::acquireModelAlreadyLocked(ModelData* foundData) {
-  foundData->acquireCount += 1;
+NNEvaluator* Q4SelfPlayManager::acquireModelAlreadyLocked(ModelData* foundData) {
+  testAssert(foundData != nullptr);
+  foundData->acquireCount++;
   return foundData->nnEval;
 }
-void SelfplayManager::releaseAlreadyLocked(ModelData* foundData) {
-  foundData->lastReleaseTime = timer.getSeconds();
-  foundData->acquireCount -= 1;
-}
 
-NNEvaluator* SelfplayManager::acquireModel(const string& modelName) {
+NNEvaluator* Q4SelfPlayManager::acquireModel(const std::string& modelName) {
   std::lock_guard<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->modelName == modelName) {
-      foundData = modelDatas[i];
-      break;
+      return acquireModelAlreadyLocked(modelDatas[i]);
     }
   }
-  if(foundData != NULL)
-    return acquireModelAlreadyLocked(foundData);
-  return NULL;
+  return nullptr;
 }
 
-NNEvaluator* SelfplayManager::acquireLatest() {
+NNEvaluator* Q4SelfPlayManager::acquireLatest() {
   std::lock_guard<std::mutex> lock(managerMutex);
-  if(modelDatas.size() <= 0)
-    return NULL;
-  ModelData* foundData = modelDatas[modelDatas.size()-1];
-  return acquireModelAlreadyLocked(foundData);
+  if(modelDatas.empty())
+    return nullptr;
+  return acquireModelAlreadyLocked(modelDatas.back());
 }
 
-void SelfplayManager::release(const string& modelName) {
+void Q4SelfPlayManager::releaseAlreadyLocked(ModelData* foundData) {
+  testAssert(foundData != nullptr);
+  foundData->acquireCount--;
+  testAssert(foundData->acquireCount >= 0);
+  if(foundData->acquireCount == 0) {
+    foundData->lastReleaseTime = timer.getSeconds();
+  }
+}
+
+void Q4SelfPlayManager::release(const std::string& modelName) {
   std::lock_guard<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->modelName == modelName) {
-      foundData = modelDatas[i];
-      break;
+      releaseAlreadyLocked(modelDatas[i]);
+      return;
     }
   }
-  if(foundData != NULL) {
-    releaseAlreadyLocked(foundData);
-    maybeAutoCleanupAlreadyLocked();
-  }
+  testAssert(false);
 }
 
-void SelfplayManager::release(NNEvaluator* nnEval) {
+void Q4SelfPlayManager::release(NNEvaluator* nnEval) {
   std::lock_guard<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->nnEval == nnEval) {
-      foundData = modelDatas[i];
-      break;
+      releaseAlreadyLocked(modelDatas[i]);
+      return;
     }
   }
-  if(foundData != NULL) {
-    releaseAlreadyLocked(foundData);
-    maybeAutoCleanupAlreadyLocked();
+  testAssert(false);
+}
+
+void Q4SelfPlayManager::countOneGameStarted(NNEvaluator* nnEval) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  for(size_t i = 0; i < modelDatas.size(); i++) {
+    if(modelDatas[i]->nnEval == nnEval) {
+      modelDatas[i]->gameStartedCount++;
+      return;
+    }
   }
 }
 
-void SelfplayManager::countOneGameStarted(NNEvaluator* nnEval) {
-  std::unique_lock<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+void Q4SelfPlayManager::countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMoves) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->nnEval == nnEval) {
-      foundData = modelDatas[i];
-      break;
+      modelDatas[i]->gamesCutoffCount.fetch_add(1, std::memory_order_relaxed);
+      modelDatas[i]->movesPlayedCutoffCount.fetch_add(numMoves, std::memory_order_relaxed);
+      return;
     }
-  }
-  if(foundData == NULL)
-    throw StringError("SelfplayManager::countOneGameStarted: could not find model. Possible bug - client did not acquire model?");
-
-  foundData->gameStartedCount += 1;
-  int64_t gameStartedCount = foundData->gameStartedCount;
-  lock.unlock();
-
-  if(logger != NULL && gameStartedCount % logGamesEvery == 0) {
-    logger->write("Started " + Global::int64ToString(gameStartedCount) + " games with " + nnEval->getModelName());
-    logger->write(quoridorStatsSummary(foundData));
-  }
-  int64_t logNNEvery = logGamesEvery*100 > 1000 ? logGamesEvery*100 : 1000;
-  if(logger != NULL && gameStartedCount % logNNEvery == 0) {
-    logger->write(nnEval->getModelFileName());
-    logger->write("Games finished: " + Global::int64ToString(foundData->gamesFinishedCount.load(std::memory_order_relaxed)));
-    logger->write("Moves played: " + Global::int64ToString(foundData->movesPlayedCount.load(std::memory_order_relaxed)));
-    if(foundData->tdataWriter != NULL)
-      logger->write("Data rows: " + Global::int64ToString(foundData->tdataWriter->numRowsWritten()));
-    logger->write("NN rows: " + Global::int64ToString(nnEval->numRowsProcessed()));
-    logger->write("NN batches: " + Global::int64ToString(nnEval->numBatchesProcessed()));
-    logger->write("NN avg batch size: " + Global::doubleToString(nnEval->averageProcessedBatchSize()));
-    logger->write("NN cache hits: " + Global::int64ToString((int64_t)nnEval->numCacheHits()));
   }
 }
 
-void SelfplayManager::countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMoves) {
-  std::unique_lock<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
-    if(modelDatas[i]->nnEval == nnEval) {
-      foundData = modelDatas[i];
-      break;
-    }
-  }
-  if(foundData == NULL)
-    throw StringError("SelfplayManager::countOneGameHitCutoff: could not find model. Possible bug - client did not acquire model?");
-  foundData->gamesCutoffCount.fetch_add(1, std::memory_order_relaxed);
-  foundData->movesPlayedCutoffCount.fetch_add(numMoves, std::memory_order_relaxed);
+std::string Q4SelfPlayManager::q4StatsSummary(ModelData* modelData) {
+  std::lock_guard<std::mutex> lock(modelData->q4Stats.mutex);
+  const auto& s = modelData->q4Stats;
+  if(s.games <= 0) return std::string();
+
+  std::ostringstream out;
+  double avgPlies = (s.games > 0) ? (double)s.plies / s.games : 0.0;
+  out << "Model " << modelData->modelName << " stats (" << s.games << " games): "
+      << "avg plies = " << std::fixed << std::setprecision(1) << avgPlies
+      << " | win rates: S0=" << std::setprecision(1) << (100.0 * s.winsBySeat[0] / s.games) << "%"
+      << " S1=" << (100.0 * s.winsBySeat[1] / s.games) << "%"
+      << " S2=" << (100.0 * s.winsBySeat[2] / s.games) << "%"
+      << " S3=" << (100.0 * s.winsBySeat[3] / s.games) << "%"
+      << " | draw rate = " << (100.0 * (s.maxPliesDraws + s.repetitionDraws) / s.games) << "%"
+      << " (maxPlies: " << (100.0 * s.maxPliesDraws / s.games) << "%"
+      << ", rep: " << (100.0 * s.repetitionDraws / s.games) << "%)"
+      << " | eliminations = " << s.eliminations
+      << " | rows written = " << s.rowsWritten;
+  return out.str();
 }
 
-void SelfplayManager::countQuoridorGameResult(NNEvaluator* nnEval, const FinishedGameData& gameData) {
-  std::unique_lock<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
-    if(modelDatas[i]->nnEval == nnEval) {
-      foundData = modelDatas[i];
-      break;
-    }
-  }
-  if(foundData == NULL)
-    throw StringError("SelfplayManager::countQuoridorGameResult: could not find model. Possible bug - client did not acquire model?");
-  lock.unlock();
-
-  const BoardHistory& hist = gameData.endHist;
-  const Rules standard = Rules::getQuoridorRules();
-  const bool isDecisive = hist.isGameFinished && (hist.winner == P_BLACK || hist.winner == P_WHITE);
-  const bool blackWon = isDecisive && hist.winner == P_BLACK;
-  const bool isNormal = gameData.mode == FinishedGameData::MODE_NORMAL;
-  const bool standardWalls =
-    hist.rules.blackInitialFences == standard.blackInitialFences && hist.rules.whiteInitialFences == standard.whiteInitialFences;
-
-  ModelData::QuoridorStats& stats = foundData->quoridorStats;
-  std::lock_guard<std::mutex> statsLock(stats.mutex);
-  stats.games += 1;
-  stats.draws += isDecisive ? 0 : 1;
-  stats.repetitionDraws += hist.isRepetitionDraw() ? 1 : 0;
-  stats.maxPliesDraws += hist.isMaxPliesDraw() ? 1 : 0;
-  stats.plies += hist.getCurrentTurnNumber();
+void Q4SelfPlayManager::countQ4GameResult(NNEvaluator* nnEval, const Q4FinishedGameData& gameData) {
+  ModelData* targetData = nullptr;
   {
-    const int r = hist.rules.repetitionDrawCount > 0 ? 1 : 0;
-    stats.gamesByRule[r] += 1;
-    stats.drawsByRule[r] += isDecisive ? 0 : 1;
-    stats.pliesByRule[r] += hist.getCurrentTurnNumber();
+    std::lock_guard<std::mutex> lock(managerMutex);
+    for(size_t i = 0; i < modelDatas.size(); i++) {
+      if(modelDatas[i]->nnEval == nnEval) {
+        targetData = modelDatas[i];
+        break;
+      }
+    }
   }
-  if(isNormal && standardWalls) {
-    auto add = [&](ModelData::QuoridorStats::Results& r) {
-      r.games += 1;
-      r.blackWins += blackWon ? 1 : 0;
-      r.draws += isDecisive ? 0 : 1;
-    };
-    add(stats.byKomi[hist.rules.komi]);
-    if(hist.rules.komi == standard.komi)
-      add(stats.standardByRule[hist.rules.repetitionDrawCount > 0 ? 1 : 0]);
+  if(targetData == nullptr) return;
+
+  bool shouldLog = false;
+  std::string summaryLine;
+  {
+    std::lock_guard<std::mutex> lock(targetData->q4Stats.mutex);
+    auto& s = targetData->q4Stats;
+    s.games++;
+    s.plies += gameData.endHist.plies;
+
+    if(gameData.endHist.winnerSeat >= 0 && gameData.endHist.winnerSeat < 4) {
+      s.winsBySeat[gameData.endHist.winnerSeat]++;
+    }
+    else if(gameData.endHist.isDraw) {
+      if(gameData.endHist.plies >= gameData.rules.maxPlies) {
+        s.maxPliesDraws++;
+      }
+      else {
+        s.repetitionDraws++;
+      }
+    }
+    else if(gameData.hitTurnLimit) {
+      s.cutoffGames++;
+    }
+
+    for(const auto& ev : gameData.endHist.events) {
+      if(ev.isElimination) {
+        s.eliminations++;
+        break;
+      }
+    }
+
+    for(float w : gameData.targetWeightByTurn) {
+      s.rowsWritten += (int64_t)std::round(w);
+    }
+    for(const auto* sp : gameData.sidePositions) {
+      s.rowsWritten += (int64_t)std::round(sp->targetWeight);
+    }
+
+    if(logGamesEvery > 0 && s.games % logGamesEvery == 0) {
+      shouldLog = true;
+    }
+  }
+
+  if(shouldLog) {
+    summaryLine = q4StatsSummary(targetData);
+    if(!summaryLine.empty() && logger != nullptr) {
+      logger->write(summaryLine);
+    }
   }
 }
 
-string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
-  ModelData::QuoridorStats& stats = modelData->quoridorStats;
-  std::lock_guard<std::mutex> statsLock(stats.mutex);
-  auto rate = [](int64_t num, int64_t denom) {
-    return Global::strprintf("%.3f", denom > 0 ? (double)num / (double)denom : 0.0);
-  };
-  string s =
-    "Quoridor stats for " + modelData->modelName +
-    ": completed " + Global::int64ToString(stats.games) +
-    ", draws " + Global::int64ToString(stats.draws) + " (rate " + rate(stats.draws, stats.games) +
-    "; repetition " + Global::int64ToString(stats.repetitionDraws) + " (rate " + rate(stats.repetitionDraws, stats.games) + ")" +
-    ", maxPlies " + Global::int64ToString(stats.maxPliesDraws) + " (rate " + rate(stats.maxPliesDraws, stats.games) + "))" +
-    ", avg plies " + Global::strprintf("%.1f", stats.games > 0 ? (double)stats.plies / (double)stats.games : 0.0) +
-    ", by repetition rule:";
-  for(int r = 1; r >= 0; r--)
-    s += string(r ? " on " : ", off ") + Global::int64ToString(stats.gamesByRule[r]) + " games draw rate " +
-      rate(stats.drawsByRule[r], stats.gamesByRule[r]) + " avg plies " +
-      Global::strprintf("%.1f", stats.gamesByRule[r] > 0 ? (double)stats.pliesByRule[r] / (double)stats.gamesByRule[r] : 0.0);
-  // Black's score counts a draw as half a win.
-  auto score = [](const ModelData::QuoridorStats::Results& r) {
-    return Global::strprintf("%.3f", r.games > 0 ? (r.blackWins + 0.5 * r.draws) / (double)r.games : 0.0);
-  };
-  auto drawPct = [](const ModelData::QuoridorStats::Results& r) {
-    return Global::strprintf("%.1f%%", r.games > 0 ? 100.0 * r.draws / (double)r.games : 0.0);
-  };
-  s += ", Black score (draw = 1/2) in normal 10/10-wall games by komi:";
-  for(const auto& kv : stats.byKomi)
-    s += " " + Global::strprintf("%+.1f", kv.first) + " " + score(kv.second) +
-      " (n " + Global::int64ToString(kv.second.games) + ", draws " + drawPct(kv.second) + ")";
-  s += "; standard komi by repetition rule:";
-  for(int r = 1; r >= 0; r--) {
-    const ModelData::QuoridorStats::Results& res = stats.standardByRule[r];
-    s += string(r ? " on " : ", off ") + score(res) + " (n " + Global::int64ToString(res.games) + ", draws " + drawPct(res) + ")";
-  }
-  return s;
-}
-
-void SelfplayManager::enqueueDataToWrite(const string& modelName, FinishedGameData* gameData) {
-  std::unique_lock<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+void Q4SelfPlayManager::enqueueDataToWrite(const std::string& modelName, Q4FinishedGameData* gameData) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->modelName == modelName) {
-      foundData = modelDatas[i];
-      break;
+      bool suc = modelDatas[i]->finishedGameQueue.waitPush(gameData);
+      testAssert(suc);
+      return;
     }
   }
-  if(foundData == NULL)
-    throw StringError("SelfplayManager::enqueueDataToWrite: could not find model. Possible bug - client did not acquire model?");
-  testAssert(foundData->hasDataWriteLoop == true);
-
-  //In case it takes a while to push the game on, drop the lock. We're guaranteed as a precondition that
-  //the caller has acquired the model as well, so it won't be cleaned up underneath us.
-  lock.unlock();
-  foundData->finishedGameQueue.waitPush(gameData);
+  testAssert(false);
 }
 
-void SelfplayManager::enqueueDataToWrite(NNEvaluator* nnEval, FinishedGameData* gameData) {
-  std::unique_lock<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
+void Q4SelfPlayManager::enqueueDataToWrite(NNEvaluator* nnEval, Q4FinishedGameData* gameData) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  for(size_t i = 0; i < modelDatas.size(); i++) {
     if(modelDatas[i]->nnEval == nnEval) {
-      foundData = modelDatas[i];
-      break;
+      bool suc = modelDatas[i]->finishedGameQueue.waitPush(gameData);
+      testAssert(suc);
+      return;
     }
   }
-  if(foundData == NULL)
-    throw StringError("SelfplayManager::enqueueDataToWrite: could not find model. Possible bug - client did not acquire model?");
-
-  //In case it takes a while to push the game on, drop the lock. We're guaranteed as a precondition that
-  //the caller has acquired the model as well, so it won't be cleaned up underneath us.
-  lock.unlock();
-  foundData->finishedGameQueue.waitPush(gameData);
+  testAssert(false);
 }
 
-void SelfplayManager::runDataWriteLoop(ModelData* modelData) {
-  Logger::logThreadUncaught("data write loop", logger, [&](){ runDataWriteLoopImpl(modelData); });
-}
-
-void SelfplayManager::runDataWriteLoopImpl(ModelData* modelData) {
-  if(logger != NULL)
-    logger->write("Data write loop starting for neural net: " + modelData->modelName);
-
-  Rand rand;
-  while(true) {
-    size_t size = modelData->finishedGameQueue.size();
-    if(size > maxDataQueueSize / 2 && logger != NULL)
-      logger->write(Global::strprintf("WARNING: Struggling to keep up writing data, %d games enqueued out of %d max",size,maxDataQueueSize));
-
-    FinishedGameData* gameData;
-    bool suc = modelData->finishedGameQueue.waitPop(gameData);
-    if(!suc)
-      break;
-
-    testAssert(gameData != NULL);
-
-    modelData->tdataWriter->writeGame(*gameData);
-
-    modelData->gamesFinishedCount.fetch_add(1, std::memory_order_relaxed);
-    if(gameData->endHist.isDraw())
-      modelData->gamesDrawnCount.fetch_add(1, std::memory_order_relaxed);
-    if(gameData->endHist.isRepetitionDraw())
-      modelData->gamesRepetitionDrawnCount.fetch_add(1, std::memory_order_relaxed);
-    // Moves actually played by search this game (excludes any pre-placed opening/start-position moves).
-    testAssert(gameData->startHist.moveHistory.size() <= gameData->endHist.moveHistory.size());
-    modelData->movesPlayedCount.fetch_add(
-      (int64_t)(gameData->endHist.moveHistory.size() - gameData->startHist.moveHistory.size()),
-      std::memory_order_relaxed
-    );
-
-    if(modelData->sgfOut != NULL) {
-      testAssert(gameData->startHist.moveHistory.size() <= gameData->endHist.moveHistory.size());
-      WriteSgf::writeSgf(*modelData->sgfOut,gameData->bName,gameData->wName,gameData->endHist,gameData,false,true);
-      (*modelData->sgfOut) << endl;
+void Q4SelfPlayManager::withDataWriters(
+  NNEvaluator* nnEval,
+  const std::function<void(Q4TrainingDataWriter* tdataWriter, std::ofstream* recordsOut)>& f
+) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  for(size_t i = 0; i < modelDatas.size(); i++) {
+    if(modelDatas[i]->nnEval == nnEval) {
+      f(modelDatas[i]->tdataWriter, modelDatas[i]->recordsOut);
+      return;
     }
+  }
+  testAssert(false);
+}
+
+void Q4SelfPlayManager::runDataWriteLoop(ModelData* modelData) {
+  runDataWriteLoopImpl(modelData);
+  {
+    std::lock_guard<std::mutex> lock(managerMutex);
+    numDataWriteLoopsActive--;
+    if(numDataWriteLoopsActive == 0) {
+      dataWriteLoopsAreDone.notify_all();
+    }
+  }
+  delete modelData;
+}
+
+void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
+  Q4FinishedGameData* gameData = nullptr;
+  while(modelData->finishedGameQueue.waitPop(gameData)) {
+    modelData->gamesFinishedCount.fetch_add(1, std::memory_order_relaxed);
+    modelData->movesPlayedCount.fetch_add(gameData->endHist.plies, std::memory_order_relaxed);
+
+    // Write record to recordsOut
+    if(modelData->recordsOut != nullptr) {
+      Q4Record rec;
+      rec.rules = gameData->rules;
+      for(int s = 0; s < 4; s++) {
+        Q4PlayerInfo p;
+        p.name = "Seat " + std::to_string(s);
+        p.type = "selfplay";
+        p.net = modelData->modelName;
+        rec.players.push_back(p);
+      }
+      if(gameData->hitTurnLimit) {
+        rec.result = "none";
+      }
+      else if(gameData->endHist.isDraw) {
+        rec.result = "Draw";
+      }
+      else if(gameData->endHist.winnerSeat >= 0 && gameData->endHist.winnerSeat < 4) {
+        rec.result = std::to_string(gameData->endHist.winnerSeat + 1) + "+";
+      }
+      else {
+        rec.result = "none";
+      }
+      rec.events = gameData->endHist.events;
+      rec.comments = gameData->comments;
+      *modelData->recordsOut << rec.toJsonLine() << "\n";
+      modelData->recordsOut->flush();
+    }
+
+    // Write training rows
+    if(!gameData->hitTurnLimit && modelData->tdataWriter != nullptr) {
+      modelData->tdataWriter->writeGame(*gameData);
+    }
+
     delete gameData;
   }
 
-  modelData->tdataWriter->flushIfNonempty();
-  if(modelData->sgfOut != NULL)
-    modelData->sgfOut->close();
-
-  if(logger != NULL)
-    logger->write("Data write loop finishing for neural net: " + modelData->modelName);
-
-  testAssert(modelData->acquireCount == 0);
-
-  string name = modelData->modelName;
-
-  //Lock the manager and do nothing with the lock (except run an assert).
-  //The lock is technically necessary for thread-safety - we don't want to delete this modelData until we are
-  //absolutely sure that the manager is done removing it from its own tracking in modelDatas, so we lock
-  //the manager to make sure that we block until this is the case. While we're at it, we go ahead and assert it too.
-  {
-    std::lock_guard<std::mutex> lock(managerMutex);
-    for(size_t i = 0; i<modelDatas.size(); i++) {
-      (void)i;
-      testAssert(modelDatas[i] != modelData);
-    }
+  if(modelData->tdataWriter != nullptr) {
+    modelData->tdataWriter->flushIfNonempty();
   }
-
-  //Do logging and cleanup while unlocked, so that our freeing and stopping of this neural net doesn't
-  //block anyone else
-  if(logger != NULL) {
-    logger->write("Final cleanup of net: " + modelData->nnEval->getModelFileName());
-    logger->write(quoridorStatsSummary(modelData));
-    logger->write("Final games finished: " + Global::int64ToString(modelData->gamesFinishedCount.load(std::memory_order_relaxed)));
-    logger->write("Final moves played: " + Global::int64ToString(modelData->movesPlayedCount.load(std::memory_order_relaxed)));
-    logger->write("Final data rows: " + Global::int64ToString(modelData->tdataWriter->numRowsWritten()));
-    logger->write("Final NN rows: " + Global::int64ToString(modelData->nnEval->numRowsProcessed()));
-    logger->write("Final NN batches: " + Global::int64ToString(modelData->nnEval->numBatchesProcessed()));
-    logger->write("Final NN avg batch size: " + Global::doubleToString(modelData->nnEval->averageProcessedBatchSize()));
-    logger->write("Final NN cache hits: " + Global::int64ToString((int64_t)modelData->nnEval->numCacheHits()));
-  }
-
-  delete modelData;
-
-  if(logger != NULL) {
-    logger->write("Data write loop cleaned up and terminating for " + name);
-  }
-
-  //Check back in and notify that we're done once done cleaning up.
-  std::unique_lock<std::mutex> lock(managerMutex);
-  numDataWriteLoopsActive--;
-  testAssert(numDataWriteLoopsActive >= 0);
-  if(numDataWriteLoopsActive == 0) {
-    testAssert(modelDatas.size() == 0);
-    dataWriteLoopsAreDone.notify_all();
-  }
-  lock.unlock();
 }
 
-void SelfplayManager::withDataWriters(
-  NNEvaluator* nnEval,
-  const std::function<void(TrainingDataWriter* tdataWriter, std::ofstream* sgfOut)>& f
-) {
-  std::lock_guard<std::mutex> lock(managerMutex);
-  ModelData* foundData = NULL;
-  for(size_t i = 0; i<modelDatas.size(); i++) {
-    if(modelDatas[i]->nnEval == nnEval) {
-      foundData = modelDatas[i];
-      break;
-    }
-  }
-  if(foundData == NULL)
-    throw StringError("SelfplayManager::withDataWriters: could not find model. Possible bug - client did not acquire model?");
-  testAssert(foundData->hasDataWriteLoop == false);
-
-  f(foundData->tdataWriter, foundData->sgfOut);
-}
+}  // namespace Q4Play

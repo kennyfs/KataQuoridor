@@ -1,141 +1,110 @@
-#ifndef PROGRAM_SELFPLAYMANAGER_H_
-#define PROGRAM_SELFPLAYMANAGER_H_
+#ifndef Q4_SELFPLAYMANAGER_H_
+#define Q4_SELFPLAYMANAGER_H_
 
 #include <atomic>
-#include <map>
+#include <fstream>
+#include <functional>
 #include <mutex>
+#include <string>
+#include <vector>
 
-#include "../core/threadsafequeue.h"
-#include "../core/timer.h"
-#include "../dataio/sgf.h"
-#include "../dataio/trainingwrite.h"
-#include "../neuralnet/nneval.h"
+#include "../../core/threadsafequeue.h"
+#include "../../core/timer.h"
+#include "../../neuralnet/nneval.h"
+#include "../dataio/q4trainingwrite.h"
+#include "../q4record.h"
+#include "q4play.h"
 
-class SelfplayManager {
+namespace Q4Play {
+
+class Q4SelfPlayManager {
  public:
-  SelfplayManager(
+  Q4SelfPlayManager(
     int maxDataQueueSize,
     Logger* logger,
     int64_t logGamesEvery,
     bool autoCleanupAllButLatestIfUnused
   );
-  ~SelfplayManager();
+  ~Q4SelfPlayManager();
 
-  SelfplayManager(const SelfplayManager& other);
-  SelfplayManager& operator=(const SelfplayManager& other);
-  SelfplayManager(SelfplayManager&& other);
-  SelfplayManager& operator=(SelfplayManager&& other);
+  Q4SelfPlayManager(const Q4SelfPlayManager&) = delete;
+  Q4SelfPlayManager& operator=(const Q4SelfPlayManager&) = delete;
 
-  //All below functions are internally synchronized and thread-safe.
-
-  //SelfplayManager takes responsibility for deleting the data writers and closing and deleting sgfOut.
-  //loadModelNoDataWritingLoop is for the manual writing interface
   void loadModelAndStartDataWriting(
     NNEvaluator* nnEval,
-    TrainingDataWriter* tdataWriter,
-    std::ofstream* sgfOut
+    Q4TrainingDataWriter* tdataWriter,
+    std::ofstream* recordsOut
   );
   void loadModelNoDataWritingLoop(
     NNEvaluator* nnEval,
-    TrainingDataWriter* tdataWriter,
-    std::ofstream* sgfOut
+    Q4TrainingDataWriter* tdataWriter,
+    std::ofstream* recordsOut
   );
 
-  //NN queries summed across all the models managed by this manager over all time.
   uint64_t getTotalNumRowsProcessed() const;
 
-  //For all of the below, model names are simply from nnEval->getModelName().
-
-  //Models that aren't cleaned up yet are in the order from earliest to latest
   std::vector<std::string> modelNames() const;
   std::string getLatestModelName() const;
   bool hasModel(const std::string& modelName) const;
   size_t numModels() const;
 
-  //Returns NULL if acquire failed (such as if that model was scheduled to be cleaned up or already cleaned up,).
-  //Must call release when done, and cease using the NNEvaluator after that.
   NNEvaluator* acquireModel(const std::string& modelName);
   NNEvaluator* acquireLatest();
-  //Release a model either by name or by the nnEval object that was returned.
   void release(const std::string& modelName);
   void release(NNEvaluator* nnEval);
 
-  //Clean up any currently-unused models if their last usage was older than this many seconds ago.
   void cleanupUnusedModelsOlderThan(double seconds);
-  //Clear the evaluation caches of any models that are currently unused.
   void clearUnusedModelCaches();
 
-  //====================================================================================
-  //These should only be called by a thread that has currently acquired the model.
-
-  //Increment a counter and maybe log some stats
   void countOneGameStarted(NNEvaluator* nnEval);
-  //Count a game that hit maxMovesPerGame and was discarded rather than written (numMoves = its length).
-  //Games finished normally are counted by the data write loop (gamesFinishedCount).
   void countOneGameHitCutoff(NNEvaluator* nnEval, int64_t numMoves);
-  //Quoridor I/O v2 step 3: count the result of every completed game (written or not) for the Quoridor stats line
-  //(draw rate, first-player win rates, average plies).
-  void countQuoridorGameResult(NNEvaluator* nnEval, const FinishedGameData& gameData);
+  void countQ4GameResult(NNEvaluator* nnEval, const Q4FinishedGameData& gameData);
 
-  //SelfplayManager takes responsibility for deleting the gameData once written.
-  //Use these only if loadModelAndStartDataWriting was used to start the model.
-  void enqueueDataToWrite(const std::string& modelName, FinishedGameData* gameData);
-  void enqueueDataToWrite(NNEvaluator* nnEval, FinishedGameData* gameData);
+  void enqueueDataToWrite(const std::string& modelName, Q4FinishedGameData* gameData);
+  void enqueueDataToWrite(NNEvaluator* nnEval, Q4FinishedGameData* gameData);
 
-  //Use these if loadModelNoDataWritingLoop was used to start the model.
   void withDataWriters(
     NNEvaluator* nnEval,
-    const std::function<void(TrainingDataWriter* tdataWriter, std::ofstream* sgfOut)>& f
+    const std::function<void(Q4TrainingDataWriter* tdataWriter, std::ofstream* recordsOut)>& f
   );
 
-  //====================================================================================
-
-  //For internal use
   struct ModelData {
     std::string modelName;
     NNEvaluator* nnEval;
     int64_t gameStartedCount;
-    // Counted at game-finish in the data write loop (lock-free), read cross-thread for logging.
     std::atomic<int64_t> gamesFinishedCount;
     std::atomic<int64_t> movesPlayedCount;
-    // Of the finished games above, those drawn by Rules::maxPlies or Rules::repetitionDrawCount (written to training
-    // data like the others), and of those, the repetition draws.
-    std::atomic<int64_t> gamesDrawnCount;
-    std::atomic<int64_t> gamesRepetitionDrawnCount;
-    // Games that hit the move cutoff, and the moves in them. These games are not written or counted above.
     std::atomic<int64_t> gamesCutoffCount;
     std::atomic<int64_t> movesPlayedCutoffCount;
-    // Quoridor results of all completed games (see countQuoridorGameResult), guarded by quoridorStats.mutex.
-    struct QuoridorStats {
+
+    struct Q4Stats {
       std::mutex mutex;
       int64_t games = 0;
-      int64_t draws = 0;
-      // Of the draws: by repetition, by maxPlies (the rest were cut off).
-      int64_t repetitionDraws = 0;
-      int64_t maxPliesDraws = 0;
       int64_t plies = 0;
-      // By repetition rule: [0] off, [1] on (any N): games, draws, plies.
-      int64_t gamesByRule[2] = {0,0};
-      int64_t drawsByRule[2] = {0,0};
-      int64_t pliesByRule[2] = {0,0};
-      // Normal games (not forks etc.) with 10/10 walls, by komi and repetition rule ([0] off, [1] on).
-      struct Results { int64_t games = 0; int64_t blackWins = 0; int64_t draws = 0; };
-      std::map<float,Results> byKomi;
-      Results standardByRule[2];  // the standard komi only
+      int64_t winsBySeat[4] = {0, 0, 0, 0};
+      int64_t maxPliesDraws = 0;
+      int64_t repetitionDraws = 0;
+      int64_t cutoffGames = 0;
+      int64_t eliminations = 0;
+      int64_t rowsWritten = 0;
     };
-    QuoridorStats quoridorStats;
+    Q4Stats q4Stats;
+
     double lastReleaseTime;
     bool hasDataWriteLoop;
 
-    ThreadSafeQueue<FinishedGameData*> finishedGameQueue;
+    ThreadSafeQueue<Q4FinishedGameData*> finishedGameQueue;
     int acquireCount;
 
-    TrainingDataWriter* tdataWriter;
-    std::ofstream* sgfOut;
+    Q4TrainingDataWriter* tdataWriter;
+    std::ofstream* recordsOut;
 
     ModelData(
-      const std::string& name, NNEvaluator* neval, int maxDataQueueSize,
-      TrainingDataWriter* tdWriter, std::ofstream* sOut,
+      const std::string& name,
+      NNEvaluator* neval,
+      int maxDataQueueSize,
+      Q4TrainingDataWriter* tdWriter,
+      std::ofstream* recOut,
       double initialLastReleaseTime,
       bool hasDataWriteLoop
     );
@@ -157,19 +126,16 @@ class SelfplayManager {
 
   uint64_t totalNumRowsProcessed;
 
-  NNEvaluator* acquireModelAlreadyLocked(SelfplayManager::ModelData* foundData);
-  void releaseAlreadyLocked(SelfplayManager::ModelData* foundData);
+  NNEvaluator* acquireModelAlreadyLocked(ModelData* foundData);
+  void releaseAlreadyLocked(ModelData* foundData);
   void maybeAutoCleanupAlreadyLocked();
   void runDataWriteLoopImpl(ModelData* modelData);
-  //One summary line: games started / finished normally / of which draws, draw rate / hit cutoff, cutoff rate, average
-  //game length.
-  //One line of Quoridor result stats: draw rate, average plies, first-player win rates (standard, by komi, handicap).
-  static std::string quoridorStatsSummary(ModelData* modelData);
+  static std::string q4StatsSummary(ModelData* modelData);
 
  public:
-  //For internal use
   void runDataWriteLoop(ModelData* modelData);
-
 };
 
-#endif //PROGRAM_SELFPLAYMANAGER_H_
+}  // namespace Q4Play
+
+#endif  // Q4_SELFPLAYMANAGER_H_
