@@ -72,6 +72,9 @@ Q4FinishedGameData::Q4FinishedGameData()
 {}
 
 Q4FinishedGameData::~Q4FinishedGameData() {
+  for(size_t i = 0; i < policyTargetsByTurn.size(); i++)
+    delete policyTargetsByTurn[i].policyTargets;
+  policyTargetsByTurn.clear();
   for(size_t i = 0; i < sidePositions.size(); i++)
     delete sidePositions[i];
   sidePositions.clear();

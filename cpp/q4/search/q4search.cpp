@@ -439,6 +439,8 @@ void Search::beginSearch() {
   numSearchesBegun += 1;
   searchNodeAge += 1;
 
+  clearOldNNOutputs();
+
   if(rootNode == NULL) {
     const bool forceNonTerminal = true;
     SearchThread dummyThread(0, *this);
