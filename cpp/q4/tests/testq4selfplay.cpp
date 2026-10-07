@@ -249,6 +249,7 @@ void testSelfplayIntegration() {
   // Check record generation
   Q4Record rec;
   rec.rules = gameData->rules;
+  rec.players.clear();
   for(int s = 0; s < 4; s++) {
     Q4PlayerInfo p;
     p.name = "Seat " + to_string(s);

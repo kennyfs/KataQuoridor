@@ -430,6 +430,7 @@ Q4FinishedGameData* runGame(
   }
 
   gameData->startState = state;
+  gameData->startHist = hist;
 
   bot->setPosition(state);
 

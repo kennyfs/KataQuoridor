@@ -437,6 +437,7 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
     if(modelData->recordsOut != nullptr) {
       Q4Record rec;
       rec.rules = gameData->rules;
+      rec.players.clear();
       for(int s = 0; s < 4; s++) {
         Q4PlayerInfo p;
         p.name = "Seat " + std::to_string(s);
@@ -457,7 +458,9 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
         rec.result = "none";
       }
       rec.events = gameData->endHist.events;
-      rec.comments = gameData->comments;
+      rec.comments.clear();
+      rec.comments.resize(gameData->startHist.events.size(), "");
+      rec.comments.insert(rec.comments.end(), gameData->comments.begin(), gameData->comments.end());
       *modelData->recordsOut << rec.toJsonLine() << "\n";
       modelData->recordsOut->flush();
     }

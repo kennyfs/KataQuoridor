@@ -80,6 +80,7 @@ struct ChangedNeuralNet {
 struct Q4FinishedGameData {
   std::string modelName;
   Q4PlayState startState;
+  Q4History startHist;
   Q4History endHist;
   Hash128 gameHash;
 

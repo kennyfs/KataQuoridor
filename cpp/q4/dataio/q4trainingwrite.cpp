@@ -473,7 +473,9 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
   Q4PlayState stateReplay = data.startState;
   allBoardsAfterStart.push_back(stateReplay.board);
 
-  for(const auto& ev : data.endHist.events) {
+  size_t startEventIdx = data.startHist.events.size();
+  for(size_t ei = startEventIdx; ei < data.endHist.events.size(); ei++) {
+    const auto& ev = data.endHist.events[ei];
     if(ev.isElimination) {
       stateReplay.eliminate(ev.eliminatedSeat);
       allBoardsAfterStart.push_back(stateReplay.board);

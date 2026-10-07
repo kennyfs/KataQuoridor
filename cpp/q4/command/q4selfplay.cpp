@@ -22,8 +22,18 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <ghc/filesystem.hpp>
 
 using namespace std;
+namespace gfs = ghc::filesystem;
+
+static void createDirectoriesRecursive(const string& path) {
+  gfs::path gfsPath(gfs::u8path(path));
+  std::error_code ec;
+  gfs::create_directories(gfsPath, ec);
+  if(ec)
+    throw StringError("Error creating directory: " + ec.message());
+}
 
 static std::atomic<bool> sigReceived(false);
 static std::atomic<bool> shouldStop(false);
@@ -95,6 +105,9 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     cerr << "Error: " << e.error() << " for argument " << e.argId() << endl;
     return 1;
   }
+
+  createDirectoriesRecursive(outputDir);
+  createDirectoriesRecursive(modelsDir);
 
   Logger logger(&cfg);
 
@@ -183,9 +196,9 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     for(int i = 0; i < maxTries; i++) {
       bool success = false;
       try {
-        MakeDir::make(modelOutputDir);
-        MakeDir::make(recordsOutputDir);
-        MakeDir::make(tdataOutputDir);
+        createDirectoriesRecursive(modelOutputDir);
+        createDirectoriesRecursive(recordsOutputDir);
+        createDirectoriesRecursive(tdataOutputDir);
         success = true;
       }
       catch(const StringError& e) {
