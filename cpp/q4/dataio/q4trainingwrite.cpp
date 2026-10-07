@@ -1,330 +1,86 @@
-#include "../dataio/trainingwrite.h"
+#include "q4trainingwrite.h"
 
-#include "../core/fileutils.h"
-#include "../core/test.h"
-#include "../neuralnet/modelversion.h"
-#include "../neuralnet/quoridornn.h"
+#include <cmath>
+#include <fstream>
+#include <iostream>
 
-using namespace std;
+#include "../../core/fileutils.h"
+#include "../../core/makedir.h"
+#include "../../core/test.h"
 
-ValueTargets::ValueTargets()
-  :win(0),
-   loss(0),
-   noResult(0),
-   score(0),
-   hasLead(false),
-   lead(0),
-   hasSearchLead(false),
-   searchLead(0)
-{}
-ValueTargets::~ValueTargets()
-{}
+namespace Q4Play {
 
-//-------------------------------------------------------------------------------------
-
-SidePosition::SidePosition()
-  :board(),
-   hist(),
-   pla(P_BLACK),
-   unreducedNumVisits(),
-   policyTarget(),
-   policySurprise(),
-   policyEntropy(),
-   searchEntropy(),
-   whiteValueTargets(),
-   whiteQValueTargets(),
-   targetWeight(),
-   targetWeightUnrounded(),
-   numNeuralNetChangesSoFar(),
-   playoutDoublingAdvantagePla(C_EMPTY),
-   playoutDoublingAdvantage(0.0)
-{}
-
-SidePosition::SidePosition(const Board& b, const BoardHistory& h, Player p, int numNNChangesSoFar)
-  :board(b),
-   hist(h),
-   pla(p),
-   unreducedNumVisits(),
-   policyTarget(),
-   policySurprise(),
-   policyEntropy(),
-   searchEntropy(),
-   whiteValueTargets(),
-   whiteQValueTargets(),
-   targetWeight(1.0f),
-   targetWeightUnrounded(1.0f),
-   numNeuralNetChangesSoFar(numNNChangesSoFar),
-   playoutDoublingAdvantagePla(C_EMPTY),
-   playoutDoublingAdvantage(0.0)
-{}
-
-SidePosition::~SidePosition()
-{}
-
-//-------------------------------------------------------------------------------------
-
-FinishedGameData::FinishedGameData()
-  :bName(),
-   wName(),
-   bIdx(0),
-   wIdx(0),
-
-   startBoard(),
-   startHist(),
-   endHist(),
-   startPla(P_BLACK),
-   gameHash(),
-
-   drawEquivalentWinsForWhite(0.0),
-   playoutDoublingAdvantagePla(P_BLACK),
-   playoutDoublingAdvantage(0.0),
-
-   hitTurnLimit(false),
-
-   numExtraBlack(0),
-   mode(0),
-   beganInEncorePhase(0),
-   usedInitialPosition(0),
-
-   hasFullData(false),
-   targetWeightByTurn(),
-   targetWeightByTurnUnrounded(),
-   policyTargetsByTurn(),
-   whiteValueTargetsByTurn(),
-   whiteQValueTargetsByTurn(),
-   nnRawStatsByTurn(),
-   reanalysisByTurn(),
-   finalFullArea(NULL),
-   finalOwnership(NULL),
-   finalSekiAreas(NULL),
-   finalWhiteScoring(NULL),
-
-   trainingWeight(1.0),
-
-   sidePositions(),
-   changedNeuralNets(),
-   bTimeUsed(0.0),
-   wTimeUsed(0.0),
-   bMoveCount(0),
-   wMoveCount(0)
-{
+Q4ValueTargets::Q4ValueTargets() {
+  for(int i = 0; i < 5; i++)
+    value[i] = 0.0f;
 }
 
-FinishedGameData::~FinishedGameData() {
-  for(size_t i = 0; i<policyTargetsByTurn.size(); i++)
-    delete policyTargetsByTurn[i].policyTargets;
+Q4SidePosition::Q4SidePosition()
+  : state(),
+    toMove(0),
+    unreducedNumVisits(0),
+    policyTarget(),
+    policySurprise(0.0),
+    policyEntropy(0.0),
+    searchEntropy(0.0),
+    valueTargets(),
+    nnRawStats(),
+    targetWeight(0.0f),
+    targetWeightUnrounded(0.0f),
+    numNeuralNetChangesSoFar(0)
+{}
 
-  if(finalFullArea != NULL)
-    delete[] finalFullArea;
-  if(finalOwnership != NULL)
-    delete[] finalOwnership;
-  if(finalSekiAreas != NULL)
-    delete[] finalSekiAreas;
-  if(finalWhiteScoring != NULL)
-    delete[] finalWhiteScoring;
+Q4SidePosition::Q4SidePosition(const Q4PlayState& s, int numNNChangesSoFar)
+  : state(s),
+    toMove(s.board.toMove),
+    unreducedNumVisits(0),
+    policyTarget(),
+    policySurprise(0.0),
+    policyEntropy(0.0),
+    searchEntropy(0.0),
+    valueTargets(),
+    nnRawStats(),
+    targetWeight(0.0f),
+    targetWeightUnrounded(0.0f),
+    numNeuralNetChangesSoFar(numNNChangesSoFar)
+{}
 
-  for(size_t i = 0; i<sidePositions.size(); i++)
+Q4FinishedGameData::Q4FinishedGameData()
+  : modelName(),
+    startState(),
+    endHist(),
+    gameHash(),
+    hitTurnLimit(false),
+    mode(MODE_NORMAL),
+    hasFullData(false),
+    targetWeightByTurn(),
+    targetWeightByTurnUnrounded(),
+    policyTargetsByTurn(),
+    policySurpriseByTurn(),
+    policyEntropyByTurn(),
+    searchEntropyByTurn(),
+    valueTargetsByTurn(),
+    nnRawStatsByTurn(),
+    valueSurpriseByTurn(),
+    wasCheapSearchByTurn(),
+    sidePositions(),
+    changedNeuralNets(),
+    comments(),
+    trainingWeight(1.0),
+    startPly(0),
+    rules()
+{}
+
+Q4FinishedGameData::~Q4FinishedGameData() {
+  for(size_t i = 0; i < sidePositions.size(); i++)
     delete sidePositions[i];
-
-  for(size_t i = 0; i<changedNeuralNets.size(); i++)
+  sidePositions.clear();
+  for(size_t i = 0; i < changedNeuralNets.size(); i++)
     delete changedNeuralNets[i];
+  changedNeuralNets.clear();
 }
 
-void FinishedGameData::printDebug(ostream& out) const {
-  out << "bName " << bName << endl;
-  out << "wName " << wName << endl;
-  out << "bIdx " << bIdx << endl;
-  out << "wIdx " << wIdx << endl;
-  out << "startPla " << PlayerIO::colorToChar(startPla) << endl;
-  out << "start" << endl;
-  startHist.printDebugInfo(out,startBoard);
-  out << "end" << endl;
-  endHist.printDebugInfo(out,endHist.getRecentBoard(0));
-  out << "gameHash " << gameHash << endl;
-  out << "hitTurnLimit " << hitTurnLimit << endl;
-  out << "numExtraBlack " << numExtraBlack << endl;
-  out << "mode " << mode << endl;
-  out << "beganInEncorePhase " << beganInEncorePhase << endl;
-  out << "usedInitialPosition " << usedInitialPosition << endl;
-  out << "hasFullData " << hasFullData << endl;
-  for(int i = 0; i<targetWeightByTurn.size(); i++)
-    out << "targetWeightByTurn " << i << " " << targetWeightByTurn[i] << " " << "unrounded" << " " << targetWeightByTurnUnrounded[i] << endl;
-  for(int i = 0; i<policyTargetsByTurn.size(); i++) {
-    out << "policyTargetsByTurn " << i << " ";
-    out << "unreducedNumVisits " << policyTargetsByTurn[i].unreducedNumVisits << " ";
-    if(policyTargetsByTurn[i].policyTargets != NULL) {
-      const vector<PolicyTargetMove>& target = *(policyTargetsByTurn[i].policyTargets);
-      for(int j = 0; j<target.size(); j++)
-        out << Location::toString(target[j].loc,startBoard) << " " << target[j].policyTarget << " ";
-    }
-    out << endl;
-  }
-  for (int i = 0; i < policySurpriseByTurn.size(); i++)
-    out << "policySurpriseByTurn " << i << " " << policySurpriseByTurn[i] << endl;
-  for (int i = 0; i < policyEntropyByTurn.size(); i++)
-    out << "policyEntropyByTurn " << i << " " << policyEntropyByTurn[i] << endl;
-  for (int i = 0; i < searchEntropyByTurn.size(); i++)
-    out << "searchEntropyByTurn " << i << " " << searchEntropyByTurn[i] << endl;
-
-  for(int i = 0; i<whiteValueTargetsByTurn.size(); i++) {
-    out << "whiteValueTargetsByTurn " << i << " ";
-    out << whiteValueTargetsByTurn[i].win << " ";
-    out << whiteValueTargetsByTurn[i].loss << " ";
-    out << whiteValueTargetsByTurn[i].noResult << " ";
-    out << whiteValueTargetsByTurn[i].score << " ";
-    if(whiteValueTargetsByTurn[i].hasLead)
-      out << whiteValueTargetsByTurn[i].lead << " ";
-    else
-      out << "-" << " ";
-    out << endl;
-  }
-
-  for(int i = 0; i<whiteQValueTargetsByTurn.size(); i++) {
-    out << "whiteQValueTargetsByTurn " << i << " ";
-    const vector<QValueTargetMove>& target = whiteQValueTargetsByTurn[i].targets;
-    for(int j = 0; j<target.size(); j++)
-      out << Location::toString(target[j].loc,startBoard) << " " << target[j].winLoss << " " << target[j].score << " " << target[j].visits << " ";
-    out << endl;
-  }
-
-  for(int i = 0; i<nnRawStatsByTurn.size(); i++) {
-    out << "Raw Stats " << nnRawStatsByTurn[i].whiteWinLoss << " " << nnRawStatsByTurn[i].whiteScoreMean << " " << nnRawStatsByTurn[i].policyEntropy << endl;
-  }
-
-  for(int i = 0; i<reanalysisByTurn.size(); i++) {
-    if(reanalysisByTurn[i].wasReanalyzed) {
-      out << "reanalysisByTurn " << i << " ";
-      out << "usedOutcomeTargets " << reanalysisByTurn[i].usedOutcomeTargets << " ";
-      out << "selectionPolicySurprise " << reanalysisByTurn[i].selectionPolicySurprise << " ";
-      out << "selectionValueSurprise " << reanalysisByTurn[i].selectionValueSurprise << " ";
-      out << "originalNumVisits " << reanalysisByTurn[i].originalNumVisits << " ";
-      out << endl;
-    }
-  }
-  if(finalFullArea != NULL) {
-    for(int y = 0; y<startBoard.y_size; y++) {
-      for(int x = 0; x<startBoard.x_size; x++) {
-        Loc loc = Location::getLoc(x,y,startBoard.x_size);
-        out << PlayerIO::colorToChar(finalFullArea[loc]);
-      }
-      out << endl;
-    }
-  }
-  if(finalOwnership != NULL) {
-    for(int y = 0; y<startBoard.y_size; y++) {
-      for(int x = 0; x<startBoard.x_size; x++) {
-        Loc loc = Location::getLoc(x,y,startBoard.x_size);
-        out << PlayerIO::colorToChar(finalOwnership[loc]);
-      }
-      out << endl;
-    }
-  }
-  if(finalSekiAreas != NULL) {
-    for(int y = 0; y<startBoard.y_size; y++) {
-      for(int x = 0; x<startBoard.x_size; x++) {
-        Loc loc = Location::getLoc(x,y,startBoard.x_size);
-        out << (int)finalSekiAreas[loc];
-      }
-      out << endl;
-    }
-  }
-  if(finalWhiteScoring != NULL) {
-    for(int y = 0; y<startBoard.y_size; y++) {
-      for(int x = 0; x<startBoard.x_size; x++) {
-        Loc loc = Location::getLoc(x,y,startBoard.x_size);
-        out << Global::strprintf(" %.3f",finalWhiteScoring[loc]);
-      }
-      out << endl;
-    }
-  }
-  out << "trainingWeight " << trainingWeight << endl;
-  for(int i = 0; i<sidePositions.size(); i++) {
-    SidePosition* sp = sidePositions[i];
-    out << "Side position " << i << endl;
-    out << "targetWeight " << sp->targetWeight << " " << "unrounded" << " " << sp->targetWeightUnrounded << endl;
-    sp->hist.printDebugInfo(out,sp->board);
-    {
-      out << "Side position policyTarget ";
-      out << "unreducedNumVisits " << sp->unreducedNumVisits << " ";
-      const vector<PolicyTargetMove>& target = sp->policyTarget;
-      for(int j = 0; j<target.size(); j++)
-        out << Location::toString(target[j].loc,startBoard) << " " << target[j].policyTarget << " ";
-      out << endl;
-    }
-    out << "Side position whiteValueTargets ";
-    out << sp->whiteValueTargets.win << " ";
-    out << sp->whiteValueTargets.loss << " ";
-    out << sp->whiteValueTargets.noResult << " ";
-    out << sp->whiteValueTargets.score << " ";
-    if(sp->whiteValueTargets.hasLead)
-      out << sp->whiteValueTargets.lead << " ";
-    else
-      out << "-" << " ";
-    out << endl;
-    {
-      out << "Side position whiteQValueTargets ";
-      const vector<QValueTargetMove>& target = sp->whiteQValueTargets.targets;
-      for(int j = 0; j<target.size(); j++)
-        out << Location::toString(target[j].loc,startBoard) << " " << target[j].winLoss << " " << target[j].score << " " << target[j].visits << " ";
-      out << endl;
-    }
-  }
-}
-
-//-------------------------------------------------------------------------------------
-
-
-//Don't forget to update everything else in the header file and the code below too if changing any of these
-//And update the python code
-static const int POLICY_TARGET_NUM_CHANNELS = 2;
-static const int GLOBAL_TARGET_NUM_CHANNELS = 80;
-static const int VALUE_SPATIAL_TARGET_NUM_CHANNELS = 4;
-static const int QVALUE_SPATIAL_TARGET_NUM_CHANNELS = 3;
-
-TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBChannels, int numFChannels, int xLen, int yLen, bool includeMetadata)
-  :inputsVersion(iVersion),
-   maxRows(maxRws),
-   numBinaryChannels(numBChannels),
-   numGlobalChannels(numFChannels),
-   dataXLen(xLen),
-   dataYLen(yLen),
-   packedBoardArea((xLen*yLen + 7)/8),
-   hasMetadataInput(includeMetadata),
-   curRows(0),
-   binaryInputNCHWUnpacked(NULL),
-   binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
-   spatialDistNCHW({maxRws, QuoridorNN::NUM_DIST_CHANNELS, yLen, xLen}),
-   globalInputNC({maxRws, numFChannels}),
-   policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN}),
-   globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
-   scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
-   valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
-   qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN}),
-   metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS})
-{
-  //Only the current Quoridor I/O version is written: older training data has different inputs and targets
-  //(docs/QuoridorIOv2.md) and must not be mixed in.
-  if(iVersion != QuoridorNN::TRAINING_IO_VERSION)
-    throw StringError(
-      "Training write buffers: only Quoridor I/O version " + Global::intToString(QuoridorNN::TRAINING_IO_VERSION) +
-      " training data can be written, got version " + Global::intToString(iVersion));
-  if(numBChannels != QuoridorNN::numSpatialFeatures(iVersion) || numFChannels != QuoridorNN::numGlobalFeatures(iVersion))
-    throw StringError("Training write buffers: wrong number of input channels for Quoridor I/O version " + Global::intToString(iVersion));
-  if(xLen != QuoridorNN::MODEL_LEN || yLen != QuoridorNN::MODEL_LEN)
-    throw StringError("Training write buffers: data board size must be the model's " + Global::intToString(QuoridorNN::MODEL_LEN));
-  binaryInputNCHWUnpacked = new float[numBChannels * xLen * yLen];
-}
-
-TrainingWriteBuffers::~TrainingWriteBuffers()
-{
-  delete[] binaryInputNCHWUnpacked;
-}
-
-void TrainingWriteBuffers::clear() {
-  curRows = 0;
-}
-
-//Copy floats that are all 0-1 into bits, packing 8 to a byte, big-endian-style within each byte.
+// Copy floats that are all 0-1 into bits, packing 8 to a byte, big-endian-style within each byte.
 static void packBits(const float* binaryFloats, int len, uint8_t* bits) {
   for(int i = 0; i < len; i += 8) {
     if(i + 8 <= len) {
@@ -341,72 +97,63 @@ static void packBits(const float* binaryFloats, int len, uint8_t* bits) {
     else {
       bits[i >> 3] = 0;
       for(int di = 0; i + di < len; di++) {
-        bits[i >> 3] |= ((uint8_t)binaryFloats[i + di] << (7-di));
+        bits[i >> 3] |= ((uint8_t)binaryFloats[i + di] << (7 - di));
       }
     }
   }
 }
 
+int Q4TrainingWriteBuffers::actionToPolicySlot(int action) {
+  if(Q4Board::isPawnAction(action)) {
+    return action;
+  }
+  else if(Q4Board::isVWallAction(action)) {
+    int anchor = action - 121;
+    int ay = Q4Board::anchorY(anchor);
+    int ax = Q4Board::anchorX(anchor);
+    return 1 * POS_AREA + ay * POS_LEN + ax;
+  }
+  else if(Q4Board::isHWallAction(action)) {
+    int anchor = action - 221;
+    int ay = Q4Board::anchorY(anchor);
+    int ax = Q4Board::anchorX(anchor);
+    return 2 * POS_AREA + ay * POS_LEN + ax;
+  }
+  return -1;
+}
+
 static void zeroPolicyTarget(int policySize, int16_t* target) {
-  for(int pos = 0; pos<policySize; pos++)
+  for(int pos = 0; pos < policySize; pos++)
     target[pos] = 0;
 }
 
 static void uniformPolicyTarget(int policySize, int16_t* target) {
-  for(int pos = 0; pos<policySize; pos++)
+  for(int pos = 0; pos < policySize; pos++)
     target[pos] = 1;
 }
 
-static void fillPolicyTargetQuoridor(const vector<PolicyTargetMove>& policyTargetMoves, int policySize, int boardXSize, Player nextPlayer, int16_t* target) {
-  testAssert(policySize == (QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN));
-  zeroPolicyTarget(policySize, target);
-  size_t size = policyTargetMoves.size();
-  for(size_t i = 0; i < size; i++) {
-    const PolicyTargetMove& move = policyTargetMoves[i];
-    Loc moveLoc = move.loc;
-    if(Location::isPawnLoc(moveLoc, boardXSize)) {
-      int x = Location::getX(moveLoc, boardXSize);
-      int y = Location::getY(moveLoc, boardXSize);
-      int c = x / 2;
-      int r = y / 2;
-      int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
-      int slot = 0 * 81 + rCanon * 9 + c;
-      testAssert(slot >= 0 && slot < policySize);
-      target[slot] = move.policyTarget;
-    }
-    else if(Location::isVWallLoc(moveLoc, boardXSize)) {
-      int x = Location::getX(moveLoc, boardXSize);
-      int y = Location::getY(moveLoc, boardXSize);
-      int c = (x - 1) / 2;
-      int r = y / 2;
-      int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
-      int slot = 1 * 81 + rCanon * 9 + c;
-      testAssert(slot >= 0 && slot < policySize);
-      target[slot] = move.policyTarget;
-    }
-    else if(Location::isHWallLoc(moveLoc, boardXSize)) {
-      int x = Location::getX(moveLoc, boardXSize);
-      int y = Location::getY(moveLoc, boardXSize);
-      int c = (x - 1) / 2;
-      int r = (y - 1) / 2;
-      int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
-      int slot = 2 * 81 + rCanon * 9 + c;
-      testAssert(slot >= 0 && slot < policySize);
-      target[slot] = move.policyTarget;
+static void fillPolicyTargetQ4(const std::vector<Q4PolicyTargetMove>& moves, int16_t* target) {
+  zeroPolicyTarget(Q4TrainingWriteBuffers::POLICY_SIZE, target);
+  for(const auto& m : moves) {
+    int slot = Q4TrainingWriteBuffers::actionToPolicySlot(m.action);
+    if(slot >= 0 && slot < Q4TrainingWriteBuffers::POLICY_SIZE) {
+      target[slot] = m.policyTarget;
     }
   }
 }
 
-static void fillValueTDTargets(const vector<ValueTargets>& whiteValueTargetsByTurn, int idx, Player nextPlayer, double nowFactor, float* buf) {
-  double winValue = 0.0;
-  double lossValue = 0.0;
-  double noResultValue = 0.0;
-  double score = 0.0;
-
+void Q4TrainingWriteBuffers::fillValueTDTargets(
+  const std::vector<Q4ValueTargets>& valueTargetsByTurn,
+  int idx,
+  int toMove,
+  double nowFactor,
+  float* buf
+) {
+  double target[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
   double weightLeft = 1.0;
-  for(int i = idx; i<whiteValueTargetsByTurn.size(); i++) {
+  for(size_t i = idx; i < valueTargetsByTurn.size(); i++) {
     double weightNow;
-    if(i == whiteValueTargetsByTurn.size() - 1) {
+    if(i == valueTargetsByTurn.size() - 1) {
       weightNow = weightLeft;
       weightLeft = 0.0;
     }
@@ -414,406 +161,38 @@ static void fillValueTDTargets(const vector<ValueTargets>& whiteValueTargetsByTu
       weightNow = weightLeft * nowFactor;
       weightLeft *= (1.0 - nowFactor);
     }
-
-    //Training rows need things from the perspective of the player to move, so we flip as appropriate.
-    const ValueTargets& targets = whiteValueTargetsByTurn[i];
-    winValue += weightNow * (nextPlayer == P_WHITE ? targets.win : targets.loss);
-    lossValue += weightNow * (nextPlayer == P_WHITE ? targets.loss : targets.win);
-    noResultValue += weightNow * targets.noResult;
-    score += weightNow * (nextPlayer == P_WHITE ? targets.score : -targets.score);
+    const Q4ValueTargets& vt = valueTargetsByTurn[i];
+    for(int k = 0; k < 4; k++) {
+      int s = (toMove + k) % 4;
+      target[k] += weightNow * vt.value[s];
+    }
+    target[4] += weightNow * vt.value[4];
   }
-  double scoreTargetCap = NNPos::MAX_BOARD_AREA + NNPos::EXTRA_SCORE_DISTR_RADIUS;
-  if(score > scoreTargetCap)
-    score = scoreTargetCap;
-  if(score < -scoreTargetCap)
-    score = -scoreTargetCap;
-
-  buf[0] = (float)winValue;
-  buf[1] = (float)lossValue;
-  buf[2] = (float)noResultValue;
-  buf[3] = (float)score;
+  for(int k = 0; k < 5; k++) {
+    buf[k] = (float)target[k];
+  }
 }
 
-void TrainingWriteBuffers::fillQuoridorInputRow(
-  const Board& board,
-  const BoardHistory& hist,
-  Player nextPlayer,
-  const MiscNNInputParams& nnInputParams,
-  float* rowBinScratch,
-  uint8_t* rowBinPacked,
-  uint8_t* rowDist,
-  float* rowGlobal
-) {
-  const int ioVersion = QuoridorNN::TRAINING_IO_VERSION;
-  const int numChannels = QuoridorNN::numSpatialFeatures(ioVersion);
-  const int posArea = QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
-  const int packedArea = (posArea + 7) / 8;
-  const bool inputsUseNHWC = false;
-  QuoridorNN::fillRow(board, hist, nextPlayer, nnInputParams, ioVersion, inputsUseNHWC, rowBinScratch, rowGlobal);
-  //Continuous distance channels are stored raw in spatialDistNCHW, and as 0 in the bit planes.
-  QuoridorNN::fillCanonicalDistancesU8(board, nextPlayer, rowDist);
-  std::fill(
-    rowBinScratch + QuoridorNN::FIRST_DIST_CHANNEL * posArea,
-    rowBinScratch + (QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS) * posArea,
-    0.0f
-  );
+Q4TrainingWriteBuffers::Q4TrainingWriteBuffers(int maxRws)
+  : maxRows(maxRws),
+    curRows(0),
+    binaryInputNCHWPacked({maxRws, NUM_BINARY_CHANNELS, PACKED_BOARD_AREA}),
+    spatialDistNCHW({maxRws, NUM_DIST_CHANNELS, POS_LEN, POS_LEN}),
+    globalInputNC({maxRws, NUM_GLOBAL_CHANNELS}),
+    policyTargetsNCMove({maxRws, POLICY_NUM_CHANNELS, POLICY_SIZE}),
+    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
+    scoreDistrN({maxRws, SCORE_DISTR_LEN}),
+    valueTargetsNCHW({maxRws, VALUE_TARGET_CHANNELS, POS_LEN, POS_LEN})
+{}
 
-  //Packing bits would silently truncate any non-binary value
-  for(int i = 0; i<numChannels * posArea; i++)
-    testAssert(rowBinScratch[i] == 0.0f || rowBinScratch[i] == 1.0f);
-
-  //Pack bools bitwise into uint8_t
-  for(int c = 0; c<numChannels; c++)
-    packBits(rowBinScratch + c * posArea, posArea, rowBinPacked + c * packedArea);
+void Q4TrainingWriteBuffers::clear() {
+  curRows = 0;
 }
 
-void TrainingWriteBuffers::addRow(
-  const Board& board, const BoardHistory& hist, Player nextPlayer,
-  const BoardHistory& startHist,
-  const BoardHistory& actualGameEndHist,
-  int turnIdx,
-  float targetWeight,
-  int64_t unreducedNumVisits,
-  const vector<PolicyTargetMove>* policyTarget0, //can be null
-  const vector<PolicyTargetMove>* policyTarget1, //can be null
-  double policySurprise,
-  double policyEntropy,
-  double searchEntropy,
-  const vector<ValueTargets>& whiteValueTargets,
-  const vector<QValueTargets>& whiteQValueTargets,
-  int whiteValueTargetsIdx, //index in whiteValueTargets corresponding to this turn.
-  float valueTargetWeight,
-  float tdValueTargetWeight,
-  float leadTargetWeightFactor,
-  const NNRawStats& nnRawStats,
-  const Board* finalBoard,
-  Color* finalFullArea,
-  Color* finalOwnership,
-  float* finalWhiteScoring,
-  const vector<Board>* posHistForFutureBoards, //can be null
-  bool isSidePosition,
-  int numNeuralNetsBehindLatest,
-  double drawEquivalentWinsForWhite,
-  Player playoutDoublingAdvantagePla,
-  double playoutDoublingAdvantage,
-  Hash128 gameHash,
-  const std::vector<ChangedNeuralNet*>& changedNeuralNets,
-  bool hitTurnLimit,
-  int numExtraBlack,
-  int mode,
-  SGFMetadata* sgfMeta,
-  Rand& rand,
-  const ReanalysisData& reanalysisData
-) {
-  testAssert(inputsVersion == QuoridorNN::TRAINING_IO_VERSION);
-  //Go-only targets (ownership, area, scoring)
-  (void)finalBoard;
-  (void)finalFullArea;
-  (void)finalOwnership;
-  (void)finalWhiteScoring;
-
-  int posArea = dataXLen*dataYLen;
-  testAssert(curRows < maxRows);
-
-  {
-    MiscNNInputParams nnInputParams;
-    nnInputParams.drawEquivalentWinsForWhite = drawEquivalentWinsForWhite;
-    //Note: this is coordinated with the fact that selfplay does not use this feature on side positions
-    if(!isSidePosition)
-      nnInputParams.playoutDoublingAdvantage = getOpp(nextPlayer) == playoutDoublingAdvantagePla ? -playoutDoublingAdvantage : playoutDoublingAdvantage;
-    else {
-      testAssert(playoutDoublingAdvantagePla == C_EMPTY);
-      testAssert(playoutDoublingAdvantage == 0.0);
-    }
-
-    testAssert(QuoridorNN::numSpatialFeatures(inputsVersion) == numBinaryChannels);
-    testAssert(QuoridorNN::numGlobalFeatures(inputsVersion) == numGlobalChannels);
-    testAssert(posArea == QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN);
-    fillQuoridorInputRow(
-      board, hist, nextPlayer, nnInputParams, binaryInputNCHWUnpacked,
-      binaryInputNCHWPacked.data + curRows * numBinaryChannels * packedBoardArea,
-      spatialDistNCHW.data + curRows * QuoridorNN::NUM_DIST_CHANNELS * posArea,
-      globalInputNC.data + curRows * numGlobalChannels
-    );
-  }
-
-  //Vector for global targets and metadata
-  float* rowGlobal = globalTargetsNC.data + curRows * GLOBAL_TARGET_NUM_CHANNELS;
-
-  //Target weight for the whole row
-  rowGlobal[25] = targetWeight;
-
-  //Fill policy
-  const int policySize = QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
-  int16_t* rowPolicy = policyTargetsNCMove.data + curRows * POLICY_TARGET_NUM_CHANNELS * policySize;
-
-  if(policyTarget0 != NULL) {
-    fillPolicyTargetQuoridor(*policyTarget0, policySize, board.x_size, nextPlayer, rowPolicy + 0 * policySize);
-    rowGlobal[26] = 1.0f;
-  }
-  else {
-    uniformPolicyTarget(policySize, rowPolicy + 0 * policySize);
-    rowGlobal[26] = 0.0f;
-  }
-
-  if(policyTarget1 != NULL) {
-    fillPolicyTargetQuoridor(*policyTarget1, policySize, board.x_size, nextPlayer, rowPolicy + 1 * policySize);
-    rowGlobal[28] = 1.0f;
-  }
-  else {
-    uniformPolicyTarget(policySize, rowPolicy + 1 * policySize);
-    rowGlobal[28] = 0.0f;
-  }
-
-  //Fill td-like value targets
-  int boardArea = board.pawnArea();
-  testAssert(whiteValueTargetsIdx >= 0 && whiteValueTargetsIdx < whiteValueTargets.size());
-  fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 0.0, rowGlobal);
-  //These three constants used to be 'nicer' numbers 0.18, 0.06, 0.02, but we screwed up the functional form
-  //by omitting the "1.0 +" at the front (breaks scaling to small board sizes), so when we fixed this we also
-  //decreased the other numbers slightly to try to maximally limit the impact of the fix on the numerical values
-  //on the actual board sizes 9-19, since it would be costly to retest.
-  fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 1.0/(1.0 + boardArea * 0.176), rowGlobal+4);
-  fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 1.0/(1.0 + boardArea * 0.056), rowGlobal+8);
-  fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 1.0/(1.0 + boardArea * 0.016), rowGlobal+12);
-  fillValueTDTargets(whiteValueTargets, whiteValueTargetsIdx, nextPlayer, 1.0, rowGlobal+16);
-
-  //Outcome targets of Quoridor I/O v2 (docs/QuoridorIOv2.md §4): the final utility score u (C20), the final tempo
-  //lead s (C21) and the plies left until the game ended (C23), from the perspective of the player to move.
-  //They need the actual continuation of this row: a main row (not a side position, not a reanalyzed row without
-  //outcome targets, i.e. posHistForFutureBoards given) of a game that finished with a result. A draw at maxPlies
-  //is such a game: u = 0 and its remaining plies count, but it carries no tempo information, so its lead weight
-  //is 0. C20 and C23 are weighted by C27, C21 by C29.
-  const bool hasGameOutcome =
-    posHistForFutureBoards != NULL && actualGameEndHist.isGameFinished && !actualGameEndHist.isNoResult;
-  const ValueTargets& finalTargets = whiteValueTargets[whiteValueTargets.size()-1];
-  const ValueTargets& thisTargets = whiteValueTargets[whiteValueTargetsIdx];
-  rowGlobal[20] = 0.0f;
-  rowGlobal[21] = 0.0f;
-  rowGlobal[23] = 0.0f;
-  rowGlobal[27] = hasGameOutcome ? valueTargetWeight : 0.0f;
-  rowGlobal[29] = 0.0f;
-  if(hasGameOutcome) {
-    testAssert(finalTargets.hasLead);
-    rowGlobal[20] = nextPlayer == P_WHITE ? finalTargets.score : -finalTargets.score;
-    int64_t remainingPlies = actualGameEndHist.getCurrentTurnNumber() - hist.getCurrentTurnNumber();
-    testAssert(remainingPlies >= 0);
-    rowGlobal[23] = (float)remainingPlies;
-  }
-  //A lead estimated by a search for this position (estimateLeadProb, as upstream; off in the Quoridor configs)
-  //takes precedence over the game's final lead. For a main row, the final entry of whiteValueTargets is the
-  //game's result, never this row's own targets; a side row has only its own.
-  const bool hasLeadEstimate =
-    thisTargets.hasLead && (isSidePosition || whiteValueTargetsIdx < (int)whiteValueTargets.size()-1);
-  if(hasLeadEstimate && !(actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
-    rowGlobal[21] = nextPlayer == P_WHITE ? thisTargets.lead : -thisTargets.lead;
-    rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
-  }
-  else if(hasGameOutcome && !actualGameEndHist.isDraw()) {
-    rowGlobal[21] = nextPlayer == P_WHITE ? finalTargets.lead : -finalTargets.lead;
-    rowGlobal[29] = valueTargetWeight * leadTargetWeightFactor;
-  }
-
-  //Expected time of arrival of winloss variance, in turns
-  {
-    double sum = 0.0;
-    for(int i = whiteValueTargetsIdx+1; i<whiteValueTargets.size(); i++) {
-      int turnsFromNow = i-whiteValueTargetsIdx;
-      const ValueTargets& prevTargets = whiteValueTargets[i-1];
-      const ValueTargets& targets = whiteValueTargets[i];
-      double prevWL = prevTargets.win - prevTargets.loss;
-      double nextWL = targets.win - targets.loss;
-      double variance = (nextWL - prevWL) * (nextWL - prevWL);
-      sum += turnsFromNow * variance;
-    }
-    rowGlobal[22] = (float)sum;
-  }
-
-  rowGlobal[24] = (float)(1.0f - tdValueTargetWeight);
-  rowGlobal[30] = (float)policySurprise;
-  rowGlobal[31] = (float)policyEntropy;
-  rowGlobal[32] = (float)searchEntropy;
-  // Value weight
-  rowGlobal[35] = (float)(1.0f - valueTargetWeight);
-
-  //Fill in whether we should use history or not
-  bool useHist0 = rand.nextDouble() < 0.98;
-  bool useHist1 = useHist0 && rand.nextDouble() < 0.98;
-  bool useHist2 = useHist1 && rand.nextDouble() < 0.98;
-  bool useHist3 = useHist2 && rand.nextDouble() < 0.98;
-  bool useHist4 = useHist3 && rand.nextDouble() < 0.98;
-  rowGlobal[36] = useHist0 ? 1.0f : 0.0f;
-  rowGlobal[37] = useHist1 ? 1.0f : 0.0f;
-  rowGlobal[38] = useHist2 ? 1.0f : 0.0f;
-  rowGlobal[39] = useHist3 ? 1.0f : 0.0f;
-  rowGlobal[40] = useHist4 ? 1.0f : 0.0f;
-
-  //Fill in hash of game
-  rowGlobal[41] = (float)(gameHash.hash0 & 0x3FFFFF);
-  rowGlobal[42] = (float)((gameHash.hash0 >> 22) & 0x3FFFFF);
-  rowGlobal[43] = (float)((gameHash.hash0 >> 44) & 0xFFFFF);
-  rowGlobal[44] = (float)(gameHash.hash1 & 0x3FFFFF);
-  rowGlobal[45] = (float)((gameHash.hash1 >> 22) & 0x3FFFFF);
-  rowGlobal[46] = (float)((gameHash.hash1 >> 44) & 0xFFFFF);
-
-  //Various other data
-  rowGlobal[47] = hist.currentSelfKomi(nextPlayer,drawEquivalentWinsForWhite);
-  rowGlobal[48] = (hist.encorePhase == 2 || hist.rules.scoringRule == Rules::SCORING_AREA) ? 1.0f : 0.0f;
-
-  //Earlier neural net metadata
-  rowGlobal[49] = changedNeuralNets.size() > 0 ? 1.0f : 0.0f;
-  rowGlobal[50] = (float)numNeuralNetsBehindLatest;
-
-  //Some misc metadata
-  rowGlobal[51] = (float)turnIdx;
-  rowGlobal[52] = hitTurnLimit ? 1.0f : 0.0f;
-  rowGlobal[53] = (float)startHist.moveHistory.size();
-  rowGlobal[54] = (float)numExtraBlack;
-
-  //Metadata about how the game was initialized
-  rowGlobal[55] = (float)mode;
-  rowGlobal[56] = (float)hist.initialTurnNumber;
-
-  //Some stats
-  rowGlobal[57] = (float)(nextPlayer == P_WHITE ? nnRawStats.whiteWinLoss : -nnRawStats.whiteWinLoss);
-  rowGlobal[58] = (float)(nextPlayer == P_WHITE ? nnRawStats.whiteScoreMean : -nnRawStats.whiteScoreMean);
-  rowGlobal[59] = (float)nnRawStats.policyEntropy;
-
-  //Original number of visits
-  rowGlobal[60] = (float)unreducedNumVisits;
-
-  //Bonus points
-  if(!isSidePosition) {
-    //Possibly this should count whiteHandicapBonusScore too, but in selfplay this never changes
-    //after the start of a game
-    float whiteBonusPoints = actualGameEndHist.whiteBonusScore - hist.whiteBonusScore;
-    float selfBonusPoints = (nextPlayer == P_WHITE ? whiteBonusPoints : -whiteBonusPoints);
-    //Note: we have a lot of data where this isn't reliable for side positions
-    rowGlobal[61] = selfBonusPoints != 0 ? selfBonusPoints : 0.0f; //Conditional avoids negative zero
-  }
-  else {
-    rowGlobal[61] = 0.0f;
-  }
-
-  //Game finished
-  rowGlobal[62] = (!isSidePosition && actualGameEndHist.isGameFinished && !hitTurnLimit) ? 1.0f : 0.0f;
-
-  //Version
-  rowGlobal[63] = 3.0f;
-
-  //Reanalysis info - whether this position originally got only a cheap search and was redone with a full
-  //search after the game, and if so, the original cheap search's surprise stats that drove its selection
-  //and its visit count.
-  rowGlobal[64] = reanalysisData.wasReanalyzed ? 1.0f : 0.0f;
-  rowGlobal[65] = reanalysisData.wasReanalyzed ? reanalysisData.selectionPolicySurprise : 0.0f;
-  rowGlobal[66] = reanalysisData.wasReanalyzed ? reanalysisData.selectionValueSurprise : 0.0f;
-  rowGlobal[67] = reanalysisData.wasReanalyzed ? (float)reanalysisData.originalNumVisits : 0.0f;
-
-  //Whether pass-alive areas for this game's adjudication and featurization were being computed as if
-  //multi-stone suicide were always legal regardless of the actual suicide rule.
-  rowGlobal[68] = hist.modes.alwaysComputePassAliveUnderSuicideRules ? 1.0f : 0.0f;
-
-  //Whether territory scoring with TaxRule NONE for this game's adjudication and featurization was
-  //excluding empty points adjacent to chains in atari (rules version 3).
-  rowGlobal[69] = hist.modes.excludeTerritoryAdjacentToAtari ? 1.0f : 0.0f;
-
-  //C70: 1 minus the short-term score target weight, 0 = full weight (only converted data sets it). C71-79 unused.
-  for(int i = 70; i<80; i++)
-    rowGlobal[i] = 0.0f;
-
-  testAssert(80 == GLOBAL_TARGET_NUM_CHANNELS);
-
-  int scoreDistrLen = posArea*2 + NNPos::EXTRA_SCORE_DISTR_RADIUS*2;
-  int scoreDistrMid = posArea + NNPos::EXTRA_SCORE_DISTR_RADIUS;
-  int8_t* rowScoreDistr = scoreDistrN.data + curRows * scoreDistrLen;
-  int8_t* rowOwnership = valueTargetsNCHW.data + curRows * VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea;
-
-  // Dummy score distribution for Quoridor (not used in Quoridor loss, but required for valid npz format)
-  for(int i = 0; i < scoreDistrLen; i++)
-    rowScoreDistr[i] = 0;
-  rowScoreDistr[scoreDistrMid - 1] = 50;
-  rowScoreDistr[scoreDistrMid] = 50;
-
-  // Clear 4 spatial value target channels
-  std::fill(rowOwnership, rowOwnership + VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea, 0);
-
-  //Trajectory and final-wall targets, weighted by C27 (set above: main rows of a game with a result, draws
-  //included)
-  if(hasGameOutcome) {
-    const vector<Board>& boards = *posHistForFutureBoards;
-    testAssert(boards.size() > 0);
-
-    // Channel 0: Current player pawn future trajectory
-    // Channel 1: Opponent player pawn future trajectory
-    for(size_t t = (size_t)whiteValueTargetsIdx; t < boards.size(); t++) {
-      const Board& b = boards[t];
-      Loc locPla = (nextPlayer == P_BLACK) ? b.blackPawnLoc : b.whitePawnLoc;
-      Loc locOpp = (nextPlayer == P_BLACK) ? b.whitePawnLoc : b.blackPawnLoc;
-
-      if(locPla != Board::NULL_LOC && locPla != Board::PASS_LOC) {
-        int x = Location::getX(locPla, board.x_size);
-        int y = Location::getY(locPla, board.x_size);
-        int c = x / 2;
-        int r = y / 2;
-        int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
-        if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
-          rowOwnership[0 * posArea + rCanon * 9 + c] = 1;
-      }
-
-      if(locOpp != Board::NULL_LOC && locOpp != Board::PASS_LOC) {
-        int x = Location::getX(locOpp, board.x_size);
-        int y = Location::getY(locOpp, board.x_size);
-        int c = x / 2;
-        int r = y / 2;
-        int rCanon = (nextPlayer == P_WHITE) ? (8 - r) : r;
-        if(c >= 0 && c < 9 && rCanon >= 0 && rCanon < 9)
-          rowOwnership[1 * posArea + rCanon * 9 + c] = 1;
-      }
-    }
-
-    // Channel 2: Terminal Vertical Wall anchors
-    // Channel 3: Terminal Horizontal Wall anchors
-    // Read straight from Board's explicit wall arrays (the single source of truth), rather than
-    // reconstructing from `colors`, which is ambiguous when neighboring walls' arms touch.
-    const Board& finalB = boards.back();
-    for(int r = 0; r < 8; r++) {
-      for(int c = 0; c < 8; c++) {
-        int rCanon = (nextPlayer == P_WHITE) ? (7 - r) : r;
-        if(finalB.vWalls[c][r])
-          rowOwnership[2 * posArea + rCanon * 9 + c] = 1;
-        if(finalB.hWalls[c][r])
-          rowOwnership[3 * posArea + rCanon * 9 + c] = 1;
-      }
-    }
-  }
-  //No Go future-position or area/territory targets
-  rowGlobal[33] = 0.0f;
-  rowGlobal[34] = 0.0f;
-
-  //Q values
-  if(whiteQValueTargets.size() > 0) {
-    testAssert(whiteValueTargetsIdx < whiteQValueTargets.size());
-    int16_t* rowQValues = qValueTargetsNCMove.data + curRows * QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize;
-    //Quoridor has no q-value head
-    for(int i = 0; i < QVALUE_SPATIAL_TARGET_NUM_CHANNELS * policySize; i++)
-      rowQValues[i] = 0;
-  }
-
-  if(hasMetadataInput) {
-    testAssert(sgfMeta != NULL);
-    float* rowMetadata = metadataInputNC.data + curRows * SGFMetadata::METADATA_INPUT_NUM_CHANNELS;
-    SGFMetadata::fillMetadataRow(sgfMeta, rowMetadata, nextPlayer, board.pawnArea());
-  }
-
-  curRows++;
-}
-
-void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
+void Q4TrainingWriteBuffers::writeToZipFile(const std::string& fileName) {
   ZipFile zipFile(fileName);
 
-  uint64_t numBytes;
-
-  numBytes = binaryInputNCHWPacked.prepareHeaderWithNumRows(curRows);
+  uint64_t numBytes = binaryInputNCHWPacked.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("binaryInputNCHWPacked", binaryInputNCHWPacked.dataIncludingHeader, numBytes);
 
   numBytes = spatialDistNCHW.prepareHeaderWithNumRows(curRows);
@@ -834,444 +213,427 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
   numBytes = valueTargetsNCHW.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("valueTargetsNCHW", valueTargetsNCHW.dataIncludingHeader, numBytes);
 
-  numBytes = qValueTargetsNCMove.prepareHeaderWithNumRows(curRows);
-  zipFile.writeBuffer("qValueTargetsNCMove", qValueTargetsNCMove.dataIncludingHeader, numBytes);
-
-  if(hasMetadataInput) {
-    numBytes = metadataInputNC.prepareHeaderWithNumRows(curRows);
-    zipFile.writeBuffer("metadataInputNC", metadataInputNC.dataIncludingHeader, numBytes);
-  }
-
   zipFile.close();
 }
 
-void TrainingWriteBuffers::writeToTextOstream(ostream& out) {
-  int64_t len;
+void Q4TrainingWriteBuffers::addRow(
+  const Q4PlayState& state,
+  int turnIdx,
+  float targetWeight,
+  int64_t unreducedNumVisits,
+  const std::vector<Q4PolicyTargetMove>* policyTarget0,
+  const std::vector<Q4PolicyTargetMove>* policyTargetNext,
+  int actionPlayedThisTurn,
+  double policySurprise,
+  double policyEntropy,
+  double searchEntropy,
+  const std::vector<Q4ValueTargets>& valueTargetsByTurn,
+  int valueTargetsIdx,
+  float valueTargetWeight,
+  float tdValueTargetWeight,
+  const Q4NNRawStats& nnRawStats,
+  bool isSidePosition,
+  Hash128 gameHash,
+  int gameMode,
+  int startPly,
+  bool hitTurnLimit,
+  int numAliveAtRow,
+  int maxPlies,
+  int repetitionDrawCount,
+  int finalGamePlies,
+  const uint8_t finalDistToCenter[4],
+  const bool seatEliminatedBeforeEnd[4],
+  const std::vector<Q4Board>& boardHistoryFromTurnToEnd,
+  const std::vector<int>& actionsPlayedFromTurnToEnd,
+  const std::vector<int>& actionSeatsFromTurnToEnd
+) {
+  testAssert(curRows < maxRows);
 
-  auto printHeader = [&out](const char* dataIncludingHeader) {
-    //In actuality our headers aren't that long, so we cut it off at half the total header bytes
-    for(int i = 0; i<10; i++)
-      out << (int)dataIncludingHeader[i] << " ";
-    for(int i = 10; i<NumpyBuffer<int>::TOTAL_HEADER_BYTES/2; i++)
-      out << dataIncludingHeader[i];
-    out << endl;
-  };
+  float rowSpatialScratch[NUM_BINARY_CHANNELS * POS_AREA];
+  float rowGlobalScratch[NUM_GLOBAL_CHANNELS];
+  Q4NN::RawDistances rawDist;
+  Q4NN::fillRow(state, false, rowSpatialScratch, rowGlobalScratch, &rawDist);
 
-  out << "binaryInputNCHWPacked" << endl;
-  binaryInputNCHWPacked.prepareHeaderWithNumRows(curRows);
-  char buf[32];
-  printHeader((const char*)binaryInputNCHWPacked.dataIncludingHeader);
-  len = binaryInputNCHWPacked.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    sprintf(buf,"%02X",binaryInputNCHWPacked.data[i]);
-    out << buf;
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "spatialDistNCHW" << endl;
-  spatialDistNCHW.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)spatialDistNCHW.dataIncludingHeader);
-  len = spatialDistNCHW.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << (int)spatialDistNCHW.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "globalInputNC" << endl;
-  globalInputNC.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)globalInputNC.dataIncludingHeader);
-  len = globalInputNC.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << globalInputNC.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "policyTargetsNCMove" << endl;
-  policyTargetsNCMove.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)policyTargetsNCMove.dataIncludingHeader);
-  len = policyTargetsNCMove.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << policyTargetsNCMove.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "globalTargetsNC" << endl;
-  globalTargetsNC.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)globalTargetsNC.dataIncludingHeader);
-  len = globalTargetsNC.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << globalTargetsNC.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "scoreDistrN" << endl;
-  scoreDistrN.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)scoreDistrN.dataIncludingHeader);
-  len = scoreDistrN.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << (int)scoreDistrN.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "valueTargetsNCHW" << endl;
-  valueTargetsNCHW.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)valueTargetsNCHW.dataIncludingHeader);
-  len = valueTargetsNCHW.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << (int)valueTargetsNCHW.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "qValueTargetsNCMove" << endl;
-  qValueTargetsNCMove.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)qValueTargetsNCMove.dataIncludingHeader);
-  len = qValueTargetsNCMove.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << (int)qValueTargetsNCMove.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  if(hasMetadataInput) {
-    out << "metadataInputNC" << endl;
-    metadataInputNC.prepareHeaderWithNumRows(curRows);
-    printHeader((const char*)metadataInputNC.dataIncludingHeader);
-    len = metadataInputNC.getActualDataLen(curRows);
-    for(int i = 0; i<len; i++) {
-      out << (int)metadataInputNC.data[i] << " ";
-      if((i+1) % (len/curRows) == 0) out << endl;
-    }
-    out << endl;
-  }
-}
-
-//-------------------------------------------------------------------------------------
-
-TrainingDataWriter::TrainingDataWriter(const string& outDir, int iVersion, int maxRowsPerFile, double firstFileMinRandProp, int dataXLen, int dataYLen, const string& randSeed)
-  : TrainingDataWriter(outDir,NULL,iVersion,maxRowsPerFile,firstFileMinRandProp,dataXLen,dataYLen,1,randSeed)
-{}
-TrainingDataWriter::TrainingDataWriter(ostream* dbgOut, int iVersion, int maxRowsPerFile, double firstFileMinRandProp, int dataXLen, int dataYLen, int onlyEvery, const string& randSeed)
-  : TrainingDataWriter(string(),dbgOut,iVersion,maxRowsPerFile,firstFileMinRandProp,dataXLen,dataYLen,onlyEvery,randSeed)
-{}
-
-TrainingDataWriter::TrainingDataWriter(const string& outDir, ostream* dbgOut, int iVersion, int maxRowsPerFile, double firstFileMinRandProp, int dataXLen, int dataYLen, int onlyEvery, const string& randSeed)
-  :outputDir(outDir),inputsVersion(iVersion),rand(randSeed),writeBuffers(NULL),debugOut(dbgOut),debugOnlyWriteEvery(onlyEvery),rowCount(0)
-{
-  int numBinaryChannels;
-  int numGlobalChannels;
-  //Note that this inputsVersion is for data writing, it might be different than the inputsVersion used
-  //to feed into a model during selfplay
-  //Only the current Quoridor I/O version (QuoridorNN::TRAINING_IO_VERSION) can be written.
-  if(inputsVersion == QuoridorNN::TRAINING_IO_VERSION) {
-    numBinaryChannels = QuoridorNN::numSpatialFeatures(inputsVersion);
-    numGlobalChannels = QuoridorNN::numGlobalFeatures(inputsVersion);
-  }
-  else {
-    throw StringError(
-      "TrainingDataWriter: only Quoridor I/O version " + Global::intToString(QuoridorNN::TRAINING_IO_VERSION) +
-      " training data can be written (config inputsVersion), got: " + Global::intToString(inputsVersion));
-  }
-
-  const bool hasMetadataInput = false;
-  writeBuffers = new TrainingWriteBuffers(
-    inputsVersion,
-    maxRowsPerFile,
-    numBinaryChannels,
-    numGlobalChannels,
-    dataXLen,
-    dataYLen,
-    hasMetadataInput
-  );
-
-  if(firstFileMinRandProp < 0 || firstFileMinRandProp > 1)
-    throw StringError("TrainingDataWriter: firstFileMinRandProp not in [0,1]: " + Global::doubleToString(firstFileMinRandProp));
-  isFirstFile = true;
-  if(firstFileMinRandProp >= 1.0)
-    firstFileMaxRows = maxRowsPerFile;
-  else
-    firstFileMaxRows = maxRowsPerFile - (int)(maxRowsPerFile * (1.0-firstFileMinRandProp) * rand.nextDouble());
-}
-
-
-
-TrainingDataWriter::~TrainingDataWriter()
-{
-  delete writeBuffers;
-}
-
-bool TrainingDataWriter::isEmpty() const {
-  return writeBuffers->curRows <= 0;
-}
-int64_t TrainingDataWriter::numRowsInBuffer() const {
-  return writeBuffers->curRows;
-}
-int64_t TrainingDataWriter::numRowsWritten() const {
-  return rowCount.load(std::memory_order_relaxed);
-}
-
-void TrainingDataWriter::writeAndClearIfFull() {
-  if(writeBuffers->curRows >= writeBuffers->maxRows || (isFirstFile && writeBuffers->curRows >= firstFileMaxRows)) {
-    flushIfNonempty();
-  }
-}
-
-
-
-void TrainingDataWriter::flushIfNonempty() {
-  string resultingFilename;
-  flushIfNonempty(resultingFilename);
-}
-
-bool TrainingDataWriter::flushIfNonempty(string& resultingFilename) {
-  if(writeBuffers->curRows <= 0)
-    return false;
-
-  isFirstFile = false;
-
-  if(debugOut != NULL) {
-    writeBuffers->writeToTextOstream(*debugOut);
-    writeBuffers->clear();
-    resultingFilename = "";
-  }
-  else {
-    resultingFilename = outputDir + "/" + Global::uint64ToHexString(rand.nextUInt64()) + ".npz";
-    string tmpFilename = resultingFilename + ".tmp";
-    writeBuffers->writeToZipFile(tmpFilename);
-    writeBuffers->clear();
-    FileUtils::rename(tmpFilename,resultingFilename);
-  }
-  return true;
-}
-
-void TrainingDataWriter::writeGame(const FinishedGameData& data) {
-  int numMoves = (int)(data.endHist.moveHistory.size() - data.startHist.moveHistory.size());
-  testAssert(numMoves >= 0);
-  testAssert(data.startHist.moveHistory.size() <= data.endHist.moveHistory.size());
-  testAssert(data.endHist.moveHistory.size() <= 100000000);
-  testAssert(data.targetWeightByTurn.size() == numMoves);
-  testAssert(data.targetWeightByTurnUnrounded.size() == numMoves);
-  testAssert(data.policyTargetsByTurn.size() == numMoves);
-  testAssert(data.policySurpriseByTurn.size() == numMoves);
-  testAssert(data.policyEntropyByTurn.size() == numMoves);
-  testAssert(data.searchEntropyByTurn.size() == numMoves);
-  testAssert(data.whiteValueTargetsByTurn.size() == numMoves+1);
-  testAssert(data.whiteQValueTargetsByTurn.size() == numMoves);
-  testAssert(data.nnRawStatsByTurn.size() == numMoves);
-  testAssert(data.reanalysisByTurn.size() == numMoves || data.reanalysisByTurn.size() == 0);
-
-  //Some sanity checks
-  {
-    const ValueTargets& lastTargets = data.whiteValueTargetsByTurn[data.whiteValueTargetsByTurn.size()-1];
-    if(!data.endHist.isGameFinished)
-      testAssert(data.hitTurnLimit);
-    else if(data.endHist.isNoResult)
-      testAssert(lastTargets.win == 0.0f && lastTargets.loss == 0.0f && lastTargets.noResult == 1.0f);
-    else if(data.endHist.winner == P_BLACK)
-      testAssert(lastTargets.win == 0.0f && lastTargets.loss == 1.0f && lastTargets.noResult == 0.0f);
-    else if(data.endHist.winner == P_WHITE)
-      testAssert(lastTargets.win == 1.0f && lastTargets.loss == 0.0f && lastTargets.noResult == 0.0f);
-    else
-      testAssert(lastTargets.noResult == 0.0f);
-
-    testAssert(!data.endHist.isResignation);
-  }
-
-  //Play out all the moves in a single pass first to compute all the future board states
-  vector<Board> posHistForFutureBoards;
-  {
-    Board board(data.startBoard);
-    BoardHistory hist(data.startHist);
-    Player nextPlayer = data.startPla;
-    posHistForFutureBoards.push_back(board);
-
-    int startTurnIdx = (int)data.startHist.moveHistory.size();
-    for(int turnAfterStart = 0; turnAfterStart<numMoves; turnAfterStart++) {
-      int turnIdx = turnAfterStart + startTurnIdx;
-
-      Move move = data.endHist.moveHistory[turnIdx];
-      testAssert(move.pla == nextPlayer);
-      testAssert(hist.isLegal(board,move.loc,move.pla));
-      hist.makeBoardMoveAssumeLegal(board, move.loc, move.pla, NULL);
-      nextPlayer = getOpp(nextPlayer);
-
-      posHistForFutureBoards.push_back(board);
+  // Distances in channels 10..14 are written as 0 in binary planes
+  for(int ch = 10; ch <= 14; ch++) {
+    for(int c = 0; c < POS_AREA; c++) {
+      rowSpatialScratch[ch * POS_AREA + c] = 0.0f;
     }
   }
 
-  testAssert(data.hasFullData);
+  // Pack binary channels
+  uint8_t* rowBinPacked = binaryInputNCHWPacked.data + curRows * NUM_BINARY_CHANNELS * PACKED_BOARD_AREA;
+  for(int ch = 0; ch < NUM_BINARY_CHANNELS; ch++) {
+    packBits(rowSpatialScratch + ch * POS_AREA, POS_AREA, rowBinPacked + ch * PACKED_BOARD_AREA);
+  }
 
-  Board board(data.startBoard);
-  BoardHistory hist(data.startHist);
-  Player nextPlayer = data.startPla;
+  // Spatial raw distances [5, 11, 11]
+  uint8_t* rowDist = spatialDistNCHW.data + curRows * NUM_DIST_CHANNELS * POS_AREA;
+  for(int ch = 0; ch < NUM_DIST_CHANNELS; ch++) {
+    std::copy(rawDist.d[ch], rawDist.d[ch] + POS_AREA, rowDist + ch * POS_AREA);
+  }
 
-  //Write main game rows
-  int startTurnIdx = (int)data.startHist.moveHistory.size();
-  for(int turnAfterStart = 0; turnAfterStart<numMoves; turnAfterStart++) {
-    double targetWeight = data.targetWeightByTurn[turnAfterStart];
-    int turnIdx = turnAfterStart + startTurnIdx;
+  // Global inputs [28]
+  float* rowGlobalInput = globalInputNC.data + curRows * NUM_GLOBAL_CHANNELS;
+  std::copy(rowGlobalScratch, rowGlobalScratch + NUM_GLOBAL_CHANNELS, rowGlobalInput);
 
-    int64_t unreducedNumVisits = data.policyTargetsByTurn[turnAfterStart].unreducedNumVisits;
-    const vector<PolicyTargetMove>* policyTarget0 = data.policyTargetsByTurn[turnAfterStart].policyTargets;
-    const vector<PolicyTargetMove>* policyTarget1 = (turnAfterStart + 1 < numMoves) ? data.policyTargetsByTurn[turnAfterStart+1].policyTargets : NULL;
-    bool isSidePosition = false;
-    float valueTargetWeight = 1.0f;
-    float tdValueTargetWeight = 1.0f;
-    float leadTargetWeightFactor = 1.0f;
+  // Policy targets [3, 363]
+  int16_t* rowPolicy = policyTargetsNCMove.data + curRows * POLICY_NUM_CHANNELS * POLICY_SIZE;
+  float* rowGlobal = globalTargetsNC.data + curRows * GLOBAL_TARGET_NUM_CHANNELS;
+  std::fill_n(rowGlobal, GLOBAL_TARGET_NUM_CHANNELS, 0.0f);
 
-    ReanalysisData reanalysisData;
-    if(turnAfterStart < data.reanalysisByTurn.size())
-      reanalysisData = data.reanalysisByTurn[turnAfterStart];
+  // C0: Search policy target
+  if(policyTarget0 != nullptr) {
+    fillPolicyTargetQ4(*policyTarget0, rowPolicy + 0 * POLICY_SIZE);
+    rowGlobal[26] = 1.0f;
+  }
+  else {
+    uniformPolicyTarget(POLICY_SIZE, rowPolicy + 0 * POLICY_SIZE);
+    rowGlobal[26] = 0.0f;
+  }
 
-    int numNeuralNetsBehindLatest = 0;
-    if(reanalysisData.wasReanalyzed) {
-      //Reanalysis searches happen after the game ends, so they use the net as of their creation rather than the net at this turn.
-      numNeuralNetsBehindLatest = (int)data.changedNeuralNets.size() - reanalysisData.numNeuralNetChangesSoFar;
+  // C1: Action actually played this turn
+  zeroPolicyTarget(POLICY_SIZE, rowPolicy + 1 * POLICY_SIZE);
+  if(actionPlayedThisTurn >= 0) {
+    int slot = actionToPolicySlot(actionPlayedThisTurn);
+    if(slot >= 0 && slot < POLICY_SIZE) {
+      rowPolicy[1 * POLICY_SIZE + slot] = 1;
+    }
+  }
+  rowGlobal[29] = 1.0f;
+
+  // C2: Next seat's search policy target
+  if(policyTargetNext != nullptr) {
+    fillPolicyTargetQ4(*policyTargetNext, rowPolicy + 2 * POLICY_SIZE);
+    rowGlobal[28] = 1.0f;
+  }
+  else {
+    uniformPolicyTarget(POLICY_SIZE, rowPolicy + 2 * POLICY_SIZE);
+    rowGlobal[28] = 0.0f;
+  }
+
+  // Global targets [64]
+  int toMove = state.board.toMove;
+  // C0–4: Final result
+  fillValueTDTargets(valueTargetsByTurn, valueTargetsIdx, toMove, 0.0, rowGlobal + 0);
+  // C5–9: TD value target, nowFactor = 1/(1 + 121·0.176)
+  fillValueTDTargets(valueTargetsByTurn, valueTargetsIdx, toMove, 1.0 / (1.0 + 121.0 * 0.176), rowGlobal + 5);
+  // C10–14: TD value target, nowFactor = 1/(1 + 121·0.056)
+  fillValueTDTargets(valueTargetsByTurn, valueTargetsIdx, toMove, 1.0 / (1.0 + 121.0 * 0.056), rowGlobal + 10);
+  // C15–19: TD value target, nowFactor = 1/(1 + 121·0.016)
+  fillValueTDTargets(valueTargetsByTurn, valueTargetsIdx, toMove, 1.0 / (1.0 + 121.0 * 0.016), rowGlobal + 15);
+  // C20–24: This turn's search value (nowFactor = 1.0)
+  fillValueTDTargets(valueTargetsByTurn, valueTargetsIdx, toMove, 1.0, rowGlobal + 20);
+
+  rowGlobal[25] = targetWeight;
+  rowGlobal[27] = valueTargetWeight;
+  rowGlobal[30] = (float)policySurprise;
+  rowGlobal[31] = (float)policyEntropy;
+  rowGlobal[32] = (float)searchEntropy;
+  rowGlobal[33] = (float)(1.0f - tdValueTargetWeight);
+  rowGlobal[34] = (float)(1.0f - valueTargetWeight);
+  rowGlobal[35] = (float)((finalGamePlies - state.plies) * valueTargetWeight);
+
+  for(int k = 0; k < 4; k++) {
+    int s = (toMove + k) % 4;
+    rowGlobal[36 + k] = (float)finalDistToCenter[s];
+    rowGlobal[40 + k] = seatEliminatedBeforeEnd[s] ? 0.0f : valueTargetWeight;
+  }
+
+  rowGlobal[44] = (float)(gameHash.hash0 & 0x3FFFFF);
+  rowGlobal[45] = (float)((gameHash.hash0 >> 22) & 0x3FFFFF);
+  rowGlobal[46] = (float)((gameHash.hash0 >> 44) & 0xFFFFF);
+  rowGlobal[47] = (float)(gameHash.hash1 & 0x3FFFFF);
+  rowGlobal[48] = (float)((gameHash.hash1 >> 22) & 0x3FFFFF);
+  rowGlobal[49] = (float)((gameHash.hash1 >> 44) & 0xFFFFF);
+
+  rowGlobal[50] = (float)state.plies;
+  rowGlobal[51] = (float)startPly;
+  rowGlobal[52] = (float)gameMode;
+  rowGlobal[53] = (float)unreducedNumVisits;
+  rowGlobal[54] = (float)nnRawStats.rawNNUtility;
+  rowGlobal[55] = (float)numAliveAtRow;
+  rowGlobal[56] = (float)repetitionDrawCount;
+  rowGlobal[57] = (float)maxPlies;
+  rowGlobal[58] = hitTurnLimit ? 1.0f : 0.0f;
+  rowGlobal[59] = (!isSidePosition) ? 1.0f : 0.0f;
+  rowGlobal[60] = 1.0f;
+  rowGlobal[61] = 0.0f;
+  rowGlobal[62] = 0.0f;
+  rowGlobal[63] = 0.0f;
+
+  // scoreDistrN [1]
+  int8_t* rowScoreDistr = scoreDistrN.data + curRows * SCORE_DISTR_LEN;
+  rowScoreDistr[0] = 0;
+
+  // valueTargetsNCHW [12, 11, 11]
+  int8_t* rowValueTargets = valueTargetsNCHW.data + curRows * VALUE_TARGET_CHANNELS * POS_AREA;
+  std::fill_n(rowValueTargets, VALUE_TARGET_CHANNELS * POS_AREA, (int8_t)0);
+
+  if(valueTargetWeight > 0.0f) {
+    for(int k = 0; k < 4; k++) {
+      int s = (toMove + k) % 4;
+      if(!state.board.isAlive(s))
+        continue;
+
+      // C0–3: Cells visited by the pawn of relative seat k
+      int8_t* pathChannel = rowValueTargets + k * POS_AREA;
+      int curPawn = state.board.pawn[s];
+      if(curPawn >= 0 && curPawn < POS_AREA)
+        pathChannel[curPawn] = 1;
+      for(const auto& b : boardHistoryFromTurnToEnd) {
+        if(b.isAlive(s)) {
+          int p = b.pawn[s];
+          if(p >= 0 && p < POS_AREA)
+            pathChannel[p] = 1;
+        }
+      }
+
+      // C4–11: Walls placed from this row on by relative seat k
+      int8_t* vWallChannel = rowValueTargets + (4 + 2 * k) * POS_AREA;
+      int8_t* hWallChannel = rowValueTargets + (5 + 2 * k) * POS_AREA;
+      for(size_t i = 0; i < actionsPlayedFromTurnToEnd.size(); i++) {
+        if(actionSeatsFromTurnToEnd[i] == s) {
+          int act = actionsPlayedFromTurnToEnd[i];
+          if(Q4Board::isVWallAction(act)) {
+            int anchor = act - 121;
+            int ay = Q4Board::anchorY(anchor);
+            int ax = Q4Board::anchorX(anchor);
+            vWallChannel[ay * POS_LEN + ax] = 1;
+          }
+          else if(Q4Board::isHWallAction(act)) {
+            int anchor = act - 221;
+            int ay = Q4Board::anchorY(anchor);
+            int ax = Q4Board::anchorX(anchor);
+            hWallChannel[ay * POS_LEN + ax] = 1;
+          }
+        }
+      }
+    }
+  }
+
+  curRows++;
+}
+
+Q4TrainingDataWriter::Q4TrainingDataWriter(
+  const std::string& outDir,
+  int maxRows,
+  double firstRandProp,
+  uint64_t randSeed
+) : outputDir(outDir),
+    maxRowsPerTrainFile(maxRows),
+    firstFileRandMinProp(firstRandProp),
+    rand(randSeed),
+    writeMutex(),
+    writeBuffers(std::make_unique<Q4TrainingWriteBuffers>(maxRows)),
+    totalRowsWritten(0),
+    totalGamesWritten(0)
+{
+  MakeDir::make(outputDir);
+  if(firstFileRandMinProp > 0.0 && firstFileRandMinProp < 1.0) {
+    currentFileLimit = (int)round(rand.nextDouble(firstFileRandMinProp, 1.0) * maxRowsPerTrainFile);
+    if(currentFileLimit < 1) currentFileLimit = 1;
+  }
+  else {
+    currentFileLimit = maxRowsPerTrainFile;
+  }
+}
+
+Q4TrainingDataWriter::~Q4TrainingDataWriter() {
+  flushIfNonempty();
+}
+
+void Q4TrainingDataWriter::flushLocked() {
+  if(writeBuffers->numRows() <= 0)
+    return;
+
+  std::string resultingFilename = outputDir + "/" + Global::uint64ToHexString(rand.nextUInt64()) + ".npz";
+  std::string tmpFilename = resultingFilename + ".tmp";
+  writeBuffers->writeToZipFile(tmpFilename);
+  totalRowsWritten.fetch_add(writeBuffers->numRows(), std::memory_order_relaxed);
+  writeBuffers->clear();
+  FileUtils::rename(tmpFilename, resultingFilename);
+  currentFileLimit = maxRowsPerTrainFile;
+}
+
+void Q4TrainingDataWriter::flushIfNonempty() {
+  std::lock_guard<std::mutex> lock(writeMutex);
+  flushLocked();
+}
+
+void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
+  std::lock_guard<std::mutex> lock(writeMutex);
+
+  // Collect move actions and seats from events
+  std::vector<Q4PlayState> statesBeforeMove;
+  std::vector<int> actionsPlayed;
+  std::vector<int> actionSeats;
+  std::vector<Q4Board> allBoardsAfterStart;
+
+  Q4PlayState stateReplay = data.startState;
+  allBoardsAfterStart.push_back(stateReplay.board);
+
+  for(const auto& ev : data.endHist.events) {
+    if(ev.isElimination) {
+      stateReplay.eliminate(ev.eliminatedSeat);
+      allBoardsAfterStart.push_back(stateReplay.board);
     }
     else {
-      for(int i = 0; i<data.changedNeuralNets.size(); i++) {
-        if(data.changedNeuralNets[i]->turnIdx > turnIdx) {
-          numNeuralNetsBehindLatest = (int)data.changedNeuralNets.size()-i;
-          break;
-        }
-      }
+      statesBeforeMove.push_back(stateReplay);
+      actionsPlayed.push_back(ev.action);
+      actionSeats.push_back(stateReplay.board.toMove);
+      stateReplay.playAssumeLegal(ev.action);
+      allBoardsAfterStart.push_back(stateReplay.board);
     }
-
-    //If this position was reanalyzed and we're not using outcome targets for reanalyzed positions, then skip
-    //the targets derived from the final board and the actual game continuation (ownership, final score,
-    //future board positions, and the next-move policy target, which comes from the next turn's search along
-    //the continuation the reanalysis search may not prefer). The value targets are still computed from the
-    //game's value target array as normal - the entry at this turn is the reanalysis search's values, and
-    //later turns and past positions read that array too.
-    bool skipOutcomeDerivedTargets = reanalysisData.wasReanalyzed && !reanalysisData.usedOutcomeTargets;
-
-    while(targetWeight > 0.0) {
-      if(targetWeight >= 1.0 || rand.nextBool(targetWeight)) {
-        if(debugOut == NULL || rowCount.load(std::memory_order_relaxed) % debugOnlyWriteEvery == 0) {
-          writeBuffers->addRow(
-            board,hist,nextPlayer,
-            data.startHist,
-            data.endHist,
-            turnIdx,
-            (float)data.trainingWeight,
-            unreducedNumVisits,
-            policyTarget0,
-            skipOutcomeDerivedTargets ? NULL : policyTarget1,
-            data.policySurpriseByTurn[turnAfterStart],
-            data.policyEntropyByTurn[turnAfterStart],
-            data.searchEntropyByTurn[turnAfterStart],
-            data.whiteValueTargetsByTurn,
-            data.whiteQValueTargetsByTurn,
-            turnAfterStart,
-            valueTargetWeight,
-            tdValueTargetWeight,
-            leadTargetWeightFactor,
-            data.nnRawStatsByTurn[turnAfterStart],
-            skipOutcomeDerivedTargets ? NULL : &(data.endHist.getRecentBoard(0)),
-            skipOutcomeDerivedTargets ? NULL : data.finalFullArea,
-            skipOutcomeDerivedTargets ? NULL : data.finalOwnership,
-            skipOutcomeDerivedTargets ? NULL : data.finalWhiteScoring,
-            skipOutcomeDerivedTargets ? NULL : &posHistForFutureBoards,
-            isSidePosition,
-            numNeuralNetsBehindLatest,
-            data.drawEquivalentWinsForWhite,
-            data.playoutDoublingAdvantagePla,
-            data.playoutDoublingAdvantage,
-            data.gameHash,
-            data.changedNeuralNets,
-            data.hitTurnLimit,
-            data.numExtraBlack,
-            data.mode,
-            NULL,
-            rand,
-            reanalysisData
-          );
-          writeAndClearIfFull();
-        }
-        rowCount.fetch_add(1, std::memory_order_relaxed);
-      }
-      targetWeight -= 1.0;
-    }
-
-
-    Move move = data.endHist.moveHistory[turnIdx];
-    testAssert(move.pla == nextPlayer);
-    testAssert(hist.isLegal(board,move.loc,move.pla));
-    hist.makeBoardMoveAssumeLegal(board, move.loc, move.pla, NULL);
-    nextPlayer = getOpp(nextPlayer);
   }
 
-  //Write side rows
-  vector<ValueTargets> whiteValueTargetsBuf(1);
-  vector<QValueTargets> whiteQValueTargetsBuf(1);
-  for(int i = 0; i<data.sidePositions.size(); i++) {
-    SidePosition* sp = data.sidePositions[i];
+  int numTurns = (int)statesBeforeMove.size();
+  testAssert((int)data.targetWeightByTurn.size() == numTurns);
+  testAssert((int)data.policyTargetsByTurn.size() == numTurns);
+  testAssert((int)data.valueTargetsByTurn.size() == numTurns + 1);
+  testAssert((int)data.nnRawStatsByTurn.size() == numTurns);
 
-    double targetWeight = sp->targetWeight;
-    while(targetWeight > 0.0) {
-      if(targetWeight >= 1.0 || rand.nextBool(targetWeight)) {
-        if(debugOut == NULL || rowCount.load(std::memory_order_relaxed) % debugOnlyWriteEvery == 0) {
+  // Final game properties
+  int finalGamePlies = stateReplay.plies;
+  int winnerSeat = data.endHist.winnerSeat;
+  uint8_t finalDistToCenter[4];
+  bool seatEliminatedBeforeEnd[4];
 
-          int turnIdx = (int)sp->hist.moveHistory.size();
-          testAssert(turnIdx >= data.startHist.moveHistory.size());
-          whiteValueTargetsBuf[0] = sp->whiteValueTargets;
-          whiteQValueTargetsBuf[0] = sp->whiteQValueTargets;
-          bool isSidePosition = true;
-          int numNeuralNetsBehindLatest = (int)data.changedNeuralNets.size() - sp->numNeuralNetChangesSoFar;
-          float valueTargetWeight = 1.0f;
-          float tdValueTargetWeight = 1.0f;
-          float leadTargetWeightFactor = 1.0f;
-
-          writeBuffers->addRow(
-            sp->board,sp->hist,sp->pla,
-            data.startHist,
-            data.endHist, // actual game ending hist, even for side position
-            turnIdx,
-            (float)data.trainingWeight,
-            sp->unreducedNumVisits,
-            &(sp->policyTarget),
-            NULL,
-            sp->policySurprise,
-            sp->policyEntropy,
-            sp->searchEntropy,
-            whiteValueTargetsBuf,
-            whiteQValueTargetsBuf,
-            0,
-            valueTargetWeight,
-            tdValueTargetWeight,
-            leadTargetWeightFactor,
-            sp->nnRawStats,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            isSidePosition,
-            numNeuralNetsBehindLatest,
-            data.drawEquivalentWinsForWhite,
-            sp->playoutDoublingAdvantagePla,
-            sp->playoutDoublingAdvantage,
-            data.gameHash,
-            data.changedNeuralNets,
-            data.hitTurnLimit, // actual game hit turn limit
-            data.numExtraBlack,
-            data.mode,
-            NULL,
-            rand
-          );
-          writeAndClearIfFull();
-        }
-        rowCount.fetch_add(1, std::memory_order_relaxed);
-      }
-      targetWeight -= 1.0;
+  for(int s = 0; s < 4; s++) {
+    if(!stateReplay.board.isAlive(s)) {
+      seatEliminatedBeforeEnd[s] = true;
+      finalDistToCenter[s] = 255;
     }
-
+    else {
+      seatEliminatedBeforeEnd[s] = false;
+      if(s == winnerSeat) {
+        finalDistToCenter[s] = 0;
+      }
+      else {
+        finalDistToCenter[s] = stateReplay.board.distToCenter[stateReplay.board.pawn[s]];
+      }
+    }
   }
 
+  // Write main game rows
+  for(int t = 0; t < numTurns; t++) {
+    float targetWeight = data.targetWeightByTurn[t];
+    if(targetWeight <= 0.0f)
+      continue;
+
+    const Q4PlayState& st = statesBeforeMove[t];
+    int64_t unreducedVisits = data.policyTargetsByTurn[t].unreducedNumVisits;
+    const auto* policy0 = data.policyTargetsByTurn[t].policyTargets;
+    const auto* policyNext = (t + 1 < numTurns) ? data.policyTargetsByTurn[t + 1].policyTargets : nullptr;
+    int actionPlayed = actionsPlayed[t];
+    double polSurprise = data.policySurpriseByTurn[t];
+    double polEntropy = data.policyEntropyByTurn[t];
+    double srchEntropy = data.searchEntropyByTurn[t];
+    const auto& nnRaw = data.nnRawStatsByTurn[t];
+
+    float valTargetWeight = 1.0f;
+    float tdValWeight = 1.0f;
+
+    // Board history and actions from turn t to end
+    std::vector<Q4Board> boardsFromTToEnd;
+    for(int j = t + 1; j < (int)allBoardsAfterStart.size(); j++) {
+      boardsFromTToEnd.push_back(allBoardsAfterStart[j]);
+    }
+    std::vector<int> actsFromTToEnd;
+    std::vector<int> seatsFromTToEnd;
+    for(int j = t; j < numTurns; j++) {
+      actsFromTToEnd.push_back(actionsPlayed[j]);
+      seatsFromTToEnd.push_back(actionSeats[j]);
+    }
+
+    writeBuffers->addRow(
+      st,
+      t,
+      targetWeight,
+      unreducedVisits,
+      policy0,
+      policyNext,
+      actionPlayed,
+      polSurprise,
+      polEntropy,
+      srchEntropy,
+      data.valueTargetsByTurn,
+      t,
+      valTargetWeight,
+      tdValWeight,
+      nnRaw,
+      false, // isSidePosition
+      data.gameHash,
+      data.mode,
+      data.startPly,
+      data.hitTurnLimit,
+      st.board.getNumAlive(),
+      data.rules.maxPlies,
+      data.rules.repetitionDrawCount,
+      finalGamePlies,
+      finalDistToCenter,
+      seatEliminatedBeforeEnd,
+      boardsFromTToEnd,
+      actsFromTToEnd,
+      seatsFromTToEnd
+    );
+
+    if(writeBuffers->numRows() >= currentFileLimit) {
+      flushLocked();
+    }
+  }
+
+  // Write side positions
+  for(size_t i = 0; i < data.sidePositions.size(); i++) {
+    const Q4SidePosition* sp = data.sidePositions[i];
+    if(sp->targetWeight <= 0.0f)
+      continue;
+
+    std::vector<Q4ValueTargets> sideValueTargets = {sp->valueTargets};
+    std::vector<Q4Board> emptyBoards;
+    std::vector<int> emptyActs;
+    std::vector<int> emptySeats;
+    uint8_t zeroDist[4] = {0, 0, 0, 0};
+    bool elimFlags[4] = {true, true, true, true};
+
+    writeBuffers->addRow(
+      sp->state,
+      sp->state.plies,
+      sp->targetWeight,
+      sp->unreducedNumVisits,
+      &(sp->policyTarget),
+      nullptr, // policyNext
+      Q4Board::NULL_ACTION,
+      sp->policySurprise,
+      sp->policyEntropy,
+      sp->searchEntropy,
+      sideValueTargets,
+      0,
+      0.0f, // valueTargetWeight = 0 for side position
+      0.0f, // tdValueTargetWeight = 0
+      sp->nnRawStats,
+      true, // isSidePosition
+      data.gameHash,
+      data.mode,
+      data.startPly,
+      data.hitTurnLimit,
+      sp->state.board.getNumAlive(),
+      data.rules.maxPlies,
+      data.rules.repetitionDrawCount,
+      finalGamePlies,
+      zeroDist,
+      elimFlags,
+      emptyBoards,
+      emptyActs,
+      emptySeats
+    );
+
+    if(writeBuffers->numRows() >= currentFileLimit) {
+      flushLocked();
+    }
+  }
+
+  totalGamesWritten.fetch_add(1, std::memory_order_relaxed);
 }
+
+}  // namespace Q4Play
