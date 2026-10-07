@@ -77,6 +77,11 @@ def read_npz_training_data(
     model_config: modelconfigs.ModelConfig,
     prefetch_depth: int = 1,
 ):
+    if modelconfigs.is_quoridor4(model_config):
+        yield from read_npz_training_data_q4(
+            npz_files, batch_size, world_size, rank, pos_len, device, randomize_symmetries, model_config, prefetch_depth)
+        return
+
     rand = np.random.default_rng(seed=list(os.urandom(12)))
     num_bin_features = modelconfigs.get_num_bin_input_features(model_config)
     num_global_features = modelconfigs.get_num_global_input_features(model_config)
@@ -450,3 +455,259 @@ def apply_history_matrices(model_config, batch_binaryInputNCHW, batch_globalInpu
         include_history, ((0, num_global_features - include_history.shape[1])), value=1.0
     )
     return batch_binaryInputNCHW, batch_globalInputNC
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Quoridor Four-at-a-Table (Q4) training rows (docs/q4/Q4IO.md §3, §3.1, §5, §8).
+#
+# Same structure as the Duel path above (load_npz_file + prefetch + per-batch random symmetry); the Q4 differences:
+# 27 spatial channels on 11 x 11 with the raw-distance channels 10..14 rebuilt from spatialDistNCHW (dist01 of §3),
+# globalTargetsNC has the 64 Q4 columns (no padding to the Duel width), and the symmetry is the full D4 group of
+# cpp/q4/nn/q4rawsymmetry.cpp (cells, wall anchors with the V <-> H swap, the four blocked-direction channels).
+# Relative seats are not permuted by a symmetry (seat identities do not change, Q4IO §3), so globals and the per-seat
+# channel order of the targets stay as they are.
+
+Q4_POS_LEN = 11
+Q4_POS_AREA = Q4_POS_LEN * Q4_POS_LEN
+Q4_NUM_ANCHORS = 10
+Q4_DIST_FIRST_CHANNEL = 10
+Q4_DIST_NUM_CHANNELS = 5
+Q4_DIST_UNREACHABLE = 255
+Q4_DIST_SCALE = 64.0
+Q4_NUM_GLOBAL_TARGETS = 64
+# Spatial input channels (Q4IO §3): cell planes, the blocked N / E / S / W planes, and the wall-anchor plane pairs
+# (vertical, horizontal) that swap when the symmetry exchanges the axes. Channel 21 (the anchor domain) is invariant.
+Q4_INPUT_CELL_CHANNELS = (0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 24, 25, 26)
+Q4_INPUT_DIR_FIRST_CHANNEL = 6
+Q4_INPUT_WALL_PAIRS = ((19, 20), (22, 23))
+Q4_INPUT_INVARIANT_CHANNELS = (21,)
+# valueTargetsNCHW (Q4IO §8): C0-3 paths (cell planes), C4-11 future walls of relative seat k at (4 + 2k, 5 + 2k).
+Q4_VALUE_TARGET_CELL_CHANNELS = (0, 1, 2, 3)
+Q4_VALUE_TARGET_WALL_PAIRS = ((4, 5), (6, 7), (8, 9), (10, 11))
+
+
+def _q4_transform_coords(x, y, sym):
+    # q4rawsymmetry.cpp transformCoords
+    return [(x, y), (-y, x), (-x, -y), (y, -x), (-x, y), (x, -y), (y, x), (-y, -x)][sym]
+
+
+def q4_sym_swaps_axes(sym: int) -> bool:
+    return sym in (1, 3, 6, 7)
+
+
+def _build_q4_symmetry_tables():
+    """Port of q4rawsymmetry.cpp buildTables, as gather indices on flattened 11 x 11 planes.
+
+    cell_src[sym][dst] = the source cell that lands on cell dst; anchor_src[sym][dst] = the source position
+    (ay * 11 + ax) of the anchor that lands on position dst, or Q4_POS_AREA (a zero pad) for the padding row / column;
+    dir_map[sym][d] = the direction d moves to."""
+    cell_src = np.zeros((8, Q4_POS_AREA), dtype=np.int64)
+    anchor_src = np.full((8, Q4_POS_AREA), Q4_POS_AREA, dtype=np.int64)
+    dir_map = np.zeros((8, 4), dtype=np.int64)
+    dir_dx = (0, 1, 0, -1)
+    dir_dy = (1, 0, -1, 0)
+    for sym in range(8):
+        for c in range(Q4_POS_AREA):
+            ox, oy = _q4_transform_coords(c % Q4_POS_LEN - 5, c // Q4_POS_LEN - 5, sym)
+            cell_src[sym, (oy + 5) * Q4_POS_LEN + (ox + 5)] = c
+        for a in range(Q4_NUM_ANCHORS * Q4_NUM_ANCHORS):
+            ax, ay = a % Q4_NUM_ANCHORS, a // Q4_NUM_ANCHORS
+            oax, oay = _q4_transform_coords(2 * ax - 9, 2 * ay - 9, sym)
+            nax, nay = (oax + 9) // 2, (oay + 9) // 2
+            anchor_src[sym, nay * Q4_POS_LEN + nax] = ay * Q4_POS_LEN + ax
+        for d in range(4):
+            odx, ody = _q4_transform_coords(dir_dx[d], dir_dy[d], sym)
+            dir_map[sym, d] = [nd for nd in range(4) if dir_dx[nd] == odx and dir_dy[nd] == ody][0]
+    return cell_src, anchor_src, dir_map
+
+Q4_CELL_SRC, Q4_ANCHOR_SRC, Q4_DIR_MAP = _build_q4_symmetry_tables()
+
+
+def decode_q4_dist_planes(spatialDistNCHW: np.ndarray) -> np.ndarray:
+    """Q4IO §3 dist01: 1.0 if unreachable (255), else min(d, 64) / 64."""
+    d = spatialDistNCHW.astype(np.float32)
+    return np.where(
+        spatialDistNCHW == Q4_DIST_UNREACHABLE, np.float32(1.0), np.minimum(d, np.float32(Q4_DIST_SCALE)) / np.float32(Q4_DIST_SCALE)
+    ).astype(np.float32)
+
+
+def decode_q4_binary_input(binaryInputNCHWPacked: np.ndarray, spatialDistNCHW: np.ndarray, npz_file="") -> np.ndarray:
+    """Q4 packed bit planes [N,27,16] + raw distances [N,5,11,11] -> float32 spatial inputs [N,27,11,11], symmetry 0."""
+    n = binaryInputNCHWPacked.shape[0]
+    assert binaryInputNCHWPacked.shape[2] == (Q4_POS_AREA + 7) // 8, f"{npz_file}: packed shape {binaryInputNCHWPacked.shape}"
+    binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked, axis=2)[:, :, :Q4_POS_AREA]
+    binaryInputNCHW = binaryInputNCHW.reshape(n, binaryInputNCHWPacked.shape[1], Q4_POS_LEN, Q4_POS_LEN).astype(np.float32)
+    lo = Q4_DIST_FIRST_CHANNEL
+    hi = lo + Q4_DIST_NUM_CHANNELS
+    assert spatialDistNCHW.dtype == np.uint8, f"{npz_file}: spatialDistNCHW dtype {spatialDistNCHW.dtype}"
+    assert spatialDistNCHW.shape == (n, Q4_DIST_NUM_CHANNELS, Q4_POS_LEN, Q4_POS_LEN), (
+        f"{npz_file}: spatialDistNCHW shape {spatialDistNCHW.shape}")
+    assert not binaryInputNCHW[:, lo:hi].any(), f"{npz_file}: packed bit planes 10..14 are nonzero"
+    binaryInputNCHW[:, lo:hi] = decode_q4_dist_planes(spatialDistNCHW)
+    return binaryInputNCHW
+
+
+def _q4_gather_planes(planes: torch.Tensor, src: np.ndarray) -> torch.Tensor:
+    """planes [..., 11, 11] -> out[..., dst] = planes[..., src[dst]] (src == 121 reads zero)."""
+    flat = planes.reshape(*planes.shape[:-2], Q4_POS_AREA)
+    flat = torch.nn.functional.pad(flat, (0, 1))
+    idx = torch.as_tensor(src, device=planes.device)
+    return flat.index_select(-1, idx).reshape(planes.shape)
+
+
+def _q4_apply_wall_pair(tensor: torch.Tensor, out: torch.Tensor, v_ch: int, h_ch: int, sym: int):
+    src = Q4_ANCHOR_SRC[sym]
+    new_v = _q4_gather_planes(tensor[:, v_ch], src)
+    new_h = _q4_gather_planes(tensor[:, h_ch], src)
+    if q4_sym_swaps_axes(sym):
+        new_v, new_h = new_h, new_v
+    out[:, v_ch] = new_v
+    out[:, h_ch] = new_h
+
+
+def apply_symmetry_q4_inputs(tensor: torch.Tensor, sym: int) -> torch.Tensor:
+    """Q4 spatial inputs [N,27,11,11] in symmetry 0 -> the inputs of the same position under sym (Q4IO §3)."""
+    if sym == 0:
+        return tensor
+    out = torch.empty_like(tensor)
+    cells = list(Q4_INPUT_CELL_CHANNELS)
+    out[:, cells] = _q4_gather_planes(tensor[:, cells], Q4_CELL_SRC[sym])
+    d0 = Q4_INPUT_DIR_FIRST_CHANNEL
+    moved = _q4_gather_planes(tensor[:, d0:d0 + 4], Q4_CELL_SRC[sym])
+    for d in range(4):
+        out[:, d0 + int(Q4_DIR_MAP[sym, d])] = moved[:, d]
+    for (v_ch, h_ch) in Q4_INPUT_WALL_PAIRS:
+        _q4_apply_wall_pair(tensor, out, v_ch, h_ch, sym)
+    for ch in Q4_INPUT_INVARIANT_CHANNELS:
+        out[:, ch] = tensor[:, ch]
+    return out
+
+
+def apply_symmetry_q4_policy(tensor: torch.Tensor, sym: int) -> torch.Tensor:
+    """Q4 policy targets [N, C, 363] (3 planes: pawn cells, V anchors, H anchors) -> the targets under sym."""
+    if sym == 0:
+        return tensor
+    n, c = tensor.shape[0], tensor.shape[1]
+    t = tensor.reshape(n * c, 3, Q4_POS_LEN, Q4_POS_LEN)
+    out = torch.empty_like(t)
+    out[:, 0] = _q4_gather_planes(t[:, 0], Q4_CELL_SRC[sym])
+    _q4_apply_wall_pair(t, out, 1, 2, sym)
+    return out.reshape(tensor.shape)
+
+
+def apply_symmetry_q4_value_targets(tensor: torch.Tensor, sym: int) -> torch.Tensor:
+    """Q4 valueTargetsNCHW [N,12,11,11]: paths (cell map) and future walls (anchor map, V <-> H swap) under sym."""
+    if sym == 0:
+        return tensor
+    out = torch.empty_like(tensor)
+    cells = list(Q4_VALUE_TARGET_CELL_CHANNELS)
+    out[:, cells] = _q4_gather_planes(tensor[:, cells], Q4_CELL_SRC[sym])
+    for (v_ch, h_ch) in Q4_VALUE_TARGET_WALL_PAIRS:
+        _q4_apply_wall_pair(tensor, out, v_ch, h_ch, sym)
+    return out
+
+
+def apply_symmetry_q4_batch(batch: dict, sym: int) -> dict:
+    """Applies sym to every spatial tensor of a Q4 batch (inputs and targets together); globals are invariant."""
+    out = dict(batch)
+    out["binaryInputNCHW"] = apply_symmetry_q4_inputs(batch["binaryInputNCHW"], sym)
+    out["policyTargetsNCMove"] = apply_symmetry_q4_policy(batch["policyTargetsNCMove"], sym)
+    out["valueTargetsNCHW"] = apply_symmetry_q4_value_targets(batch["valueTargetsNCHW"], sym)
+    return out
+
+
+def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: int = 0, model_config=None):
+    """Loads this rank's whole batches of a Q4 npz as numpy arrays (decoded inputs, float targets), symmetry 0."""
+    with np.load(npz_file) as npz:
+        num_samples = npz["globalInputNC"].shape[0]
+        num_whole_steps = num_samples // (batch_size * world_size)
+        used = num_whole_steps * world_size * batch_size
+
+        def select_rank_rows(arr):
+            arr = arr[:used]
+            rest = arr.shape[1:]
+            arr = arr.reshape(num_whole_steps, world_size, batch_size, *rest)
+            arr = arr[:, rank]
+            return arr.reshape(num_whole_steps * batch_size, *rest)
+
+        for key in ("binaryInputNCHWPacked", "spatialDistNCHW", "globalInputNC", "policyTargetsNCMove",
+                    "globalTargetsNC", "valueTargetsNCHW"):
+            if key not in npz:
+                raise KeyError(f"{npz_file} lacks {key} (not a Q4 training file, docs/q4/Q4IO.md §8)")
+        binaryInputNCHWPacked = select_rank_rows(npz["binaryInputNCHWPacked"])
+        spatialDistNCHW = select_rank_rows(npz["spatialDistNCHW"])
+        globalInputNC = select_rank_rows(npz["globalInputNC"]).astype(np.float32)
+        policyTargetsNCMove = select_rank_rows(npz["policyTargetsNCMove"]).astype(np.float32)
+        globalTargetsNC = select_rank_rows(npz["globalTargetsNC"]).astype(np.float32)
+        scoreDistrN = select_rank_rows(npz["scoreDistrN"]).astype(np.float32)
+        valueTargetsNCHW = select_rank_rows(npz["valueTargetsNCHW"]).astype(np.float32)
+
+    binaryInputNCHW = decode_q4_binary_input(binaryInputNCHWPacked, spatialDistNCHW, npz_file)
+    if model_config is not None:
+        num_bin_features = modelconfigs.get_num_bin_input_features(model_config)
+        num_global_features = modelconfigs.get_num_global_input_features(model_config)
+        assert binaryInputNCHW.shape[1] == num_bin_features and globalInputNC.shape[1] == num_global_features, (
+            f"{npz_file}: {binaryInputNCHW.shape[1]} spatial / {globalInputNC.shape[1]} global input channels, the model"
+            f" expects {num_bin_features} / {num_global_features}")
+    assert globalTargetsNC.shape[1] == Q4_NUM_GLOBAL_TARGETS, f"{npz_file}: globalTargetsNC shape {globalTargetsNC.shape}"
+    assert policyTargetsNCMove.shape[1:] == (3, 3 * Q4_POS_AREA), f"{npz_file}: policyTargetsNCMove shape {policyTargetsNCMove.shape}"
+    assert valueTargetsNCHW.shape[1:] == (12, Q4_POS_LEN, Q4_POS_LEN), f"{npz_file}: valueTargetsNCHW shape {valueTargetsNCHW.shape}"
+    return dict(
+        binaryInputNCHW=binaryInputNCHW,
+        globalInputNC=globalInputNC,
+        policyTargetsNCMove=policyTargetsNCMove,
+        globalTargetsNC=globalTargetsNC,
+        scoreDistrN=scoreDistrN,
+        valueTargetsNCHW=valueTargetsNCHW,
+    )
+
+
+def read_npz_training_data_q4(
+    npz_files,
+    batch_size: int,
+    world_size: int,
+    rank: int,
+    pos_len: int,
+    device,
+    randomize_symmetries: bool,
+    model_config: modelconfigs.ModelConfig,
+    prefetch_depth: int = 1,
+):
+    assert pos_len == Q4_POS_LEN, f"Q4 trains on the {Q4_POS_LEN} x {Q4_POS_LEN} board, got pos_len {pos_len}"
+    rand = np.random.default_rng(seed=list(os.urandom(12)))
+
+    def load_npz_file(npz_file):
+        return (npz_file, load_q4_npz_rows(npz_file, batch_size, world_size, rank, model_config))
+
+    if not npz_files:
+        return
+
+    prefetch_depth = max(1, prefetch_depth)
+    with ThreadPoolExecutor(max_workers=prefetch_depth) as executor:
+        pending = deque()
+        next_index = 0
+        while next_index < len(npz_files) and len(pending) <= prefetch_depth:
+            pending.append(executor.submit(load_npz_file, npz_files[next_index]))
+            next_index += 1
+
+        while pending:
+            future = pending.popleft()
+            (npz_file, rows) = future.result()
+            num_whole_steps = rows["globalInputNC"].shape[0] // batch_size
+            logging.info(f"Beginning {npz_file} with {num_whole_steps * world_size} usable batches, my rank is {rank}")
+
+            if next_index < len(npz_files):
+                logging.info(f"Preloading {npz_files[next_index]} while processing this file")
+                pending.append(executor.submit(load_npz_file, npz_files[next_index]))
+                next_index += 1
+
+            for n in range(num_whole_steps):
+                start = n * batch_size
+                end = start + batch_size
+                batch = {key: torch.from_numpy(arr[start:end]).to(device) for key, arr in rows.items()}
+                if randomize_symmetries:
+                    symm = int(rand.integers(0, 8))
+                    batch = apply_symmetry_q4_batch(batch, symm)
+                for key in ("binaryInputNCHW", "policyTargetsNCMove", "valueTargetsNCHW"):
+                    batch[key] = batch[key].contiguous()
+                yield batch

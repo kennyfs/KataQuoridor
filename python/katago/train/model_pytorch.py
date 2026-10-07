@@ -2727,6 +2727,11 @@ class Q4PolicyHead(torch.nn.Module):
         )
         self.act2 = act(activation)
         self.conv2p = torch.nn.Conv2d(c_p1, self.num_policy_outputs, kernel_size=1, padding="same", bias=False)
+        # Training-only policy outputs (not exported, like KataGo's opponent / soft policy channels, which the
+        # KataGo exporter also drops): 3 variants x 3 planes, variant-major: [next-seat policy, soft search policy,
+        # soft next-seat policy] (docs/q4/rounds/R5.md).
+        self.num_aux_policy_outputs = 9
+        self.conv2p_aux = torch.nn.Conv2d(c_p1, self.num_aux_policy_outputs, kernel_size=1, padding="same", bias=False)
 
     def initialize(self):
         p_scale = 0.8
@@ -2736,12 +2741,14 @@ class Q4PolicyHead(torch.nn.Module):
         init_weights(self.conv1g.weight, self.activation, scale=1.0)
         init_weights(self.linear_g.weight, self.activation, scale=g_scale)
         init_weights(self.conv2p.weight, "identity", scale=scale_output)
+        init_weights(self.conv2p_aux.weight, "identity", scale=scale_output)
 
     def add_reg_dict(self, reg_dict: Dict[str, List]):
         reg_dict["output"].append(self.conv1p.weight)
         reg_dict["output"].append(self.conv1g.weight)
         reg_dict["output"].append(self.linear_g.weight)
         reg_dict["output"].append(self.conv2p.weight)
+        reg_dict["output"].append(self.conv2p_aux.weight)
         self.biasg.add_reg_dict(reg_dict)
         self.bias2.add_reg_dict(reg_dict)
 
@@ -2762,11 +2769,13 @@ class Q4PolicyHead(torch.nn.Module):
         out2 = self.bias2(out2, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
         out2 = self.act2(out2)
         out_policy = self.conv2p(out2)
+        out_policy_aux = self.conv2p_aux(out2)
         if extra_outputs is not None:
             extra_outputs.report("policy_head_conv2p", out_policy)
         batch_size = x.shape[0]
         out_policy = out_policy.view(batch_size, 2, 3, 11, 11)
-        return out_policy
+        out_policy_aux = out_policy_aux.view(batch_size, 3, 3, 11, 11)
+        return out_policy, out_policy_aux
 
 
 class PolicyHead(torch.nn.Module):
@@ -3107,6 +3116,11 @@ class Q4ValueHead(torch.nn.Module):
         self.conv_all_trajectories = torch.nn.Conv2d(c_v1, 4, kernel_size=1, padding="same", bias=False)
         self.conv_wall_placements = torch.nn.Conv2d(c_v1, 8, kernel_size=1, padding="same", bias=False)
 
+        # 5. Training-only TD value heads (not exported), as Duel's QuoridorValueHead.linear_td_value: 4 horizons
+        #    (globalTargetsNC C5-9, C10-14, C15-19 and the search value C20-24) x 5 classes.
+        self.num_td_values = 4
+        self.linear_td_value = torch.nn.Linear(c_v2, self.num_td_values * self.num_value_outputs, bias=True)
+
     def initialize(self):
         bias_scale = 0.2
         init_weights(self.conv1.weight, self.activation, scale=1.0)
@@ -3123,6 +3137,9 @@ class Q4ValueHead(torch.nn.Module):
         init_weights(self.conv_all_trajectories.weight, "identity", scale=0.5)
         init_weights(self.conv_wall_placements.weight, "identity", scale=0.5)
 
+        init_weights(self.linear_td_value.weight, "identity", scale=1.0)
+        init_weights(self.linear_td_value.bias, "identity", scale=bias_scale, fan_tensor=self.linear_td_value.weight)
+
     def add_reg_dict(self, reg_dict: Dict[str, List]):
         reg_dict["output"].append(self.conv1.weight)
         reg_dict["output"].append(self.linear2.weight)
@@ -3137,6 +3154,8 @@ class Q4ValueHead(torch.nn.Module):
         reg_dict["output"].append(self.conv_trajectory.weight)
         reg_dict["output"].append(self.conv_all_trajectories.weight)
         reg_dict["output"].append(self.conv_wall_placements.weight)
+        reg_dict["output"].append(self.linear_td_value.weight)
+        reg_dict["output_noreg"].append(self.linear_td_value.bias)
         self.bias1.add_reg_dict(reg_dict)
 
     def set_brenorm_params(self, renorm_avg_momentum: float, rmax: float, dmax: float):
@@ -3161,13 +3180,14 @@ class Q4ValueHead(torch.nn.Module):
         out_trajectory = self.conv_trajectory(outv1)
         out_all_trajectories = self.conv_all_trajectories(outv1)
         out_wall_placements = self.conv_wall_placements(outv1)
+        out_td_value = self.linear_td_value(outv2).view(x.shape[0], self.num_td_values, self.num_value_outputs)
 
         if extra_outputs is not None:
             extra_outputs.report("value_head_v1", outv1)
             extra_outputs.report("value_head_pooled", outpooled)
             extra_outputs.report("value_head_v2", outv2)
 
-        return out_value, out_misc, out_trajectory, out_all_trajectories, out_wall_placements
+        return out_value, out_misc, out_trajectory, out_all_trajectories, out_wall_placements, out_td_value
 
 
 class QuoridorValueHead(torch.nn.Module):
@@ -4433,6 +4453,9 @@ class Model(torch.nn.Module):
                         input_global=input_global_fp32,
                         extra_outputs=extra_outputs
                     )
+                    if modelconfigs.is_quoridor4(self.config):
+                        (iout_policy, iout_policy_aux) = iout_policy
+                        iout_quoridor_value = iout_quoridor_value + (iout_policy_aux,)
                 else:
                     (
                         iout_value,
@@ -4555,6 +4578,10 @@ class Model(torch.nn.Module):
                     input_global=input_global_fp32,
                     extra_outputs=extra_outputs
                 )
+                if modelconfigs.is_quoridor4(self.config):
+                    # Q4: (policy,) + Q4ValueHead's outputs + (training-only policy outputs,), see postprocess_output.
+                    (out_policy, out_policy_aux) = out_policy
+                    out_quoridor_value = out_quoridor_value + (out_policy_aux,)
             else:
                 (
                     out_value,
@@ -4796,7 +4823,12 @@ class Model(torch.nn.Module):
                 out_trajectory,
                 out_all_trajectories,
                 out_wall_placements,
+                out_td_value,
+                out_policy_aux,
             ) = outputs
+            # Raw outputs (Q4 applies no post-processing multipliers, docs/q4/Q4IO.md §5.2). The first six are the
+            # exported outputs and §5.3's training-only spatial heads; the last two are the training-only TD value
+            # logits [N, 4, 5] and policy outputs [N, 3, 3, 11, 11] (next-seat, soft search, soft next-seat).
             return (
                 out_policy,
                 out_value,
@@ -4804,6 +4836,8 @@ class Model(torch.nn.Module):
                 out_trajectory,
                 out_all_trajectories,
                 out_wall_placements,
+                out_td_value,
+                out_policy_aux,
             )
         if modelconfigs.is_quoridor(self.config):
             (

@@ -63,7 +63,9 @@ def test_q4_forward_shapes(name):
         post = model.postprocess_output(out)
     for outputs in (out, post):
         assert len(outputs) == 1
-        policy, value, misc, trajectory, paths, walls = outputs[0]
+        policy, value, misc, trajectory, paths, walls, td_value, policy_aux = outputs[0]
+        assert td_value.shape == (batch, 4, 5)         # training only: TD value logits, 4 horizons x 5 classes
+        assert policy_aux.shape == (batch, 3, 3, 11, 11)  # training only: next-seat, soft, soft next-seat policy
         assert policy.shape == (batch, 2, 3, 11, 11)  # variant (search, style), plane (pawn, V wall, H wall)
         assert value.shape == (batch, 5)
         assert misc.shape == (batch, 6)
@@ -87,7 +89,7 @@ def test_q4_loss_and_optimizer_step(name, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     optimizer.zero_grad()
 
-    policy, value, misc, trajectory, paths, walls = model.postprocess_output(model(spatial, glob))[0]
+    policy, value, misc, trajectory, paths, walls, td_value, policy_aux = model.postprocess_output(model(spatial, glob))[0]
     ce = torch.nn.functional.cross_entropy
     bce = torch.nn.functional.binary_cross_entropy_with_logits
     loss = (
@@ -98,13 +100,15 @@ def test_q4_loss_and_optimizer_step(name, device):
         + bce(trajectory, torch.zeros_like(trajectory))
         + bce(paths, torch.zeros_like(paths))
         + bce(walls, torch.zeros_like(walls))
+        + ce(td_value.reshape(batch * 4, 5), torch.zeros(batch * 4, dtype=torch.long, device=device))
+        + ce(policy_aux[:, 0].reshape(batch, -1), torch.zeros(batch, dtype=torch.long, device=device))
     )
     assert torch.isfinite(loss).item()
     loss.backward()
     heads = model.value_head
     for param in (model.conv_spatial.weight, model.policy_head.conv2p.weight, heads.linear_value.weight,
                   heads.linear_misc.weight, heads.conv_trajectory.weight, heads.conv_all_trajectories.weight,
-                  heads.conv_wall_placements.weight):
+                  heads.conv_wall_placements.weight, heads.linear_td_value.weight, model.policy_head.conv2p_aux.weight):
         assert param.grad is not None and torch.isfinite(param.grad).all() and param.grad.abs().sum() > 0
     before = model.conv_spatial.weight.detach().clone()
     optimizer.step()
@@ -116,3 +120,4 @@ def test_training_only_heads_are_not_exported_but_trained_params_exist():
     model = Model(modelconfigs.config_of_name["b1c32_q4"], pos_len=11)
     names = {n for n, _ in model.named_parameters()}
     assert "value_head.conv_all_trajectories.weight" in names and "value_head.conv_wall_placements.weight" in names
+    assert "value_head.linear_td_value.weight" in names and "policy_head.conv2p_aux.weight" in names

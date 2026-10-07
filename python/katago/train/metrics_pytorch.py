@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 import math
 
-from ..train.model_pytorch import EXTRA_SCORE_DISTR_RADIUS, Model, compute_gain, ExtraOutputs, MetadataEncoder
+from ..train.model_pytorch import EXTRA_SCORE_DISTR_RADIUS, Model, compute_gain, ExtraOutputs, MetadataEncoder, SoftPlusWithGradientFloorFunction
 from ..train.trainloop_helpers import env_flag
 from ..train import modelconfigs
 
@@ -29,8 +29,30 @@ class Metrics:
         self.pos_len = raw_model.pos_len
         self.pos_area = raw_model.pos_len * raw_model.pos_len
         self.is_quoridor = modelconfigs.is_quoridor(raw_model.config)
+        self.is_quoridor4 = modelconfigs.is_quoridor4(raw_model.config)
 
-        if self.is_quoridor:
+        if self.is_quoridor4:
+            # Quoridor Four-at-a-Table (docs/q4/Q4IO.md §5, §8): 3 policy planes on 11 x 11, 5 value classes.
+            self.policy_len = 3 * self.pos_area
+            self.value_len = modelconfigs.Q4_NUM_VALUE_LOGITS
+            self.num_td_values = 4
+            self.num_futurepos_values = 0
+            self.num_seki_logits = 0
+            self.scorebelief_len = 0
+            self.scoremean_multiplier = 1.0
+            self.score_belief_offset_vector = None
+            self.seki_ema_on_device = False
+            self.moving_unowned_proportion_sum = 0.0
+            self.moving_unowned_proportion_weight = 0.0
+            self.shortterm_value_error_multiplier = raw_model.shortterm_value_error_multiplier
+            # Pawn plane: all 121 cells; wall planes: the 10 x 10 anchor grid at [ay][ax] (the 11th row and column
+            # are padding, Q4IO §1). Slots outside are never legal.
+            valid_mask = torch.zeros((3, self.pos_len, self.pos_len), dtype=torch.float32)
+            valid_mask[0, :, :] = 1.0
+            valid_mask[1, :10, :10] = 1.0
+            valid_mask[2, :10, :10] = 1.0
+            self.valid_action_mask = valid_mask.view(1, self.policy_len)
+        elif self.is_quoridor:
             self.policy_len = 3 * self.pos_len * self.pos_len
             self.value_len = 2
             self.num_td_values = 2
@@ -583,6 +605,16 @@ class Metrics:
         is_intermediate,
         include_model_norms=True,
     ):
+        if self.is_quoridor4:
+            return self.metrics_dict_batchwise_single_heads_output_q4(
+                raw_model=raw_model,
+                model_output_postprocessed=model_output_postprocessed,
+                batch=batch,
+                soft_policy_weight_scale=soft_policy_weight_scale,
+                value_loss_scale=value_loss_scale,
+                is_intermediate=is_intermediate,
+                include_model_norms=include_model_norms,
+            )
         if self.is_quoridor:
             return self.metrics_dict_batchwise_single_heads_output_quoridor(
                 raw_model=raw_model,
@@ -1387,3 +1419,231 @@ class Metrics:
             for key, value in extra_results.items():
                 results[key] = value
             return results
+
+
+    # -----------------------------------------------------------------------------------------------------------------
+    # Quoridor Four-at-a-Table (Q4). The loss mirrors the Duel loss above (metrics_dict_batchwise_single_heads_output_
+    # quoridor), which itself follows upstream KataGo; docs/q4/rounds/R5.md lists every term with its weight and source.
+
+    Q4_MASKED_LOGIT = -10000.0  # as the Duel loss masks invalid policy slots
+
+    @staticmethod
+    def q4_alive_value_mask(input_global_nc):
+        """[N, 5] float mask of the value classes that can win: the alive relative seats (global inputs 8..11,
+        Q4IO §4; the globals are already relative to the seat to move) and the draw, which is always possible."""
+        alive = input_global_nc[:, 8:12]
+        return torch.cat((alive, torch.ones_like(alive[:, :1])), dim=1)
+
+    @staticmethod
+    def q4_mask_value_logits(value_logits, alive_mask):
+        """Masks eliminated seats out of the value softmax (Plan §7 item 3). value_logits [N, 5] or [N, H, 5].
+        masked_fill replaces the logit, so an eliminated seat's logit gets exactly zero gradient."""
+        if value_logits.dim() == 3:
+            alive_mask = alive_mask.unsqueeze(1)
+        return value_logits.masked_fill(alive_mask == 0, Metrics.Q4_MASKED_LOGIT)
+
+    @staticmethod
+    def q4_mover_utility(value_probs, num_alive):
+        """Plan §8.3 utility of the seat to move (relative seat 0) for a value vector [me, next, across, previous,
+        draw], with winLossUtilityFactor = 1: 2 v[0] + (2 / n) v[draw] - 1. It is KataGo's win - loss for n = 2."""
+        return 2.0 * value_probs[..., 0] + (2.0 / num_alive) * value_probs[..., 4] - 1.0
+
+    def q4_policy_logits_and_target(self, logits, target, n):
+        """Flattened [N, 363] logits with the never-legal slots masked, and the normalized target over valid slots."""
+        valid_mask = self.valid_action_mask.to(device=logits.device)
+        logits = logits.reshape(n, self.policy_len).masked_fill(valid_mask == 0, Metrics.Q4_MASKED_LOGIT)
+        target = target * valid_mask
+        target = target / torch.clamp(torch.sum(target, dim=1, keepdim=True), min=1e-8)
+        return logits, target
+
+    def q4_soft_policy_target(self, target):
+        """KataGo's soft policy target: target ^ 0.25 renormalized (over the valid slots)."""
+        valid_mask = self.valid_action_mask.to(device=target.device)
+        soft = torch.pow((target + 1e-7) * valid_mask, 0.25)
+        return soft / torch.clamp(torch.sum(soft, dim=1, keepdim=True), min=1e-8)
+
+    def metrics_dict_batchwise_single_heads_output_q4(
+        self,
+        raw_model,
+        model_output_postprocessed,
+        batch,
+        soft_policy_weight_scale,
+        value_loss_scale,
+        is_intermediate,
+        include_model_norms=True,
+    ):
+        io_version = modelconfigs.get_q4_io_version(raw_model.config)
+        assert io_version == modelconfigs.Q4_TRAINING_IO_VERSION, (
+            f"only Q4 I/O v{modelconfigs.Q4_TRAINING_IO_VERSION} models can be trained, got v{io_version}")
+        (
+            policy_logits,      # [N, 2, 3, 11, 11]: search policy, style policy
+            value_logits,       # [N, 5]
+            pred_misc,          # [N, 6] raw
+            trajectory_logits,  # [N, 1, 11, 11]
+            paths_logits,       # [N, 4, 11, 11]
+            walls_logits,       # [N, 8, 11, 11]
+            td_value_logits,    # [N, 4, 5]
+            policy_aux_logits,  # [N, 3, 3, 11, 11]: next-seat policy, soft search policy, soft next-seat policy
+        ) = model_output_postprocessed
+
+        input_global_nc = batch["globalInputNC"]
+        target_policy_ncmove = batch["policyTargetsNCMove"]
+        target_global_nc = batch["globalTargetsNC"]
+        target_value_nchw = batch["valueTargetsNCHW"]
+        n = target_global_nc.shape[0]
+
+        global_weight = target_global_nc[:, 25]
+        target_weight_policy_player = target_global_nc[:, 26]
+        target_weight_outcome = target_global_nc[:, 27]
+        target_weight_policy_next = target_global_nc[:, 28]
+        target_weight_policy_style = target_global_nc[:, 29]
+        target_weight_td_value = 1.0 - target_global_nc[:, 33]
+        target_weight_value = 1.0 - target_global_nc[:, 34]
+
+        # ---- Policies. Weights as the Duel loss: search policy 1.0; next-seat policy (KataGo's opponent policy)
+        # 0.15 inside loss_policy_opponent_samplewise; soft policies 0.05 / 0.02 x soft_policy_weight_scale.
+        p0_logits, target_policy_player = self.q4_policy_logits_and_target(policy_logits[:, 0], target_policy_ncmove[:, 0], n)
+        pstyle_logits, target_policy_style = self.q4_policy_logits_and_target(policy_logits[:, 1], target_policy_ncmove[:, 1], n)
+        pnext_logits, target_policy_next = self.q4_policy_logits_and_target(policy_aux_logits[:, 0], target_policy_ncmove[:, 2], n)
+        p0soft_logits, _ = self.q4_policy_logits_and_target(policy_aux_logits[:, 1], target_policy_ncmove[:, 0], n)
+        pnextsoft_logits, _ = self.q4_policy_logits_and_target(policy_aux_logits[:, 2], target_policy_ncmove[:, 2], n)
+        target_policy_player_soft = self.q4_soft_policy_target(target_policy_player)
+        target_policy_next_soft = self.q4_soft_policy_target(target_policy_next)
+
+        loss_policy_player = self.loss_policy_player_samplewise(
+            p0_logits, target_policy_player, target_weight_policy_player, global_weight).sum()
+        loss_policy_next = self.loss_policy_opponent_samplewise(
+            pnext_logits, target_policy_next, target_weight_policy_next, global_weight).sum()
+        loss_policy_player_soft = self.loss_policy_player_samplewise(
+            p0soft_logits, target_policy_player_soft, target_weight_policy_player, global_weight).sum()
+        loss_policy_next_soft = self.loss_policy_opponent_samplewise(
+            pnextsoft_logits, target_policy_next_soft, target_weight_policy_next, global_weight).sum()
+        # Style policy (variant 1, the played action, C1 / C29): it takes the channel of Duel's long-term optimistic
+        # policy (Q4IO §5.1), whose weight 0.10 it keeps.
+        loss_policy_style = self.loss_policy_player_samplewise(
+            pstyle_logits, target_policy_style, target_weight_policy_style, global_weight).sum()
+
+        # ---- Value (5 classes, eliminated seats masked out of the softmax). Duel: 1.50 x value_loss_scale.
+        alive_mask = self.q4_alive_value_mask(input_global_nc)
+        value_logits_masked = self.q4_mask_value_logits(value_logits, alive_mask)
+        target_value = target_global_nc[:, 0:5]
+        loss_value = (1.50 * global_weight * target_weight_value * cross_entropy(value_logits_masked, target_value, dim=1)).sum()
+
+        # ---- TD value, 4 horizons as Duel: C5-9, C10-14, C15-19 and the search value C20-24, weight 1 - C33,
+        # 0.20 * 0.25 per horizon (Duel), same masking.
+        target_td_value = torch.stack(
+            (target_global_nc[:, 5:10], target_global_nc[:, 10:15], target_global_nc[:, 15:20], target_global_nc[:, 20:25]),
+            dim=1,
+        )
+        target_td_value = target_td_value / torch.clamp(torch.sum(target_td_value, dim=2, keepdim=True), min=1e-8)
+        td_value_logits_masked = self.q4_mask_value_logits(td_value_logits, alive_mask)
+        td_ce = cross_entropy(td_value_logits_masked, target_td_value, dim=2)  # [N, 4]
+        loss_td_value1 = (global_weight * target_weight_td_value * td_ce[:, 0]).sum()
+        loss_td_value2 = (global_weight * target_weight_td_value * td_ce[:, 1]).sum()
+        loss_td_value3 = (global_weight * target_weight_td_value * td_ce[:, 2]).sum()
+        loss_td_value4 = (global_weight * target_weight_td_value * td_ce[:, 3]).sum()
+        loss_td_value = 0.20 * 0.25 * (loss_td_value1 + loss_td_value2 + loss_td_value3 + loss_td_value4)
+
+        # ---- Misc (Q4IO §5.2), raw outputs.
+        # Slot 0: plies to the end / 100 (target C35, weighted by C27). Duel's remaining plies: 5.0 x Huber(delta 0.25)
+        # on plies / 300; the same loss per ply of error on plies / 100 is 5.0 / 9 x Huber(delta 0.75).
+        target_remaining_plies = target_global_nc[:, 35] / 100.0
+        loss_remaining_plies = (
+            (5.0 / 9.0) * global_weight * target_weight_outcome
+            * huber_loss(pred_misc[:, 0], target_remaining_plies, delta=0.75)
+        ).sum()
+        # Slots 1-4: each relative seat's final walls-only distance / 32 (C36-39, weights C40-43, 0 for a seat
+        # eliminated before the end). Duel's lead loss 0.054 x Huber(delta 3) on the distance in cells (32 x slot),
+        # per seat.
+        target_final_dist = target_global_nc[:, 36:40]
+        target_weight_final_dist = target_global_nc[:, 40:44]
+        final_dist_huber = huber_loss(32.0 * pred_misc[:, 1:5], target_final_dist, delta=3.0)
+        loss_final_dist = (0.054 * global_weight.unsqueeze(1) * target_weight_final_dist * final_dist_huber).sum()
+        # Slot 5: short-term value error, as Duel / upstream loss_shortterm_value_error_samplewise (2.0, Huber delta
+        # 0.4, squared softplus x shortterm_value_error_multiplier) against the short-term TD target (horizon index
+        # 2, C15-19). KataGo's value (win - loss) is replaced by the Plan §8.3 utility of the seat to move.
+        num_alive = torch.clamp(torch.sum(input_global_nc[:, 8:12], dim=1), min=1.0)
+        shortterm_value_pred = self.q4_mover_utility(torch.softmax(td_value_logits_masked[:, 2, :], dim=1), num_alive).detach()
+        shortterm_value_real = self.q4_mover_utility(target_td_value[:, 2, :], num_alive)
+        shortterm_value_sqerror = torch.square(shortterm_value_pred - shortterm_value_real) + 1.0e-8
+        pred_shortterm_value_error = SoftPlusWithGradientFloorFunction.apply(pred_misc[:, 5], 0.05, True) * self.shortterm_value_error_multiplier
+        loss_shortterm_value_error = (
+            2.0 * global_weight * target_weight_td_value
+            * huber_loss(pred_shortterm_value_error, shortterm_value_sqerror, delta=0.4)
+        ).sum()
+
+        # ---- Spatial heads: BCE, Duel's trajectory / wall-graph weight 0.02 each, weighted by the outcome weight
+        # C27, mean over the valid cells of the valid channels (Duel: mean over the cells).
+        # Exported trajectory of me (valueTargetsNCHW C0).
+        bce = torch.nn.functional.binary_cross_entropy_with_logits
+        loss_trajectory = (
+            0.02 * global_weight * target_weight_outcome
+            * torch.mean(bce(trajectory_logits[:, 0], target_value_nchw[:, 0], reduction="none"), dim=(1, 2))
+        ).sum()
+        # All seats' paths (C0-3): a seat eliminated at this row has weight 0 (alive flags = global inputs 8..11).
+        seat_alive = input_global_nc[:, 8:12]
+        paths_bce = torch.mean(bce(paths_logits, target_value_nchw[:, 0:4], reduction="none"), dim=(2, 3))  # [N, 4]
+        paths_bce = torch.sum(paths_bce * seat_alive, dim=1) / torch.clamp(torch.sum(seat_alive, dim=1), min=1.0)
+        loss_paths = (0.02 * global_weight * target_weight_outcome * paths_bce).sum()
+        # Future walls (C4-11) on the 10 x 10 anchor domain, channel 2k / 2k + 1 = relative seat k.
+        walls_bce = bce(walls_logits[:, :, :10, :10], target_value_nchw[:, 4:12, :10, :10], reduction="none")
+        walls_bce = torch.mean(walls_bce, dim=(2, 3)).view(n, 4, 2).mean(dim=2)  # [N, 4]
+        walls_bce = torch.sum(walls_bce * seat_alive, dim=1) / torch.clamp(torch.sum(seat_alive, dim=1), min=1.0)
+        loss_walls = (0.02 * global_weight * target_weight_outcome * walls_bce).sum()
+
+        loss_sum = (
+            loss_policy_player
+            + loss_policy_next
+            + loss_policy_player_soft * 0.05 * soft_policy_weight_scale
+            + loss_policy_next_soft * 0.02 * soft_policy_weight_scale
+            + loss_policy_style * 0.10
+            + loss_value * value_loss_scale
+            + loss_td_value
+            + loss_remaining_plies
+            + loss_final_dist
+            + loss_shortterm_value_error
+            + loss_trajectory
+            + loss_paths
+            + loss_walls
+        )
+
+        policy_acc1 = self.accuracy1(p0_logits, target_policy_player, target_weight_policy_player, global_weight)
+        value_probs = torch.softmax(value_logits_masked, dim=1)
+        square_value = torch.sum(global_weight * torch.square(self.q4_mover_utility(value_probs, num_alive)))
+
+        results = {
+            "p0loss_sum": loss_policy_player,
+            "p1loss_sum": loss_policy_next,
+            "p0softloss_sum": loss_policy_player_soft,
+            "p1softloss_sum": loss_policy_next_soft,
+            "pstyleloss_sum": loss_policy_style,
+            "vloss_sum": loss_value,
+            "tdvloss_sum": loss_td_value,
+            "tdvloss1_sum": loss_td_value1,
+            "tdvloss2_sum": loss_td_value2,
+            "tdvloss3_sum": loss_td_value3,
+            "tdvloss4_sum": loss_td_value4,
+            "rtloss_sum": loss_remaining_plies,
+            "fdistloss_sum": loss_final_dist,
+            "evstloss_sum": loss_shortterm_value_error,
+            "trajloss_sum": loss_trajectory,
+            "pathsloss_sum": loss_paths,
+            "wallloss_sum": loss_walls,
+            "loss_sum": loss_sum,
+            "pacc1_sum": policy_acc1,
+            "vsquare_sum": square_value,
+        }
+
+        if is_intermediate:
+            return results
+        weight = global_weight.sum()
+        extra_results = {
+            "wsum": weight * self.world_size,
+            "nsamp": int(global_weight.shape[0]) * self.world_size,
+            "ptentr_sum": self.target_entropy(target_policy_player, target_weight_policy_player, global_weight),
+            "ptsoftentr_sum": self.target_entropy(target_policy_player_soft, target_weight_policy_player, global_weight),
+        }
+        if include_model_norms:
+            extra_results.update(self.get_model_norm_metrics(raw_model))
+        results.update(extra_results)
+        return results
