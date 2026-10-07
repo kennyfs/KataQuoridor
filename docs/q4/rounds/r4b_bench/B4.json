@@ -1,0 +1,23 @@
+{
+  "katago": "/home/kenny/sync/HW/Quoridor/KataQuoridor/.claude/worktrees/python-gui-main-compat-check-1bee34/cpp/build-cuda-rel/katago",
+  "models_dir": "/tmp/claude-1000/duelmodels",
+  "config": "/home/kenny/sync/HW/Quoridor/KataQuoridor/.claude/worktrees/python-gui-main-compat-check-1bee34/cpp/configs/training/selfplay_quoridor_v2.cfg",
+  "overrides": "nnCacheSizePowerOfTwo=20",
+  "duel": true,
+  "warmup_s": 30,
+  "wall_seconds_measured": 91.49,
+  "nn_rows_per_s": 17855.14,
+  "nn_rows_per_s_note": "total_rows (2142617) / (warmup+seconds) (120s); window-start rows not individually logged",
+  "total_rows_from_log": 2142617,
+  "total_batches_from_log": 16378,
+  "avg_batch_size": 130.82,
+  "games_finished": 0,
+  "training_rows_written": 0,
+  "avg_busy_cores": 4.403,
+  "cpu_us_per_nn_row": 246.57,
+  "mean_gpu_util_pct": 76.2,
+  "max_gpu_util_pct": 83.0,
+  "mean_power_w": 99.6,
+  "rss_start_mb": 3474.8,
+  "rss_end_mb": 4141.6
+}

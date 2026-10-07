@@ -1,0 +1,23 @@
+{
+  "katago": "/tmp/claude-1000/old_d887/cpp/build-cuda-rel/katago",
+  "models_dir": "/tmp/q4models/b2c64_q4",
+  "config": "/home/kenny/sync/HW/Quoridor/KataQuoridor/.claude/worktrees/python-gui-main-compat-check-1bee34/cpp/configs/q4/training/q4_selfplay.cfg",
+  "overrides": "nnCacheSizePowerOfTwo=20",
+  "duel": false,
+  "warmup_s": 30,
+  "wall_seconds_measured": 91.71,
+  "nn_rows_per_s": 57927.65,
+  "nn_rows_per_s_note": "total_rows (6951318) / (warmup+seconds) (120s); window-start rows not individually logged",
+  "total_rows_from_log": 6951318,
+  "total_batches_from_log": 42432,
+  "avg_batch_size": 163.82,
+  "games_finished": 550,
+  "training_rows_written": 12425,
+  "avg_busy_cores": 7.172,
+  "cpu_us_per_nn_row": 123.81,
+  "mean_gpu_util_pct": 30.0,
+  "max_gpu_util_pct": 37.0,
+  "mean_power_w": 68.0,
+  "rss_start_mb": 7203.3,
+  "rss_end_mb": 8261.8
+}

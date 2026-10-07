@@ -1,0 +1,23 @@
+{
+  "katago": "/home/kenny/sync/HW/Quoridor/KataQuoridor/.claude/worktrees/python-gui-main-compat-check-1bee34/cpp/build-cuda-rel/katago",
+  "models_dir": "/tmp/q4models/tf2_b4c192_q4",
+  "config": "/home/kenny/sync/HW/Quoridor/KataQuoridor/.claude/worktrees/python-gui-main-compat-check-1bee34/cpp/configs/q4/training/q4_selfplay.cfg",
+  "overrides": "nnCacheSizePowerOfTwo=20",
+  "duel": false,
+  "warmup_s": 30,
+  "wall_seconds_measured": 91.3,
+  "nn_rows_per_s": 21180.36,
+  "nn_rows_per_s_note": "total_rows (2541643) / (warmup+seconds) (120s); window-start rows not individually logged",
+  "total_rows_from_log": 2541643,
+  "total_batches_from_log": 14438,
+  "avg_batch_size": 176.04,
+  "games_finished": 250,
+  "training_rows_written": 2417,
+  "avg_busy_cores": 2.829,
+  "cpu_us_per_nn_row": 133.57,
+  "mean_gpu_util_pct": 74.1,
+  "max_gpu_util_pct": 82.0,
+  "mean_power_w": 99.6,
+  "rss_start_mb": 5408.7,
+  "rss_end_mb": 7807.6
+}
