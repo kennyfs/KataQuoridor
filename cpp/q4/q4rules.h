@@ -8,6 +8,7 @@ struct Q4Rules {
   int maxPlies = 400;
   int repetitionDrawCount = 0;
   int initialWalls[4] = {7, 7, 7, 7};
+  static constexpr int MAX_REPETITION_DRAW_COUNT = 1000;
 
   Q4Rules();
   Q4Rules(int maxPlies, int repetitionDrawCount, int walls = 7);
