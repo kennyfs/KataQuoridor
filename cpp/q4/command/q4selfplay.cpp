@@ -1,43 +1,40 @@
-#include "../core/global.h"
-#include "../core/datetime.h"
-#include "../core/fileutils.h"
-#include "../core/makedir.h"
-#include "../core/config_parser.h"
-#include "../core/timer.h"
-#include "../dataio/sgf.h"
-#include "../dataio/trainingwrite.h"
-#include "../dataio/loadmodel.h"
-#include "../neuralnet/modelversion.h"
-#include "../neuralnet/quoridornn.h"
-#include "../search/asyncbot.h"
-#include "../program/setup.h"
-#include "../program/play.h"
-#include "../program/selfplaymanager.h"
-#include "../command/commandline.h"
-#include "../core/test.h"
-#include "../main.h"
+#include "../../core/global.h"
+#include "../../core/datetime.h"
+#include "../../core/fileutils.h"
+#include "../../core/makedir.h"
+#include "../../core/config_parser.h"
+#include "../../core/timer.h"
+#include "../../dataio/loadmodel.h"
+#include "../../program/setup.h"
+#include "../../command/commandline.h"
+#include "../../core/test.h"
+#include "../../main.h"
+
+#include "../nn/q4nnconstants.h"
+#include "../play/q4play.h"
+#include "../play/q4playsettings.h"
+#include "../play/q4selfplaymanager.h"
+#include "../search/q4search.h"
 
 #include <chrono>
 #include <csignal>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
 
 using namespace std;
 
 static std::atomic<bool> sigReceived(false);
 static std::atomic<bool> shouldStop(false);
-static void signalHandler(int signal)
-{
+static void signalHandler(int signal) {
   if(signal == SIGINT || signal == SIGTERM) {
     sigReceived.store(true);
     shouldStop.store(true);
   }
 }
 
-//-----------------------------------------------------------------------------------------
-
-
-int MainCmds::selfplay(const vector<string>& args) {
-  Board::initHash();
-  ScoreValue::initTables();
+int MainCmds::q4selfplay(const vector<string>& args) {
   Rand seedRand;
 
   ConfigParser cfg;
@@ -46,16 +43,17 @@ int MainCmds::selfplay(const vector<string>& args) {
   int64_t maxGamesTotal = ((int64_t)1) << 62;
   int64_t maxValidGamesTotal = ((int64_t)1) << 62;
   int64_t maxRowsTotal = ((int64_t)1) << 62;
+
   try {
-    KataGoCommandLine cmd("Generate training data via self play.");
-    cmd.addConfigFileArg("","");
+    KataGoCommandLine cmd("Generate Q4 training data via self play.");
+    cmd.addConfigFileArg("", "");
     cmd.addOverrideConfigArg();
 
-    TCLAP::ValueArg<string> modelsDirArg("","models-dir","Dir to poll and load models from",true,string(),"DIR");
-    TCLAP::ValueArg<string> outputDirArg("","output-dir","Dir to output files",true,string(),"DIR");
-    TCLAP::ValueArg<string> maxGamesTotalArg("","max-games-total","Terminate after this many games",false,string(),"NGAMES");
-    TCLAP::ValueArg<string> maxValidGamesTotalArg("","max-valid-games-total","Terminate after this many valid non-discarded games",false,string(),"NGAMES");
-    TCLAP::ValueArg<string> maxRowsTotalArg("","max-rows-total","Terminate after this many valid data rows",false,string(),"NROWS");
+    TCLAP::ValueArg<string> modelsDirArg("", "models-dir", "Dir to poll and load models from", true, string(), "DIR");
+    TCLAP::ValueArg<string> outputDirArg("", "output-dir", "Dir to output files", true, string(), "DIR");
+    TCLAP::ValueArg<string> maxGamesTotalArg("", "max-games-total", "Terminate after this many games", false, string(), "NGAMES");
+    TCLAP::ValueArg<string> maxValidGamesTotalArg("", "max-valid-games-total", "Terminate after this many valid non-discarded games", false, string(), "NGAMES");
+    TCLAP::ValueArg<string> maxRowsTotalArg("", "max-rows-total", "Terminate after this many valid data rows", false, string(), "NROWS");
     cmd.add(modelsDirArg);
     cmd.add(outputDirArg);
     cmd.add(maxGamesTotalArg);
@@ -66,20 +64,20 @@ int MainCmds::selfplay(const vector<string>& args) {
     modelsDir = modelsDirArg.getValue();
     outputDir = outputDirArg.getValue();
     string maxGamesTotalStr = maxGamesTotalArg.getValue();
-    if(maxGamesTotalStr != "") {
-      bool suc = Global::tryStringToInt64(maxGamesTotalStr,maxGamesTotal);
+    if(!maxGamesTotalStr.empty()) {
+      bool suc = Global::tryStringToInt64(maxGamesTotalStr, maxGamesTotal);
       if(!suc || maxGamesTotal <= 0)
         throw StringError("-max-games-total must be a positive integer");
     }
     string maxValidGamesTotalStr = maxValidGamesTotalArg.getValue();
-    if(maxValidGamesTotalStr != "") {
-      bool suc = Global::tryStringToInt64(maxValidGamesTotalStr,maxValidGamesTotal);
+    if(!maxValidGamesTotalStr.empty()) {
+      bool suc = Global::tryStringToInt64(maxValidGamesTotalStr, maxValidGamesTotal);
       if(!suc || maxValidGamesTotal <= 0)
         throw StringError("-max-valid-games-total must be a positive integer");
     }
     string maxRowsTotalStr = maxRowsTotalArg.getValue();
-    if(maxRowsTotalStr != "") {
-      bool suc = Global::tryStringToInt64(maxRowsTotalStr,maxRowsTotal);
+    if(!maxRowsTotalStr.empty()) {
+      bool suc = Global::tryStringToInt64(maxRowsTotalStr, maxRowsTotal);
       if(!suc || maxRowsTotal <= 0)
         throw StringError("-max-rows-total must be a positive integer");
     }
@@ -88,8 +86,8 @@ int MainCmds::selfplay(const vector<string>& args) {
       if(s.length() <= 0)
         throw StringError("Empty directory specified for " + string(flag));
     };
-    checkDirNonEmpty("models-dir",modelsDir);
-    checkDirNonEmpty("output-dir",outputDir);
+    checkDirNonEmpty("models-dir", modelsDir);
+    checkDirNonEmpty("output-dir", outputDir);
 
     cmd.getConfig(cfg);
   }
@@ -98,80 +96,46 @@ int MainCmds::selfplay(const vector<string>& args) {
     return 1;
   }
 
-  MakeDir::make(outputDir);
-  MakeDir::make(modelsDir);
-
   Logger logger(&cfg);
-  //Log to random file name to better support starting/stopping as well as multiple parallel runs
-  logger.addFile(outputDir + "/log" + DateTime::getCompactDateTimeString() + "-" + Global::uint64ToHexString(seedRand.nextUInt64()) + ".log");
 
-  logger.write("Self Play Engine starting...");
-  logger.write(string("Git revision: ") + Version::getGitRevision());
+  const int numGameThreads = cfg.getInt("numGameThreads", 1, 16384);
+  const int maxDataQueueSize = cfg.getInt("maxDataQueueSize", 1, 16384);
+  const int maxRowsPerTrainFile = cfg.getInt("maxRowsPerTrainFile", 1, 1000000);
+  const double firstFileRandMinProp = cfg.contains("firstFileRandMinProp") ? cfg.getDouble("firstFileRandMinProp", 0.0, 1.0) : 0.0;
+  const int64_t logGamesEvery = cfg.getInt64("logGamesEvery", 1, 1000000000);
+  const bool switchNetsMidGame = cfg.getBool("switchNetsMidGame");
 
-  //Load runner settings
-  const int numGameThreads = cfg.getInt("numGameThreads",1,16384);
   const string gameSeedBase = Global::uint64ToHexString(seedRand.nextUInt64());
 
-  const int inputsVersion =
-    cfg.contains("inputsVersion") ?
-    cfg.getInt("inputsVersion",0,10000) :
-    QuoridorNN::TRAINING_IO_VERSION;
-  //Width and height of the board to use when writing data: the model's 9x9 tensor space, not the
-  //17x17 search space.
-  const int dataBoardLen =
-    cfg.contains("dataBoardLen") ?
-    cfg.getInt("dataBoardLen",3,Board::MAX_LEN) :
-    QuoridorNN::MODEL_LEN;
-  //Max number of games that we will allow to be queued up and not written out
-  const int maxDataQueueSize = cfg.getInt("maxDataQueueSize",1,1000000);
-  const int maxRowsPerTrainFile = cfg.getInt("maxRowsPerTrainFile",1,100000000);
-  const double firstFileRandMinProp = cfg.getDouble("firstFileRandMinProp",0.0,1.0);
+  SearchParams baseParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_OTHER);
+  Q4S::Search::checkParams(baseParams);
 
-  const int64_t logGamesEvery = cfg.getInt64("logGamesEvery",1,1000000);
-
-  const bool switchNetsMidGame = cfg.getBool("switchNetsMidGame");
-  const SearchParams baseParams = Setup::loadSingleParams(cfg,Setup::SETUP_FOR_OTHER);
-
-  bool countOnlyValidGamesForMaxGamesTotal = false;
-  if(cfg.contains("countOnlyValidGamesForMaxGamesTotal"))
-    countOnlyValidGamesForMaxGamesTotal = cfg.getBool("countOnlyValidGamesForMaxGamesTotal");
+  if(cfg.contains("maxGamesTotal")) {
+    int64_t m = cfg.getInt64("maxGamesTotal", 1, ((int64_t)1) << 62);
+    maxGamesTotal = std::min(maxGamesTotal, m);
+  }
   if(cfg.contains("maxValidGamesTotal")) {
-    int64_t v = cfg.getInt64("maxValidGamesTotal", 1, ((int64_t)1)<<62);
+    int64_t v = cfg.getInt64("maxValidGamesTotal", 1, ((int64_t)1) << 62);
     maxValidGamesTotal = std::min(maxValidGamesTotal, v);
   }
   if(cfg.contains("maxRowsTotal")) {
-    int64_t r = cfg.getInt64("maxRowsTotal", 1, ((int64_t)1)<<62);
+    int64_t r = cfg.getInt64("maxRowsTotal", 1, ((int64_t)1) << 62);
     maxRowsTotal = std::min(maxRowsTotal, r);
   }
 
-  if(maxGamesTotal < ((int64_t)1 << 60))
-    logger.write("Limit maxGamesTotal: " + Global::int64ToString(maxGamesTotal) + (countOnlyValidGamesForMaxGamesTotal ? " (counting only valid games)" : " (counting all started games)"));
-  if(maxValidGamesTotal < ((int64_t)1 << 60))
-    logger.write("Limit maxValidGamesTotal: " + Global::int64ToString(maxValidGamesTotal));
-  if(maxRowsTotal < ((int64_t)1 << 60))
-    logger.write("Limit maxRowsTotal: " + Global::int64ToString(maxRowsTotal));
-
-  //Initialize object for randomizing game settings and running games
-  const bool isDistributed = false;
-  PlaySettings playSettings = PlaySettings::loadForSelfplay(cfg, isDistributed);
-  GameRunner* gameRunner = new GameRunner(cfg, playSettings, logger);
+  Q4Play::Q4PlaySettings playSettings = Q4Play::Q4PlaySettings::loadForSelfplay(cfg);
+  Q4Play::Q4GameRunner* gameRunner = new Q4Play::Q4GameRunner(cfg, playSettings, logger);
   bool autoCleanupAllButLatestIfUnused = true;
-  SelfplayManager* manager = new SelfplayManager(maxDataQueueSize, &logger, logGamesEvery, autoCleanupAllButLatestIfUnused);
-
-  const int minBoardXSizeUsed = gameRunner->getGameInitializer()->getMinBoardXSize();
-  const int minBoardYSizeUsed = gameRunner->getGameInitializer()->getMinBoardYSize();
-  const int maxBoardXSizeUsed = gameRunner->getGameInitializer()->getMaxBoardXSize();
-  const int maxBoardYSizeUsed = gameRunner->getGameInitializer()->getMaxBoardYSize();
+  Q4Play::Q4SelfPlayManager* manager = new Q4Play::Q4SelfPlayManager(
+    maxDataQueueSize, &logger, logGamesEvery, autoCleanupAllButLatestIfUnused
+  );
 
   Setup::initializeSession(cfg);
 
-  //Done loading!
-  //------------------------------------------------------------------------------------
-  logger.write("Loaded all config stuff, starting self play");
+  logger.write("Loaded all config stuff, starting Q4 self play");
   if(!logger.isLoggingToStdout())
-    cout << "Loaded all config stuff, starting self play" << endl;
+    cout << "Loaded all config stuff, starting Q4 self play" << endl;
 
-  //Time the whole self-play run for reporting overall computational throughput.
   ClockTimer selfplayTimer;
 
   if(!std::atomic_is_lock_free(&shouldStop))
@@ -179,12 +143,9 @@ int MainCmds::selfplay(const vector<string>& args) {
   std::signal(SIGINT, signalHandler);
   std::signal(SIGTERM, signalHandler);
 
-
-  //Returns true if a new net was loaded.
   auto loadLatestNeuralNetIntoManager =
-    [inputsVersion,&manager,maxRowsPerTrainFile,firstFileRandMinProp,dataBoardLen,
-     &modelsDir,&outputDir,&logger,&cfg,numGameThreads,
-     minBoardXSizeUsed,maxBoardXSizeUsed,minBoardYSizeUsed,maxBoardYSizeUsed](const string* lastNetName) -> bool {
+    [&manager, maxRowsPerTrainFile, firstFileRandMinProp,
+     &modelsDir, &outputDir, &logger, &cfg, numGameThreads](const string* lastNetName) -> bool {
 
     string modelName;
     string modelFile;
@@ -192,45 +153,38 @@ int MainCmds::selfplay(const vector<string>& args) {
     time_t modelTime;
     bool foundModel = LoadModel::findLatestModel(modelsDir, logger, modelName, modelFile, modelDir, modelTime);
 
-    //No new neural nets yet
-    if(!foundModel || (lastNetName != NULL && *lastNetName == modelName))
+    if(!foundModel || (lastNetName != nullptr && *lastNetName == modelName))
       return false;
-    if(modelName == "random" && lastNetName != NULL && *lastNetName != "random") {
-      logger.write("WARNING: " + *lastNetName + " was the previous model, but now no model was found. Continuing with prev model instead of using random");
+    if(modelName == "random" && lastNetName != nullptr && *lastNetName != "random") {
+      logger.write("WARNING: " + *lastNetName + " was previous model, but now no model found. Continuing with prev model");
       return false;
     }
 
     logger.write("Found new neural net " + modelName);
 
     const int expectedConcurrentEvals = cfg.getInt("numSearchThreads") * numGameThreads;
-    const bool defaultRequireExactNNLen = minBoardXSizeUsed == maxBoardXSizeUsed && minBoardYSizeUsed == maxBoardYSizeUsed;
+    const bool defaultRequireExactNNLen = true;
     const bool disableFP16 = false;
     const string expectedSha256 = "";
 
     Rand rand;
-    // nnXLen/nnYLen are the 17x17 search space; the model's 9x9 tensor space is handled
-    // internally by nneval via QuoridorNN::MODEL_LEN, decoupled from this.
-    int defaultNNXLen = maxBoardXSizeUsed;
-    int defaultNNYLen = maxBoardYSizeUsed;
     NNEvaluator* nnEval = Setup::initializeNNEvaluator(
-      modelName,modelFile,expectedSha256,cfg,logger,rand,expectedConcurrentEvals,
-      defaultNNXLen,defaultNNYLen,Setup::MaxBatchSizeRequest::requireFromConfig(),defaultRequireExactNNLen,disableFP16,
-      Setup::SETUP_FOR_OTHER
+      modelName, modelFile, expectedSha256, cfg, logger, rand, expectedConcurrentEvals,
+      Q4NNConst::POS_LEN, Q4NNConst::POS_LEN, Setup::MaxBatchSizeRequest::requireFromConfig(),
+      defaultRequireExactNNLen, disableFP16, Setup::SETUP_FOR_OTHER
     );
     logger.write("Loaded latest neural net " + modelName + " from: " + modelFile);
 
     string modelOutputDir = outputDir + "/" + modelName;
-    string sgfOutputDir = modelOutputDir + "/sgfs";
+    string recordsOutputDir = modelOutputDir + "/records";
     string tdataOutputDir = modelOutputDir + "/tdata";
 
-    //Try repeatedly to make directories, in case the filesystem is unhappy with us as we try to make the same dirs as another process.
-    //Wait a random amount of time in between each failure.
     int maxTries = 5;
-    for(int i = 0; i<maxTries; i++) {
+    for(int i = 0; i < maxTries; i++) {
       bool success = false;
       try {
         MakeDir::make(modelOutputDir);
-        MakeDir::make(sgfOutputDir);
+        MakeDir::make(recordsOutputDir);
         MakeDir::make(tdataOutputDir);
         success = true;
       }
@@ -242,54 +196,46 @@ int MainCmds::selfplay(const vector<string>& args) {
       if(success)
         break;
       else {
-        if(i == maxTries-1) {
-          logger.write("ERROR: Could not make selfplay model directories, is something wrong with the filesystem?");
-          //Just give up and wait for the next model.
+        if(i == maxTries - 1) {
+          logger.write("ERROR: Could not make selfplay model directories");
           return false;
         }
-        double sleepTime = 10.0 + rand.nextDouble() * 30.0;
+        double sleepTime = 5.0 + rand.nextDouble() * 10.0;
         std::this_thread::sleep_for(std::chrono::duration<double>(sleepTime));
-        continue;
       }
     }
 
     {
       ofstream out;
-      FileUtils::open(out,modelOutputDir + "/" + "selfplay-" + Global::uint64ToHexString(rand.nextUInt64()) + ".cfg");
+      FileUtils::open(out, modelOutputDir + "/selfplay-" + Global::uint64ToHexString(rand.nextUInt64()) + ".cfg");
       out << cfg.getContents();
       out.close();
     }
 
-    //Note that this inputsVersion passed here is NOT necessarily the same as the one used in the neural net self play, it
-    //simply controls the input feature version for the written data
-    TrainingDataWriter* tdataWriter = new TrainingDataWriter(
-      tdataOutputDir, inputsVersion, maxRowsPerTrainFile, firstFileRandMinProp, dataBoardLen, dataBoardLen, Global::uint64ToHexString(rand.nextUInt64()));
-    ofstream* sgfOut = NULL;
-    if(sgfOutputDir.length() > 0) {
-      sgfOut = new ofstream();
-      FileUtils::open(*sgfOut, sgfOutputDir + "/" + Global::uint64ToHexString(rand.nextUInt64()) + ".sgfs");
-    }
+    auto* tdataWriter = new Q4Play::Q4TrainingDataWriter(
+      tdataOutputDir, maxRowsPerTrainFile, firstFileRandMinProp, rand.nextUInt64()
+    );
+    ofstream* recordsOut = new ofstream();
+    FileUtils::open(*recordsOut, recordsOutputDir + "/" + Global::uint64ToHexString(rand.nextUInt64()) + ".q4.jsonl");
 
-    logger.write("Model loading loop thread loaded new neural net " + nnEval->getModelName());
-    manager->loadModelAndStartDataWriting(nnEval, tdataWriter, sgfOut);
+    logger.write("Model loading loop loaded new neural net " + nnEval->getModelName());
+    manager->loadModelAndStartDataWriting(nnEval, tdataWriter, recordsOut);
     return true;
   };
 
-  //Initialize the initial neural net
   {
-    bool success = loadLatestNeuralNetIntoManager(NULL);
+    bool success = loadLatestNeuralNetIntoManager(nullptr);
     if(!success)
-      throw StringError("Either could not load latest neural net or access/write appopriate directories");
+      throw StringError("Could not load initial neural net from " + modelsDir);
   }
 
-  //Check for unused config keys
-  cfg.warnUnusedKeys(cerr,&logger);
+  cfg.warnUnusedKeys(cerr, &logger);
 
-  //Shared across all game loop threads
   std::atomic<int64_t> numGamesStarted(0);
   std::atomic<int64_t> numValidGamesFinished(0);
   std::atomic<int64_t> numDataRowsEnqueued(0);
-  ForkData* forkData = new ForkData();
+  auto* forkData = new Q4Play::Q4ForkData();
+
   auto gameLoop = [
     &gameRunner,
     &manager,
@@ -302,7 +248,6 @@ int MainCmds::selfplay(const vector<string>& args) {
     maxGamesTotal,
     maxValidGamesTotal,
     maxRowsTotal,
-    countOnlyValidGamesForMaxGamesTotal,
     &baseParams,
     &gameSeedBase
   ](int threadIdx) {
@@ -317,64 +262,53 @@ int MainCmds::selfplay(const vector<string>& args) {
       if(shouldStop.load())
         break;
       NNEvaluator* nnEval = manager->acquireLatest();
-      testAssert(nnEval != NULL);
+      testAssert(nnEval != nullptr);
 
       if(prevModelName != nnEval->getModelName()) {
         prevModelName = nnEval->getModelName();
         logger.write("Game loop thread " + Global::intToString(threadIdx) + " starting game on new neural net: " + prevModelName);
       }
 
-      //Callback that runGame will call periodically to ask us if we have a new neural net
-      std::function<NNEvaluator*()> checkForNewNNEval = [&manager,&nnEval,&prevModelName,&logger,&threadIdx]() -> NNEvaluator* {
+      std::function<NNEvaluator*()> checkForNewNNEval = [&manager, &nnEval, &prevModelName, &logger, threadIdx]() -> NNEvaluator* {
         NNEvaluator* newNNEval = manager->acquireLatest();
-        testAssert(newNNEval != NULL);
+        testAssert(newNNEval != nullptr);
         if(newNNEval == nnEval) {
           manager->release(newNNEval);
-          return NULL;
+          return nullptr;
         }
         manager->release(nnEval);
-
         nnEval = newNNEval;
         prevModelName = nnEval->getModelName();
-        logger.write("Game loop thread " + Global::intToString(threadIdx) + " changing midgame to new neural net: " + prevModelName);
+        logger.write("Game loop thread " + Global::intToString(threadIdx) + " changing midgame to new net: " + prevModelName);
         return nnEval;
       };
 
-      FinishedGameData* gameData = NULL;
-
+      Q4Play::Q4FinishedGameData* gameData = nullptr;
       bool canStart = true;
       if(numValidGamesFinished.load(std::memory_order_relaxed) >= maxValidGamesTotal)
         canStart = false;
       if(numDataRowsEnqueued.load(std::memory_order_relaxed) >= maxRowsTotal)
         canStart = false;
-
       if(maxGamesTotal < ((int64_t)1 << 60)) {
-        if(countOnlyValidGamesForMaxGamesTotal) {
-          if(numValidGamesFinished.load(std::memory_order_relaxed) >= maxGamesTotal)
-            canStart = false;
-        }
-        else {
-          int64_t gameIdx = numGamesStarted.fetch_add(1,std::memory_order_acq_rel);
-          if(gameIdx >= maxGamesTotal)
-            canStart = false;
-        }
+        int64_t gIdx = numGamesStarted.fetch_add(1, std::memory_order_acq_rel);
+        if(gIdx >= maxGamesTotal)
+          canStart = false;
       }
 
       if(canStart) {
-        if(countOnlyValidGamesForMaxGamesTotal || maxGamesTotal >= ((int64_t)1 << 60))
+        if(maxGamesTotal >= ((int64_t)1 << 60))
           numGamesStarted.fetch_add(1, std::memory_order_relaxed);
 
         manager->countOneGameStarted(nnEval);
-        MatchPairer::BotSpec botSpecB;
-        botSpecB.botIdx = 0;
-        botSpecB.botName = nnEval->getModelName();
-        botSpecB.nnEval = nnEval;
-        botSpecB.baseParams = baseParams;
-        MatchPairer::BotSpec botSpecW = botSpecB;
+        Q4Play::Q4GameRunner::BotSpec botSpec;
+        botSpec.botIdx = 0;
+        botSpec.botName = nnEval->getModelName();
+        botSpec.nnEval = nnEval;
+        botSpec.baseParams = baseParams;
 
         string seed = gameSeedBase + ":" + Global::uint64ToHexString(thisLoopSeedRand.nextUInt64());
         gameData = gameRunner->runGame(
-          seed, botSpecB, botSpecW, forkData, NULL, logger,
+          seed, botSpec, forkData, logger,
           shouldStopFunc,
           shouldPause,
           (switchNetsMidGame ? checkForNewNNEval : nullptr),
@@ -383,16 +317,12 @@ int MainCmds::selfplay(const vector<string>& args) {
         );
       }
 
-      //NULL gamedata will happen when the game is interrupted by shouldStop, which means we should also stop.
-      //Or when we run out of total games.
-      bool shouldContinue = gameData != NULL;
-      //Note that if we've gotten a newNNEval, we're actually pushing the game as data for the new one, rather than the old one!
-      if(gameData != NULL) {
-        manager->countQuoridorGameResult(nnEval, *gameData);
+      bool shouldContinue = (gameData != nullptr);
+      if(gameData != nullptr) {
+        manager->countQ4GameResult(nnEval, *gameData);
         if(gameData->hitTurnLimit) {
-          manager->countOneGameHitCutoff(nnEval, (int64_t)(gameData->endHist.moveHistory.size() - gameData->startHist.moveHistory.size()));
+          manager->countOneGameHitCutoff(nnEval, (int64_t)gameData->endHist.plies);
           delete gameData;
-          // This is normal for random play.
         }
         else {
           int64_t rows = 0;
@@ -402,7 +332,7 @@ int MainCmds::selfplay(const vector<string>& args) {
             rows += (int64_t)std::round(sp->targetWeight);
           numValidGamesFinished.fetch_add(1, std::memory_order_relaxed);
           numDataRowsEnqueued.fetch_add(rows, std::memory_order_relaxed);
-          manager->enqueueDataToWrite(nnEval,gameData);
+          manager->enqueueDataToWrite(nnEval, gameData);
         }
       }
 
@@ -414,78 +344,58 @@ int MainCmds::selfplay(const vector<string>& args) {
 
     logger.write("Game loop thread " + Global::intToString(threadIdx) + " terminating");
   };
-  auto gameLoopProtected = [&logger,&gameLoop](int threadIdx) {
-    Logger::logThreadUncaught("game loop", &logger, [&](){ gameLoop(threadIdx); });
+
+  auto gameLoopProtected = [&logger, &gameLoop](int threadIdx) {
+    Logger::logThreadUncaught("game loop", &logger, [&]() { gameLoop(threadIdx); });
   };
 
-  //Looping thread for polling for new neural nets and loading them in
   std::mutex modelLoadMutex;
   std::condition_variable modelLoadSleepVar;
-  auto modelLoadLoop = [&modelLoadMutex,&modelLoadSleepVar,&logger,&manager,&loadLatestNeuralNetIntoManager]() {
+  auto modelLoadLoop = [&modelLoadMutex, &modelLoadSleepVar, &logger, &manager, &loadLatestNeuralNetIntoManager]() {
     logger.write("Model loading loop thread starting");
-
     while(true) {
       if(shouldStop.load())
         break;
       string lastNetName = manager->getLatestModelName();
-      bool success = loadLatestNeuralNetIntoManager(&lastNetName);
-      (void)success;
+      loadLatestNeuralNetIntoManager(&lastNetName);
 
       if(shouldStop.load())
         break;
 
-      //Sleep for a while and then re-poll
       std::unique_lock<std::mutex> lock(modelLoadMutex);
-      modelLoadSleepVar.wait_for(lock, std::chrono::seconds(20), [](){return shouldStop.load();});
+      modelLoadSleepVar.wait_for(lock, std::chrono::seconds(20), []() { return shouldStop.load(); });
     }
-
     logger.write("Model loading loop thread terminating");
   };
-  auto modelLoadLoopProtected = [&logger,&modelLoadLoop]() {
+  auto modelLoadLoopProtected = [&logger, &modelLoadLoop]() {
     Logger::logThreadUncaught("model load loop", &logger, modelLoadLoop);
   };
 
   vector<std::thread> threads;
   threads.reserve(numGameThreads);
-  for(int i = 0; i<numGameThreads; i++) {
-    threads.emplace_back(gameLoopProtected,i);
+  for(int i = 0; i < numGameThreads; i++) {
+    threads.emplace_back(gameLoopProtected, i);
   }
   std::thread modelLoadLoopThread(modelLoadLoopProtected);
 
-  //Wait for all game threads to stop
-  for(int i = 0; i<threads.size(); i++)
+  for(size_t i = 0; i < threads.size(); i++)
     threads[i].join();
 
-  //If by now somehow shouldStop is not true, set it to be true since all game threads are toast
   shouldStop.store(true);
-
-  //Wake up the model loading thread rather than waiting for it to wake up on its own, and
-  //wait for it to die.
   {
-    //Lock so that we don't race where we notify the loading thread to wake when it's still in
-    //its own critical section but not yet slept, and to ensure the two agree on shouldStop.
     std::lock_guard<std::mutex> lock(modelLoadMutex);
     modelLoadSleepVar.notify_all();
   }
   modelLoadLoopThread.join();
 
-  //At this point, nothing else except possibly data write loops are running, within the selfplay manager.
   delete manager;
+  delete gameRunner;
+  delete forkData;
 
-  //Overall self-play totals (per-model NN/data/moves breakdowns are logged above by the manager).
   logger.write("Total games started: " + Global::int64ToString(numGamesStarted.load(std::memory_order_relaxed)));
   logger.write("Total valid games: " + Global::int64ToString(numValidGamesFinished.load(std::memory_order_relaxed)));
   logger.write("Total data rows: " + Global::int64ToString(numDataRowsEnqueued.load(std::memory_order_relaxed)));
   logger.write("Total selfplay runtime (seconds): " + Global::doubleToString(selfplayTimer.getSeconds()));
 
-  //Delete and clean up everything else
-  NeuralNet::globalCleanup();
-  delete forkData;
-  delete gameRunner;
-  ScoreValue::freeTables();
-
-  if(sigReceived.load())
-    logger.write("Exited cleanly after signal");
-  logger.write("All cleaned up, quitting");
   return 0;
 }
