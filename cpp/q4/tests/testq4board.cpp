@@ -602,6 +602,9 @@ void testWallFloodFillFuzz() {
           bool isH = h == 1;
           bool fast = b.isLegalWallBruteForce(ax, ay, isH);
           bool bfs = b.isLegalWallBruteForceBFS(ax, ay, isH);
+          if(fast != bfs)
+            cout << Q4Notation::renderBoardAscii(b) << "wall " << Q4Notation::wallToString(ax, ay, isH)
+                 << ": flood fill " << fast << ", BFS " << bfs << endl;
           testAssert(fast == bfs);
           testAssert(b.isGeometricallyLegalWall(ax, ay, isH) == bfs);
           if(!bfs && !b.wallConflicts(ax, ay, isH))
