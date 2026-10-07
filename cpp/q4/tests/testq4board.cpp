@@ -33,6 +33,8 @@ uint64_t perft(const Q4Board& board, int depth) {
   return total;
 }
 
+uint64_t legalActionsHash(const Q4Board& board, int depth, uint64_t h);
+
 void testNotation() {
   cout << "Running Q4 Notation tests (T9)..." << endl;
 
@@ -427,6 +429,7 @@ void testPerft() {
 
   uint64_t d2 = perft(startBoard, 2);
   testAssert(d2 == 40445);
+  uint64_t legalHash = legalActionsHash(startBoard, 2, 0xcbf29ce484222325ULL);
 
   // 3 non-degenerate positions replacing the degenerate pawn-heavy position (A4)
   // Position 1: Straight jumps, diagonal jump at board edge (a10->b11 over a11), diagonal jump at wall (e3->d4/f4 over e4 with e4h)
@@ -458,6 +461,7 @@ void testPerft() {
     testAssert(perft(b, 6) == 990);
     testAssert(perft(b, 7) == 3828);
     testAssert(perft(b, 8) == 14388);
+    legalHash = legalActionsHash(b, 6, legalHash);
   }
 
   // Position 2: Two-pawn jump permitted vs denied (c3 at (2, 2) jumping over c4 and c5 with wall c3v)
@@ -491,6 +495,7 @@ void testPerft() {
     testAssert(perft(b, 6) == 2088);
     testAssert(perft(b, 7) == 7776);
     testAssert(perft(b, 8) == 27216);
+    legalHash = legalActionsHash(b, 6, legalHash);
   }
 
   // Position 3: Two-pawn jump into center a few plies deep
@@ -523,7 +528,126 @@ void testPerft() {
     testAssert(perft(b, 6) == 2812);
     testAssert(perft(b, 7) == 10792);
     testAssert(perft(b, 8) == 41312);
+    legalHash = legalActionsHash(b, 6, legalHash);
   }
+
+  cout << "  getLegalActions hash over the perft trees: " << legalHash << endl;
+  testAssert(legalHash == 13831335297760359281ULL);
+}
+
+bool canMasksMatchBlocked(const Q4Board& b) {
+  for(int c = 0; c < Q4Board::NUM_CELLS; c++) {
+    if(b.canN.test(c) != b.canStep(c, Q4Board::DIR_N)) return false;
+    if(b.canE.test(c) != b.canStep(c, Q4Board::DIR_E)) return false;
+    if(b.canS.test(c) != b.canStep(c, Q4Board::DIR_S)) return false;
+    if(b.canW.test(c) != b.canStep(c, Q4Board::DIR_W)) return false;
+  }
+  return true;
+}
+
+// R4b C.3: the flood-fill isLegalWallBruteForce agrees with the old BFS on every anchor and orientation of
+// 20,000 positions (random and wall-heavy games, 2-3 alive seats, pawns on the center), and the can-masks
+// stay in sync with blocked[] through applyWall, add/removeWallFromBlocked and board copies.
+void testWallFloodFillFuzz() {
+  cout << "Running Q4 wall flood fill fuzz (new == BFS)..." << endl;
+  Rand rand("testWallFloodFillFuzz");
+  int numPositions = 0;
+  int numIllegalByPath = 0;
+  int numCenterPositions = 0;
+  int numEliminationPositions = 0;
+  while(numPositions < 20000) {
+    Q4History history;
+    double wallBias = rand.nextDouble() < 0.5 ? 0.0 : 0.85;
+    int targetPlies = (int)rand.nextUInt(80);
+    for(int m = 0; m < targetPlies && !history.isFinished; m++) {
+      if(history.currentBoard.getNumAlive() > 2 && rand.nextUInt(25) == 0) {
+        int victim = (int)rand.nextUInt(4);
+        if(history.currentBoard.isAlive(victim))
+          history.eliminate(victim);
+        continue;
+      }
+      vector<int> actions;
+      history.currentBoard.getLegalActions(history.currentBoard.toMove, actions);
+      if(actions.empty())
+        break;
+      vector<int> wallActs;
+      for(int act : actions) {
+        if(!Q4Board::isPawnAction(act))
+          wallActs.push_back(act);
+      }
+      if(!wallActs.empty() && rand.nextBool(wallBias))
+        history.play(wallActs[rand.nextUInt((uint32_t)wallActs.size())]);
+      else
+        history.play(actions[rand.nextUInt((uint32_t)actions.size())]);
+    }
+
+    Q4Board b = history.currentBoard;
+    // Move a random alive pawn onto the center (the flood fill must not require it)
+    if(rand.nextUInt(10) == 0 && b.occupant[Q4Board::CENTER_CELL] < 0) {
+      int s = (int)rand.nextUInt(4);
+      if(b.isAlive(s)) {
+        b.occupant[b.pawn[s]] = -1;
+        b.pawn[s] = Q4Board::CENTER_CELL;
+        b.occupant[Q4Board::CENTER_CELL] = (int8_t)s;
+        numCenterPositions++;
+      }
+    }
+    if(b.getNumAlive() < 4)
+      numEliminationPositions++;
+    testAssert(canMasksMatchBlocked(b));
+
+    for(int ay = 0; ay < Q4Board::NUM_ANCHORS; ay++) {
+      for(int ax = 0; ax < Q4Board::NUM_ANCHORS; ax++) {
+        for(int h = 0; h < 2; h++) {
+          bool isH = h == 1;
+          bool fast = b.isLegalWallBruteForce(ax, ay, isH);
+          bool bfs = b.isLegalWallBruteForceBFS(ax, ay, isH);
+          testAssert(fast == bfs);
+          testAssert(b.isGeometricallyLegalWall(ax, ay, isH) == bfs);
+          if(!bfs && !b.wallConflicts(ax, ay, isH))
+            numIllegalByPath++;
+        }
+      }
+    }
+
+    // Add then remove a non-conflicting wall: masks follow blocked[] and come back unchanged
+    int ax = (int)rand.nextUInt(Q4Board::NUM_ANCHORS);
+    int ay = (int)rand.nextUInt(Q4Board::NUM_ANCHORS);
+    bool isH = rand.nextBool(0.5);
+    if(!b.wallConflicts(ax, ay, isH)) {
+      Q4Board copy = b;
+      copy.addWallToBlocked(ax, ay, isH);
+      testAssert(canMasksMatchBlocked(copy));
+      copy.removeWallFromBlocked(ax, ay, isH);
+      testAssert(canMasksMatchBlocked(copy));
+      testAssert(copy.canN == b.canN && copy.canE == b.canE && copy.canS == b.canS && copy.canW == b.canW);
+    }
+    numPositions++;
+  }
+  cout << "  " << numPositions << " positions, " << numEliminationPositions << " with eliminations, "
+       << numCenterPositions << " with a pawn on the center, " << numIllegalByPath
+       << " (position, wall) pairs illegal only by path" << endl;
+  testAssert(numIllegalByPath > 0);
+  testAssert(numCenterPositions > 0);
+  testAssert(numEliminationPositions > 0);
+}
+
+// R4b C.3: hash of getLegalActions over the perft trees (start position to depth 2, positions 1-3 of
+// testPerft to depth 6). The constant was computed with the BFS isLegalWallBruteForce.
+uint64_t legalActionsHash(const Q4Board& board, int depth, uint64_t h) {
+  std::vector<int> actions;
+  board.getLegalActions(board.toMove, actions);
+  for(int act : actions)
+    h = (h ^ (uint64_t)(act + 1)) * 0x100000001b3ULL;
+  h = (h ^ 0xffff) * 0x100000001b3ULL;
+  if(depth == 0 || board.isFinished())
+    return h;
+  for(int act : actions) {
+    Q4Board nextBoard = board;
+    nextBoard.applyAction(act);
+    h = legalActionsHash(nextBoard, depth - 1, h);
+  }
+  return h;
 }
 
 // A5: on 2,000 random games (with eliminations, small maxPlies, repetition rule on with N = 2 and 3),
@@ -597,6 +721,7 @@ void Tests::runQ4BoardTests() {
   testHashingAndUndo();
   testTerminalRules();
   testPerft();
+  testWallFloodFillFuzz();
   testPlayStateConsistency();
 
   cout << "All Q4 Board tests PASSED!" << endl;

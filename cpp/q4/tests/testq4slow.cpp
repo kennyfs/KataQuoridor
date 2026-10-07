@@ -45,8 +45,8 @@ void testWallLegalityFuzz() {
     const Q4Board& b = history.currentBoard;
     for(int ay = 0; ay < 10; ay++) {
       for(int ax = 0; ax < 10; ax++) {
-        testAssert(b.isGeometricallyLegalWall(ax, ay, true) == b.isLegalWallBruteForce(ax, ay, true));
-        testAssert(b.isGeometricallyLegalWall(ax, ay, false) == b.isLegalWallBruteForce(ax, ay, false));
+        testAssert(b.isGeometricallyLegalWall(ax, ay, true) == b.isLegalWallBruteForceBFS(ax, ay, true));
+        testAssert(b.isGeometricallyLegalWall(ax, ay, false) == b.isLegalWallBruteForceBFS(ax, ay, false));
         testedPairs += 2;
       }
     }
@@ -77,8 +77,8 @@ void testWallLegalityFuzz() {
     const Q4Board& b = history.currentBoard;
     for(int ay = 0; ay < 10; ay++) {
       for(int ax = 0; ax < 10; ax++) {
-        testAssert(b.isGeometricallyLegalWall(ax, ay, true) == b.isLegalWallBruteForce(ax, ay, true));
-        testAssert(b.isGeometricallyLegalWall(ax, ay, false) == b.isLegalWallBruteForce(ax, ay, false));
+        testAssert(b.isGeometricallyLegalWall(ax, ay, true) == b.isLegalWallBruteForceBFS(ax, ay, true));
+        testAssert(b.isGeometricallyLegalWall(ax, ay, false) == b.isLegalWallBruteForceBFS(ax, ay, false));
         testedPairs += 2;
       }
     }
@@ -112,8 +112,8 @@ void testWallLegalityFuzz() {
     const Q4Board& b = history.currentBoard;
     for(int ay = 0; ay < 10; ay++) {
       for(int ax = 0; ax < 10; ax++) {
-        testAssert(b.isGeometricallyLegalWall(ax, ay, true) == b.isLegalWallBruteForce(ax, ay, true));
-        testAssert(b.isGeometricallyLegalWall(ax, ay, false) == b.isLegalWallBruteForce(ax, ay, false));
+        testAssert(b.isGeometricallyLegalWall(ax, ay, true) == b.isLegalWallBruteForceBFS(ax, ay, true));
+        testAssert(b.isGeometricallyLegalWall(ax, ay, false) == b.isLegalWallBruteForceBFS(ax, ay, false));
         testedPairs += 2;
       }
     }
