@@ -9,6 +9,28 @@
 #include <cstdint>
 #include <vector>
 
+// A set of the 121 cells, bit c = cell c (lo: cells 0..63, hi: cells 64..120; bits above 120 stay zero).
+// Used by the flood fill in isLegalWallBruteForce.
+struct Q4Bits121 {
+  static constexpr uint64_t HI_MASK = ((uint64_t)1 << 57) - 1;
+  uint64_t lo = 0;
+  uint64_t hi = 0;
+
+  inline bool operator==(const Q4Bits121& o) const { return lo == o.lo && hi == o.hi; }
+  inline bool operator!=(const Q4Bits121& o) const { return !(*this == o); }
+  inline Q4Bits121 operator|(const Q4Bits121& o) const { return {lo | o.lo, hi | o.hi}; }
+  inline Q4Bits121 operator&(const Q4Bits121& o) const { return {lo & o.lo, hi & o.hi}; }
+  inline bool test(int c) const { return c < 64 ? ((lo >> c) & 1) : ((hi >> (c - 64)) & 1); }
+  inline void set(int c) { if(c < 64) lo |= (uint64_t)1 << c; else hi |= (uint64_t)1 << (c - 64); }
+  inline void clear(int c) { if(c < 64) lo &= ~((uint64_t)1 << c); else hi &= ~((uint64_t)1 << (c - 64)); }
+  inline void assign(int c, bool v) { if(v) set(c); else clear(c); }
+
+  // Shift toward higher cell indices by n (1 = east, 11 = north), dropping bits above 120.
+  template<int n> inline Q4Bits121 shl() const { return {lo << n, ((hi << n) | (lo >> (64 - n))) & HI_MASK}; }
+  // Shift toward lower cell indices by n (1 = west, 11 = south).
+  template<int n> inline Q4Bits121 shr() const { return {(lo >> n) | (hi << (64 - n)), hi >> n}; }
+};
+
 struct Q4Board {
   static constexpr int BOARD_SIZE = 11;
   static constexpr int NUM_CELLS = 121;
@@ -53,6 +75,13 @@ struct Q4Board {
   // Edge blocking: bit (1 << dir) set if movement in that direction is blocked
   uint8_t blocked[NUM_CELLS];
 
+  // Open-edge masks, kept in sync with blocked[]: bit c set iff the step from c in that direction is open.
+  // Board-edge bits in blocked[] keep canE clear on x == 10 and canW clear on x == 0, which stops row wrap.
+  Q4Bits121 canN;
+  Q4Bits121 canE;
+  Q4Bits121 canS;
+  Q4Bits121 canW;
+
   // Distances to center (walls-only, 255 if unreachable)
   uint8_t distToCenter[NUM_CELLS];
 
@@ -94,7 +123,10 @@ struct Q4Board {
   // Wall conflict and legality
   bool wallConflicts(int ax, int ay, bool isHorizontal) const;
   bool isGeometricallyLegalWall(int ax, int ay, bool isHorizontal) const;
+  // Full reachability check by bitboard flood fill from the center.
   bool isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const;
+  // Previous BFS version of isLegalWallBruteForce, kept as a reference for tests.
+  bool isLegalWallBruteForceBFS(int ax, int ay, bool isHorizontal) const;
   bool isLegalWall(int ax, int ay, bool isHorizontal) const;
 
   // Legal moves generation
@@ -125,6 +157,8 @@ struct Q4Board {
 
 private:
   void initGridBoundaries();
+  // Refresh the can-mask bits of cell c from blocked[c].
+  void syncCanMasks(int c);
 };
 
 #endif  // Q4_BOARD_H_

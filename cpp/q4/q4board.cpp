@@ -3,6 +3,7 @@
 #include "../core/rand.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <stdexcept>
 
@@ -11,6 +12,17 @@ const int Q4Board::DIR_OPPOSITE[4] = {2, 3, 0, 1};
 const int Q4Board::START_CELLS[4] = {5, 55, 115, 65};
 
 bool Q4Board::IS_ZOBRIST_INITIALIZED = false;
+
+#ifndef NDEBUG
+static Q4Bits121 columnCells(int x) {
+  Q4Bits121 r;
+  for(int y = 0; y < Q4Board::BOARD_SIZE; y++)
+    r.set(Q4Board::cellOf(x, y));
+  return r;
+}
+static const Q4Bits121 COL_X0 = columnCells(0);
+static const Q4Bits121 COL_X10 = columnCells(Q4Board::BOARD_SIZE - 1);
+#endif
 Hash128 Q4Board::ZOBRIST_PAWN[NUM_SEATS][NUM_CELLS];
 Hash128 Q4Board::ZOBRIST_HWALL[NUM_WALL_ANCHORS];
 Hash128 Q4Board::ZOBRIST_VWALL[NUM_WALL_ANCHORS];
@@ -79,7 +91,16 @@ void Q4Board::initGridBoundaries() {
     if(y == 0)  mask |= (1 << DIR_S);
     if(x == 0)  mask |= (1 << DIR_W);
     blocked[c] = mask;
+    syncCanMasks(c);
   }
+}
+
+void Q4Board::syncCanMasks(int c) {
+  uint8_t b = blocked[c];
+  canN.assign(c, !(b & (1 << DIR_N)));
+  canE.assign(c, !(b & (1 << DIR_E)));
+  canS.assign(c, !(b & (1 << DIR_S)));
+  canW.assign(c, !(b & (1 << DIR_W)));
 }
 
 void Q4Board::addWallToBlocked(int ax, int ay, bool isHorizontal) {
@@ -90,6 +111,8 @@ void Q4Board::addWallToBlocked(int ax, int ay, bool isHorizontal) {
     blocked[c0 + DIR_OFFSET[DIR_N]] |= (1 << DIR_S);
     blocked[c1] |= (1 << DIR_N);
     blocked[c1 + DIR_OFFSET[DIR_N]] |= (1 << DIR_S);
+    syncCanMasks(c0); syncCanMasks(c1);
+    syncCanMasks(c0 + BOARD_SIZE); syncCanMasks(c1 + BOARD_SIZE);
   }
   else {
     int c0 = ay * BOARD_SIZE + ax;
@@ -98,6 +121,8 @@ void Q4Board::addWallToBlocked(int ax, int ay, bool isHorizontal) {
     blocked[c0 + DIR_OFFSET[DIR_E]] |= (1 << DIR_W);
     blocked[c1] |= (1 << DIR_E);
     blocked[c1 + DIR_OFFSET[DIR_E]] |= (1 << DIR_W);
+    syncCanMasks(c0); syncCanMasks(c0 + 1);
+    syncCanMasks(c1); syncCanMasks(c1 + 1);
   }
 }
 
@@ -109,6 +134,8 @@ void Q4Board::removeWallFromBlocked(int ax, int ay, bool isHorizontal) {
     blocked[c0 + DIR_OFFSET[DIR_N]] &= ~(1 << DIR_S);
     blocked[c1] &= ~(1 << DIR_N);
     blocked[c1 + DIR_OFFSET[DIR_N]] &= ~(1 << DIR_S);
+    syncCanMasks(c0); syncCanMasks(c1);
+    syncCanMasks(c0 + BOARD_SIZE); syncCanMasks(c1 + BOARD_SIZE);
   }
   else {
     int c0 = ay * BOARD_SIZE + ax;
@@ -117,6 +144,8 @@ void Q4Board::removeWallFromBlocked(int ax, int ay, bool isHorizontal) {
     blocked[c0 + DIR_OFFSET[DIR_E]] &= ~(1 << DIR_W);
     blocked[c1] &= ~(1 << DIR_E);
     blocked[c1 + DIR_OFFSET[DIR_E]] &= ~(1 << DIR_W);
+    syncCanMasks(c0); syncCanMasks(c0 + 1);
+    syncCanMasks(c1); syncCanMasks(c1 + 1);
   }
 }
 
@@ -178,6 +207,55 @@ bool Q4Board::isGeometricallyLegalWall(int ax, int ay, bool isHorizontal) const 
 }
 
 bool Q4Board::isLegalWallBruteForce(int ax, int ay, bool isHorizontal) const {
+  if(wallConflicts(ax, ay, isHorizontal))
+    return false;
+
+  Q4Bits121 needed;
+  for(int s = 0; s < NUM_SEATS; s++) {
+    int p = pawn[s];
+    if(isAlive(s) && p >= 0 && p != CENTER_CELL)
+      needed.set(p);
+  }
+  if(needed == Q4Bits121())
+    return true;
+
+  // Masks with the edges of the new wall closed
+  Q4Bits121 cN = canN, cE = canE, cS = canS, cW = canW;
+  int c0 = cellOf(ax, ay);
+  if(isHorizontal) {
+    cN.clear(c0);
+    cN.clear(c0 + 1);
+    cS.clear(c0 + BOARD_SIZE);
+    cS.clear(c0 + BOARD_SIZE + 1);
+  }
+  else {
+    cE.clear(c0);
+    cE.clear(c0 + BOARD_SIZE);
+    cW.clear(c0 + 1);
+    cW.clear(c0 + BOARD_SIZE + 1);
+  }
+
+  // Board-edge bits in blocked[] must keep the shifts from wrapping across rows
+  assert((cE & COL_X10) == Q4Bits121());
+  assert((cW & COL_X0) == Q4Bits121());
+
+  Q4Bits121 reached;
+  reached.set(CENTER_CELL);
+  while(true) {
+    Q4Bits121 next = reached
+      | (reached & cN).shl<BOARD_SIZE>()
+      | (reached & cE).shl<1>()
+      | (reached & cS).shr<BOARD_SIZE>()
+      | (reached & cW).shr<1>();
+    if((next & needed) == needed)
+      return true;
+    if(next == reached)
+      return false;
+    reached = next;
+  }
+}
+
+bool Q4Board::isLegalWallBruteForceBFS(int ax, int ay, bool isHorizontal) const {
   if(wallConflicts(ax, ay, isHorizontal))
     return false;
 
