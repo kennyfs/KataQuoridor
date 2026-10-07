@@ -37,11 +37,17 @@ string getTestModelPath() {
     if(FileUtils::exists(p)) return p;
   }
   // Try exporting on the fly if python environment is available
-  int ret = system("/home/kenny/ml_venv/bin/python python/q4/make_random_model.py b1c32_q4 cpp/tests/models --model-name b1c32_q4 --scale-heads");
+  const char* pyEnv = getenv("KATAGO_TEST_PYTHON");
+  string pythonCmd = (pyEnv != nullptr && strlen(pyEnv) > 0) ? string(pyEnv) : "python3";
+  string cmd = pythonCmd + " python/q4/make_random_model.py b1c32_q4 cpp/tests/models --model-name b1c32_q4 --scale-heads";
+  int ret = system(cmd.c_str());
   (void)ret;
   for(const string& p : candidates) {
     if(FileUtils::exists(p)) return p;
   }
+  cerr << "ERROR: Could not find or generate b1c32_q4 model for search tests.\n"
+       << "Tried running: " << cmd << "\n"
+       << "Please check that KATAGO_TEST_PYTHON (default: python3) points to a valid Python interpreter with PyTorch installed." << endl;
   throw StringError("Could not find or generate b1c32_q4 model for search tests");
 }
 
