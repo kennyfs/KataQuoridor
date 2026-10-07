@@ -286,7 +286,8 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
               << "  nncache               NN cache hits and misses (-model <file>)\n"
               << "  nnbench               Input-fill time, NN evaluations per second (-model <file>)\n"
               << "  perft <depth>         Run perft from start position\n"
-              << "  bench                 Run performance benchmarks (movegen and playouts)\n";
+              << "  bench                 Run performance benchmarks (movegen and playouts)\n"
+              << "  wallbench             isLegalWallBruteForce flood fill vs BFS, ns per call; sizeof(NNOutput)\n";
     return 0;
   }
 
@@ -396,6 +397,62 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
               << " nodes in " << secs << " s ("
               << (uint64_t)(count / std::max(secs, 1e-6)) << " nps)\n";
     return 0;
+  }
+  else if(subcmd == "wallbench") {
+    // 1,000,000 calls each of isLegalWallBruteForce (flood fill) and isLegalWallBruteForceBFS over all
+    // non-conflicting (anchor, orientation) pairs of fixed positions from wall-heavy random games.
+    Rand rand(12345);
+    std::vector<Q4Board> boards;
+    while(boards.size() < 200) {
+      Q4History history;
+      int targetPlies = 10 + (int)rand.nextUInt(50);
+      for(int m = 0; m < targetPlies && !history.isFinished; m++) {
+        std::vector<int> actions;
+        history.currentBoard.getLegalActions(history.currentBoard.toMove, actions);
+        std::vector<int> wallActs;
+        for(int act : actions)
+          if(!Q4Board::isPawnAction(act))
+            wallActs.push_back(act);
+        if(!wallActs.empty() && rand.nextBool(0.6))
+          history.play(wallActs[rand.nextUInt((uint32_t)wallActs.size())]);
+        else
+          history.play(actions[rand.nextUInt((uint32_t)actions.size())]);
+      }
+      if(!history.isFinished)
+        boards.push_back(history.currentBoard);
+    }
+    struct Query { int board; int ax; int ay; bool isH; };
+    std::vector<Query> queries;
+    for(int i = 0; i < (int)boards.size(); i++)
+      for(int a = 0; a < Q4Board::NUM_WALL_ANCHORS; a++)
+        for(int h = 0; h < 2; h++)
+          if(!boards[i].wallConflicts(Q4Board::anchorX(a), Q4Board::anchorY(a), h == 1))
+            queries.push_back({i, Q4Board::anchorX(a), Q4Board::anchorY(a), h == 1});
+
+    const int numCalls = 1000000;
+    auto timeIt = [&](bool useBFS, int& numLegal) {
+      numLegal = 0;
+      auto t0 = std::chrono::high_resolution_clock::now();
+      for(int i = 0; i < numCalls; i++) {
+        const Query& q = queries[i % queries.size()];
+        const Q4Board& b = boards[q.board];
+        bool legal = useBFS ? b.isLegalWallBruteForceBFS(q.ax, q.ay, q.isH) : b.isLegalWallBruteForce(q.ax, q.ay, q.isH);
+        numLegal += legal ? 1 : 0;
+      }
+      auto t1 = std::chrono::high_resolution_clock::now();
+      return std::chrono::duration<double, std::nano>(t1 - t0).count() / numCalls;
+    };
+    int legalBFS, legalNew;
+    timeIt(true, legalBFS);  // warm-up
+    double nsBFS = timeIt(true, legalBFS);
+    double nsNew = timeIt(false, legalNew);
+    std::cout << "Positions: " << boards.size() << ", non-conflicting (anchor, orientation) queries: " << queries.size() << "\n";
+    std::cout << "isLegalWallBruteForceBFS: " << std::fixed << std::setprecision(1) << nsBFS << " ns/call (" << legalBFS << " legal)\n";
+    std::cout << "isLegalWallBruteForce:    " << nsNew << " ns/call (" << legalNew << " legal)\n";
+    std::cout << "Speedup: " << std::setprecision(2) << nsBFS / nsNew << "x\n";
+    std::cout << "sizeof(NNOutput) = " << sizeof(NNOutput) << ", sizeof(Q4RawNNOutput) = " << sizeof(Q4RawNNOutput)
+              << ", sizeof(Q4S::NNOutput) = " << sizeof(Q4S::NNOutput) << "\n";
+    return legalBFS == legalNew ? 0 : 1;
   }
   else if(subcmd == "bench") {
     std::cout << "=== Running Q4 Performance Benchmarks ===\n";
