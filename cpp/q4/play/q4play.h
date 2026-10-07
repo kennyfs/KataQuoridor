@@ -1,373 +1,183 @@
-#ifndef PROGRAM_PLAY_H_
-#define PROGRAM_PLAY_H_
+#ifndef Q4_PLAY_H_
+#define Q4_PLAY_H_
 
-#include "../core/config_parser.h"
-#include "../core/global.h"
-#include "../core/multithread.h"
-#include "../core/rand.h"
-#include "../core/threadsafecounter.h"
-#include "../core/threadsafequeue.h"
-#include "../dataio/trainingwrite.h"
-#include "../dataio/sgf.h"
-#include "../game/board.h"
-#include "../game/boardhistory.h"
-#include "../search/search.h"
-#include "../search/searchparams.h"
-#include "../program/playsettings.h"
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
 
-struct InitialPosition {
-  Board board;
-  BoardHistory hist;
-  Player pla;
+#include "../../core/config_parser.h"
+#include "../../core/global.h"
+#include "../../core/logger.h"
+#include "../../core/multithread.h"
+#include "../../core/rand.h"
+#include "../dataio/q4trainingwrite.h"
+#include "../q4board.h"
+#include "../q4history.h"
+#include "../q4playstate.h"
+#include "../q4rules.h"
+#include "../search/q4search.h"
+#include "q4playsettings.h"
+
+namespace Q4Play {
+
+struct Q4InitialPosition {
+  Q4History history;
   bool isPlainFork;
-  bool isSekiFork;
-  bool isHintFork;
   double trainingWeight;
+  Q4Rules rules;
 
-  InitialPosition();
-  InitialPosition(const Board& board, const BoardHistory& hist, Player pla, bool isPlainFork, bool isSekiFork, bool isHintFork, double trainingWeight);
-  ~InitialPosition();
+  Q4InitialPosition();
+  Q4InitialPosition(const Q4History& h, bool plainFork, double weight, const Q4Rules& r);
+  ~Q4InitialPosition() = default;
 };
 
-//Holds various initial positions that we may start from rather than a whole new game
-struct ForkData {
+struct Q4ForkData {
   std::mutex mutex;
-  std::vector<const InitialPosition*> forks;
-  std::vector<const InitialPosition*> sekiForks;
-  ~ForkData();
+  std::vector<const Q4InitialPosition*> forks;
 
-  void add(const InitialPosition* pos);
-  const InitialPosition* get(Rand& rand);
+  Q4ForkData();
+  ~Q4ForkData();
 
-  void addSeki(const InitialPosition* pos, Rand& rand);
-  const InitialPosition* getSeki(Rand& rand);
+  void add(const Q4InitialPosition* pos);
+  const Q4InitialPosition* get(Rand& rand);
 };
 
-struct ExtraBlackAndKomi {
-  int extraBlack = 0;
-  float komiMean = Rules::DEFAULT_KOMI;
-  float komiStdev = 7.5f;
-  bool makeGameFair = false;
-  bool makeGameFairForEmptyBoard = false;
-  bool allowInteger = true;
-  bool interpZero = false;
-};
-
-struct OtherGameProperties {
-  bool isSgfPos = false;
-  bool isHintPos = false;
+struct Q4OtherGameProperties {
   bool allowPolicyInit = true;
   bool isFork = false;
-  bool isHintFork = false;
-
-  int hintTurn = -1;
-  Hash128 hintPosHash;
-  Loc hintLoc = Board::NULL_LOC;
-
   double trainingWeight = 1.0;
-
-  //Note: these two behave slightly differently than the ones in searchParams - as properties for the whole
-  //game, they make the playouts *actually* vary instead of only making the neural net think they do.
-  double playoutDoublingAdvantage = 0.0;
-  Player playoutDoublingAdvantagePla = C_EMPTY;
+  int startPly = 0;
 };
 
-//Object choosing random initial rules and board sizes for games. Threadsafe.
-class GameInitializer {
+class Q4GameInitializer {
  public:
-  GameInitializer(ConfigParser& cfg, Logger& logger);
-  GameInitializer(ConfigParser& cfg, Logger& logger, const std::string& randSeed);
-  ~GameInitializer();
+  Q4GameInitializer(ConfigParser& cfg, Logger& logger);
+  Q4GameInitializer(ConfigParser& cfg, Logger& logger, const std::string& randSeed);
+  ~Q4GameInitializer() = default;
 
-  GameInitializer(const GameInitializer&) = delete;
-  GameInitializer& operator=(const GameInitializer&) = delete;
+  Q4GameInitializer(const Q4GameInitializer&) = delete;
+  Q4GameInitializer& operator=(const Q4GameInitializer&) = delete;
 
-  //Initialize everything for a new game with random rules, unless initialPosition is provided, in which case it uses
-  //those rules (possibly with noise to the komi given in that position)
-  //Also, mutates params to randomize appropriate things like utilities, but does NOT fill in all the settings.
-  //User should make sure the initial params provided makes sense as a mean or baseline.
-  //Does NOT place handicap stones, users of this function need to place them manually
   void createGame(
-    Board& board, Player& pla, BoardHistory& hist,
-    ExtraBlackAndKomi& extraBlackAndKomi,
-    SearchParams& params,
-    const InitialPosition* initialPosition,
-    const PlaySettings& playSettings,
-    OtherGameProperties& otherGameProps,
-    const Sgf::PositionSample* startPosSample,
-    const BoardHistoryModes& gameHistoryModes
+    Q4PlayState& state,
+    Q4History& hist,
+    const Q4InitialPosition* initialPosition,
+    const Q4PlaySettings& playSettings,
+    Q4OtherGameProperties& otherGameProps
   );
 
-  //A version that doesn't randomize params
-  void createGame(
-    Board& board, Player& pla, BoardHistory& hist,
-    ExtraBlackAndKomi& extraBlackAndKomi,
-    const InitialPosition* initialPosition,
-    const PlaySettings& playSettings,
-    OtherGameProperties& otherGameProps,
-    const Sgf::PositionSample* startPosSample,
-    const BoardHistoryModes& gameHistoryModes
-  );
-
-  Rules randomizeScoringAndTaxRules(Rules rules, Rand& randToUse) const;
-
-  //Only sample the space of possible rules
-  Rules createRules();
-  bool isAllowedBSize(int xSize, int ySize) const;
-
-  std::vector<std::pair<int,int>> getAllowedBSizes() const;
-
-  //Quoridor I/O v2 step 3 (docs/QuoridorIOv2.md section 5): whether any game may start from something other than the
-  //standard komi and 10/10 walls (komi or fence-handicap randomization, komi noise, a non-standard komiMean or
-  //initial walls). The gatekeeper refuses such configs.
-  bool mayCreateNonStandardGames() const;
-  int getMinBoardXSize() const;
-  int getMinBoardYSize() const;
-  int getMaxBoardXSize() const;
-  int getMaxBoardYSize() const;
+  Q4Rules createRules();
+  const Q4Rules& getBaseRules() const { return baseRules; }
 
  private:
   void initShared(ConfigParser& cfg, Logger& logger);
   void createGameSharedUnsynchronized(
-    Board& board, Player& pla, BoardHistory& hist,
-    ExtraBlackAndKomi& extraBlackAndKomi,
-    const InitialPosition* initialPosition,
-    const PlaySettings& playSettings,
-    OtherGameProperties& otherGameProps,
-    const Sgf::PositionSample* startPosSample,
-    const BoardHistoryModes& gameHistoryModes
+    Q4PlayState& state,
+    Q4History& hist,
+    const Q4InitialPosition* initialPosition,
+    const Q4PlaySettings& playSettings,
+    Q4OtherGameProperties& otherGameProps
   );
-  Rules createRulesUnsynchronized();
 
   std::mutex createGameMutex;
   Rand rand;
+  Q4Rules baseRules;
 
-  std::vector<std::string> allowedKoRuleStrs;
-  std::vector<std::string> allowedScoringRuleStrs;
-  std::vector<std::string> allowedTaxRuleStrs;
-  std::vector<bool> allowedMultiStoneSuicideLegals;
-  std::vector<bool> allowedButtons;
-
-  std::vector<int> allowedKoRules;
-  std::vector<int> allowedScoringRules;
-  std::vector<int> allowedTaxRules;
-
-  std::vector<std::pair<int,int>> allowedBSizes;
-  std::vector<double> allowedBSizeRelProbs;
-
-  //The Quoridor rules every game starts from (maxPlies, timeBonusPerPly, initial walls); komi is set per game.
-  Rules baseRules;
-
-  float komiMean;
-  //Quoridor I/O v2 step 3 (docs/QuoridorIOv2.md section 5), all off by default. For games from the empty board:
-  //with probability quoridorKomiRandomProb the komi is komiMean +/- n (random sign), n = 1, 2, ... drawn with the
-  //relative weights quoridorKomiRandomWeights; independently, with probability quoridorFenceHandicapProb one side
-  //(random) starts with n fewer walls, n = 1, 2, ... drawn with the relative weights quoridorFenceHandicapWeights.
-  //Fence-handicap games get a fair komi with probability handicapCompensateKomiProb (see Play::runGame).
-  double quoridorKomiRandomProb;
-  std::vector<double> quoridorKomiRandomWeights;
-  double quoridorFenceHandicapProb;
-  std::vector<double> quoridorFenceHandicapWeights;
-  //Repetition draw rule per game (docs/QuoridorIOv3.md): if quoridorRepetitionDrawProb is given, each game from the
-  //empty board has the rule on with that probability, with N drawn from quoridorRepetitionDrawCounts with the relative
-  //weights quoridorRepetitionDrawCountWeights, and off (N = 0) otherwise. Not given (the default): every game has
-  //the config's repetitionDrawCount. Forks keep the rule of the game they come from.
-  bool quoridorRepetitionDrawRandom;
-  double quoridorRepetitionDrawProb;
-  std::vector<int> quoridorRepetitionDrawCounts;
-  std::vector<double> quoridorRepetitionDrawCountWeights;
-  float komiStdev;
-  double komiAllowIntegerProb;
-  double handicapProb;
-  double handicapCompensateKomiProb;
-  double forkCompensateKomiProb;
-  double sgfCompensateKomiProb;
-  double komiBigStdevProb;
-  float komiBigStdev;
-  double komiBiggerStdevProb;
-  float komiBiggerStdev;
-  double handicapKomiInterpZeroProb;
-  double sgfKomiInterpZeroProb;
-  bool komiAuto;
-
-  int numExtraBlackFixed;
-  double noResultStdev;
-  double drawRandRadius;
-
-  std::vector<Sgf::PositionSample> startPoses;
-  std::vector<double> startPosCumProbs;
-  double startPosesProb;
-
-  std::vector<Sgf::PositionSample> hintPoses;
-  std::vector<double> hintPosCumProbs;
-  double hintPosesProb;
-
-  int minBoardXSize;
-  int minBoardYSize;
-  int maxBoardXSize;
-  int maxBoardYSize;
+  bool q4RepetitionDrawRandom;
+  double q4RepetitionDrawProb;
+  std::vector<int> q4RepetitionDrawCounts;
+  std::vector<double> q4RepetitionDrawCountWeights;
 };
 
-
-//Object for generating and servering evenly distributed pairings between different bots. Threadsafe.
-class MatchPairer {
- public:
-  //Holds pointers to the various nnEvals, but does NOT take ownership for freeing them.
-  MatchPairer(
-    ConfigParser& cfg,
-    int numBots,
-    const std::vector<std::string>& botNames,
-    const std::vector<NNEvaluator*>& nnEvals,
-    const std::vector<SearchParams>& baseParamss,
-    const std::vector<std::pair<int,int>>& matchupsPerRound,
-    int64_t numGamesTotal
-  );
-
-  ~MatchPairer();
-
-  struct BotSpec {
-    int botIdx;
-    std::string botName;
-    NNEvaluator* nnEval;
-    SearchParams baseParams;
-  };
-
-  MatchPairer(const MatchPairer&) = delete;
-  MatchPairer& operator=(const MatchPairer&) = delete;
-
-  //Get the total number of games that the matchpairer will generate
-  int64_t getNumGamesTotalToGenerate() const;
-
-  //Get next matchup and log stuff
-  bool getMatchup(
-    BotSpec& botSpecB, BotSpec& botSpecW, Logger& logger
-  );
-
- private:
-  const int numBots;
-  const std::vector<std::string> botNames;
-  const std::vector<NNEvaluator*> nnEvals;
-  const std::vector<SearchParams> baseParamss;
-  const std::vector<std::pair<int,int>> matchupsPerRound;
-
-  std::vector<std::pair<int,int>> nextMatchups;
-  Rand rand;
-
-  int64_t numGamesStartedSoFar;
-  const int64_t numGamesTotal;
-  int64_t logGamesEvery;
-
-  std::mutex getMatchupMutex;
-
-  std::pair<int,int> getMatchupPairUnsynchronized();
-};
-
-
-//Functions to run a single game or other things
 namespace Play {
-
-  //The number of moves a game runs for at most: Rules::maxPlies from the config (key maxPlies, default 300).
-  //maxMovesPerGame (or its alias cutoffMoves) may still be given, but must equal maxPlies (or be 0: no moves).
   int loadMaxMovesPerGame(ConfigParser& cfg);
 
-  //In the case where checkForNewNNEval is provided, will MODIFY the provided botSpecs with any new nneval!
-  FinishedGameData* runGame(
-    const Board& startBoard, Player pla, const BoardHistory& startHist, ExtraBlackAndKomi extraBlackAndKomi,
-    MatchPairer::BotSpec& botSpecB, MatchPairer::BotSpec& botSpecW,
-    const std::string& searchRandSeed,
-    bool doEndGameIfAllPassAlive, bool clearBotBeforeSearch,
-    Logger& logger, bool logSearchInfo, bool logMoves,
-    int maxMovesPerGame, const std::function<bool()>& shouldStop,
-    const WaitableFlag* shouldPause,
-    const PlaySettings& playSettings, const OtherGameProperties& otherGameProps,
-    Rand& gameRand,
-    const std::function<NNEvaluator*()>& checkForNewNNEval,
-    const std::function<void(const Board&, const BoardHistory&, Player, Loc, const std::vector<double>&, const std::vector<double>&, const std::vector<double>&, const Search*)>& onEachMove
-  );
-
-  //In the case where checkForNewNNEval is provided, will MODIFY the provided botSpecs with any new nneval!
-  FinishedGameData* runGame(
-    const Board& startBoard, Player pla, const BoardHistory& startHist, ExtraBlackAndKomi extraBlackAndKomi,
-    MatchPairer::BotSpec& botSpecB, MatchPairer::BotSpec& botSpecW,
-    Search* botB, Search* botW,
-    bool doEndGameIfAllPassAlive, bool clearBotBeforeSearch,
-    Logger& logger, bool logSearchInfo, bool logMoves,
-    int maxMovesPerGame, const std::function<bool()>& shouldStop,
-    const WaitableFlag* shouldPause,
-    const PlaySettings& playSettings, const OtherGameProperties& otherGameProps,
-    Rand& gameRand,
-    const std::function<NNEvaluator*()>& checkForNewNNEval,
-    const std::function<void(const Board&, const BoardHistory&, Player, Loc, const std::vector<double>&, const std::vector<double>&, const std::vector<double>&, const Search*)>& onEachMove
-  );
-
-  void maybeForkGame(
-    const FinishedGameData* finishedGameData,
-    ForkData* forkData,
-    const PlaySettings& playSettings,
-    Rand& gameRand,
-    Search* bot
-  );
-
-  void maybeSekiForkGame(
-    const FinishedGameData* finishedGameData,
-    ForkData* forkData,
-    const PlaySettings& playSettings,
-    const GameInitializer* gameInit,
-    Rand& gameRand
-  );
-
-  void maybeHintForkGame(
-    const FinishedGameData* finishedGameData,
-    ForkData* forkData,
-    const OtherGameProperties& otherGameProps
-  );
-
   void extractPolicyTarget(
-    std::vector<PolicyTargetMove>& buf,
-    const Search* toMoveBot,
-    const SearchNode* node,
-    std::vector<Loc>& locsBuf,
+    std::vector<Q4PolicyTargetMove>& buf,
+    const Q4S::Search* toMoveBot,
+    const Q4S::SearchNode* node,
+    std::vector<int>& actionsBuf,
     std::vector<double>& playSelectionValuesBuf
   );
 
+  void initializeGameUsingPolicy(
+    Q4S::Search* bot,
+    Q4PlayState& state,
+    Q4History& hist,
+    Rand& gameRand,
+    double proportionOfBoardArea,
+    double policyInitGammaShape,
+    double temperature
+  );
+
+  Q4FinishedGameData* runGame(
+    const std::string& searchRandSeed,
+    Q4S::Search* bot,
+    const Q4PlayState& startState,
+    const Q4History& startHist,
+    bool clearBotBeforeSearch,
+    Logger& logger,
+    bool logSearchInfo,
+    bool logMoves,
+    int maxMovesPerGame,
+    const std::function<bool()>& shouldStop,
+    const WaitableFlag* shouldPause,
+    const Q4PlaySettings& playSettings,
+    const Q4OtherGameProperties& otherGameProps,
+    Rand& gameRand,
+    const std::function<NNEvaluator*()>& checkForNewNNEval,
+    const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove
+  );
+
+  void maybeForkGame(
+    const Q4FinishedGameData* finishedGameData,
+    Q4ForkData* forkData,
+    const Q4PlaySettings& playSettings,
+    Rand& gameRand,
+    Q4S::Search* bot
+  );
 }
 
-
-//Class for running a game and enqueueing the result as training data.
-//Wraps together most of the neural-net-independent parameters to spawn and run a full game.
-class GameRunner {
+class Q4GameRunner {
   bool logSearchInfo;
   bool logMoves;
   int maxMovesPerGame;
   bool clearBotBeforeSearch;
-  PlaySettings playSettings;
-  GameInitializer* gameInit;
+  Q4PlaySettings playSettings;
+  std::unique_ptr<Q4GameInitializer> gameInit;
 
-public:
-  GameRunner(ConfigParser& cfg, const PlaySettings& playSettings, Logger& logger);
-  GameRunner(ConfigParser& cfg, const std::string& gameInitRandSeed, const PlaySettings& fModes, Logger& logger);
-  ~GameRunner();
+ public:
+  struct BotSpec {
+    int botIdx = 0;
+    std::string botName;
+    NNEvaluator* nnEval = nullptr;
+    SearchParams baseParams;
+  };
 
-  //Will return NULL if stopped before the game completes. The caller is responsible for freeing the data
-  //if it isn't NULL.
-  //afterInitialization can be used to run any post-initialization configuration on the search
-  FinishedGameData* runGame(
+  Q4GameRunner(ConfigParser& cfg, const Q4PlaySettings& playSettings, Logger& logger);
+  Q4GameRunner(ConfigParser& cfg, const std::string& gameInitRandSeed, const Q4PlaySettings& playSettings, Logger& logger);
+  ~Q4GameRunner() = default;
+
+  Q4GameRunner(const Q4GameRunner&) = delete;
+  Q4GameRunner& operator=(const Q4GameRunner&) = delete;
+
+  Q4FinishedGameData* runGame(
     const std::string& seed,
-    const MatchPairer::BotSpec& botSpecB,
-    const MatchPairer::BotSpec& botSpecW,
-    ForkData* forkData,
-    const Sgf::PositionSample* startPosSample,
+    const BotSpec& botSpec,
+    Q4ForkData* forkData,
     Logger& logger,
     const std::function<bool()>& shouldStop,
     const WaitableFlag* shouldPause,
     const std::function<NNEvaluator*()>& checkForNewNNEval,
-    const std::function<void(const MatchPairer::BotSpec&, Search*)>& afterInitialization,
-    const std::function<void(const Board&, const BoardHistory&, Player, Loc, const std::vector<double>&, const std::vector<double>&, const std::vector<double>&, const Search*)>& onEachMove
+    const std::function<void(const BotSpec&, Q4S::Search*)>& afterInitialization,
+    const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove
   );
 
-  const GameInitializer* getGameInitializer() const;
-
+  const Q4GameInitializer* getGameInitializer() const { return gameInit.get(); }
 };
 
+}  // namespace Q4Play
 
-#endif  // PROGRAM_PLAY_H_
+#endif  // Q4_PLAY_H_
