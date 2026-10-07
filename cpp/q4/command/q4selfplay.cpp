@@ -50,6 +50,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
   ConfigParser cfg;
   string modelsDir;
   string outputDir;
+  string seedStr;
   int64_t maxGamesTotal = ((int64_t)1) << 62;
   int64_t maxValidGamesTotal = ((int64_t)1) << 62;
   int64_t maxRowsTotal = ((int64_t)1) << 62;
@@ -64,15 +65,19 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     TCLAP::ValueArg<string> maxGamesTotalArg("", "max-games-total", "Terminate after this many games", false, string(), "NGAMES");
     TCLAP::ValueArg<string> maxValidGamesTotalArg("", "max-valid-games-total", "Terminate after this many valid non-discarded games", false, string(), "NGAMES");
     TCLAP::ValueArg<string> maxRowsTotalArg("", "max-rows-total", "Terminate after this many valid data rows", false, string(), "NROWS");
+    TCLAP::ValueArg<string> seedArg("", "seed", "Base seed string for deterministic runs", false, string(), "SEED");
     cmd.add(modelsDirArg);
     cmd.add(outputDirArg);
     cmd.add(maxGamesTotalArg);
     cmd.add(maxValidGamesTotalArg);
     cmd.add(maxRowsTotalArg);
+    cmd.add(seedArg);
     cmd.parseArgs(args);
 
     modelsDir = modelsDirArg.getValue();
     outputDir = outputDirArg.getValue();
+    if(seedArg.isSet())
+      seedStr = seedArg.getValue();
     string maxGamesTotalStr = maxGamesTotalArg.getValue();
     if(!maxGamesTotalStr.empty()) {
       bool suc = Global::tryStringToInt64(maxGamesTotalStr, maxGamesTotal);
@@ -118,7 +123,15 @@ int MainCmds::q4selfplay(const vector<string>& args) {
   const int64_t logGamesEvery = cfg.getInt64("logGamesEvery", 1, 1000000000);
   const bool switchNetsMidGame = cfg.getBool("switchNetsMidGame");
 
-  const string gameSeedBase = Global::uint64ToHexString(seedRand.nextUInt64());
+  string gameSeedBase;
+  if(!seedStr.empty())
+    gameSeedBase = seedStr;
+  else if(cfg.contains("gameSeedBase"))
+    gameSeedBase = cfg.getString("gameSeedBase");
+  else if(cfg.contains("seed"))
+    gameSeedBase = cfg.getString("seed");
+  else
+    gameSeedBase = Global::uint64ToHexString(seedRand.nextUInt64());
 
   SearchParams baseParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_OTHER);
   Q4S::Search::checkParams(baseParams);
@@ -137,7 +150,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
   }
 
   Q4Play::Q4PlaySettings playSettings = Q4Play::Q4PlaySettings::loadForSelfplay(cfg);
-  Q4Play::Q4GameRunner* gameRunner = new Q4Play::Q4GameRunner(cfg, playSettings, logger);
+  Q4Play::Q4GameRunner* gameRunner = new Q4Play::Q4GameRunner(cfg, gameSeedBase + ":gameInit", playSettings, logger);
   bool autoCleanupAllButLatestIfUnused = true;
   Q4Play::Q4SelfPlayManager* manager = new Q4Play::Q4SelfPlayManager(
     maxDataQueueSize, &logger, logGamesEvery, autoCleanupAllButLatestIfUnused
@@ -158,7 +171,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
 
   auto loadLatestNeuralNetIntoManager =
     [&manager, maxRowsPerTrainFile, firstFileRandMinProp,
-     &modelsDir, &outputDir, &logger, &cfg, numGameThreads](const string* lastNetName) -> bool {
+     &modelsDir, &outputDir, &logger, &cfg, numGameThreads, gameSeedBase](const string* lastNetName) -> bool {
 
     string modelName;
     string modelFile;
@@ -180,7 +193,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     const bool disableFP16 = false;
     const string expectedSha256 = "";
 
-    Rand rand;
+    Rand rand(gameSeedBase + ":manager:" + modelName);
     NNEvaluator* nnEval = Setup::initializeNNEvaluator(
       modelName, modelFile, expectedSha256, cfg, logger, rand, expectedConcurrentEvals,
       Q4NNConst::POS_LEN, Q4NNConst::POS_LEN, Setup::MaxBatchSizeRequest::requireFromConfig(),
@@ -270,7 +283,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     WaitableFlag* shouldPause = nullptr;
 
     string prevModelName;
-    Rand thisLoopSeedRand;
+    Rand thisLoopSeedRand(gameSeedBase + ":thread:" + Global::intToString(threadIdx));
     while(true) {
       if(shouldStop.load())
         break;

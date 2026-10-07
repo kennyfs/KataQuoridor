@@ -70,9 +70,9 @@ Q4PlaySettings Q4PlaySettings::loadForSelfplay(ConfigParser& cfg) {
     cfg.getDouble("forkSidePositionProb", 0.0, 1.0) : cfg.getDouble("sidePositionProb", 0.0, 1.0);
   playSettings.policyInitAreaTemperature = cfg.contains("policyInitAreaTemperature") ? cfg.getDouble("policyInitAreaTemperature", 0.1, 5.0) : 1.0;
 
-  playSettings.earlyForkGameProb = cfg.getDouble("earlyForkGameProb", 0.0, 0.5);
+  playSettings.earlyForkGameProb = cfg.getDouble("earlyForkGameProb", 0.0, 1.0);
   playSettings.earlyForkGameExpectedMoveProp = cfg.getDouble("earlyForkGameExpectedMoveProp", 0.0, 1.0);
-  playSettings.forkGameProb = cfg.getDouble("forkGameProb", 0.0, 0.5);
+  playSettings.forkGameProb = cfg.getDouble("forkGameProb", 0.0, 1.0);
   playSettings.forkGameMinChoices = cfg.getInt("forkGameMinChoices", 1, 100);
   playSettings.earlyForkGameMaxChoices = cfg.getInt("earlyForkGameMaxChoices", 1, 100);
   playSettings.forkGameMaxChoices = cfg.getInt("forkGameMaxChoices", 1, 100);

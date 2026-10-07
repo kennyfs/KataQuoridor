@@ -417,6 +417,7 @@ void Q4SelfPlayManager::withDataWriters(
 
 void Q4SelfPlayManager::runDataWriteLoop(ModelData* modelData) {
   runDataWriteLoopImpl(modelData);
+  delete modelData;
   {
     std::lock_guard<std::mutex> lock(managerMutex);
     numDataWriteLoopsActive--;
@@ -424,7 +425,6 @@ void Q4SelfPlayManager::runDataWriteLoop(ModelData* modelData) {
       dataWriteLoopsAreDone.notify_all();
     }
   }
-  delete modelData;
 }
 
 void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
