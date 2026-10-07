@@ -260,11 +260,17 @@ void testSelfplayIntegration() {
   rec.result = gameData->endHist.isDraw ? "Draw" : (to_string(gameData->endHist.winnerSeat + 1) + "+");
   rec.events = gameData->endHist.events;
   rec.comments = gameData->comments;
+  rec.hasGameHash = true;
+  rec.gameHash0 = gameData->gameHash.hash0;
+  rec.gameHash1 = gameData->gameHash.hash1;
   string jsonLine = rec.toJsonLine();
   testAssert(!jsonLine.empty());
   Q4Record parsedRec = Q4Record::fromJsonLine(jsonLine);
   testAssert(parsedRec.events.size() == rec.events.size());
   testAssert(parsedRec.comments.size() == rec.comments.size());
+  testAssert(parsedRec.hasGameHash);
+  testAssert(parsedRec.gameHash0 == gameData->gameHash.hash0);
+  testAssert(parsedRec.gameHash1 == gameData->gameHash.hash1);
 
   // Check data writer
   string scratchDir = "cpp/tests/scratch";

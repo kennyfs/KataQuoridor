@@ -4,6 +4,7 @@
 #include "q4history.h"
 #include "q4rules.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,11 @@ struct Q4Record {
   std::string result;                // "1+", "2+", "3+", "4+", "Draw", or "none"
   std::vector<Q4Event> events;
   std::vector<std::string> comments; // optional per-event comments
+  // Optional: the game hash of the training rows (globalTargetsNC C44-49), written by q4selfplay.
+  // JSON "gameHash": 32 hex digits, hash0 then hash1.
+  bool hasGameHash;
+  uint64_t gameHash0;
+  uint64_t gameHash1;
 
   Q4Record();
 

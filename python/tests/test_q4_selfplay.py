@@ -66,6 +66,13 @@ def decode_game_hash(row_global):
     return (h0, h1)
 
 
+def record_game_hash(rec):
+    """(hash0, hash1) of a .q4.jsonl record ("gameHash": 32 hex digits), as decode_game_hash returns it."""
+    h = rec["gameHash"]
+    assert len(h) == 32, h
+    return (int(h[:16], 16), int(h[16:], 16))
+
+
 def unpack_binary_channel(packed_bytes):
     bits = np.unpackbits(packed_bytes, axis=-1)[..., :121]
     return bits.reshape(*packed_bytes.shape[:-1], 11, 11).astype(np.float32)
@@ -281,24 +288,15 @@ def test_c1_c2_writer_vs_replay(tmp_path):
     checked_elims = 0
     checked_reps = 0
 
-    for gh, rows in rows_by_hash.items():
-        matched_game = None
-        for gr in game_replays:
-            all_match = True
-            for r in rows:
-                ply = int(r["globalTargets"][50])
-                act = gr["actions_by_ply"].get(ply)
-                if act is None:
-                    all_match = False
-                    break
-                slot = action_to_policy_slot(act)
-                if r["policyTargets"][1, slot] != 1:
-                    all_match = False
-                    break
-            if all_match:
-                matched_game = gr
-                break
+    # Rows are bound to a replay by the game hash both carry (several games can share opening moves).
+    replay_by_hash = {}
+    for gr in game_replays:
+        rh = record_game_hash(gr["rec"])
+        assert rh not in replay_by_hash, f"two records with game hash {rh}"
+        replay_by_hash[rh] = gr
 
+    for gh, rows in rows_by_hash.items():
+        matched_game = replay_by_hash.get(gh)
         assert matched_game is not None, f"Could not match game hash {gh} to any game replay"
         final_pos = matched_game["final_pos"]
         dist_to_center = compute_distances_to_center(final_pos.hwalls, final_pos.vwalls)
@@ -476,6 +474,7 @@ def test_c3_side_positions_and_forks(tmp_path):
                 actions_by_ply[ply] = act
                 pos = play(pos, act)
         game_replays.append({
+            "rec": rec,
             "states_by_ply": states_by_ply,
             "actions_by_ply": actions_by_ply,
         })
@@ -496,33 +495,30 @@ def test_c3_side_positions_and_forks(tmp_path):
                     "policyTargets": data["policyTargetsNCMove"][i],
                 })
 
-    for gh, rows in main_rows_by_hash.items():
-        matched_game = None
-        for gr in game_replays:
-            all_match = True
-            for r in rows:
-                ply = int(r["gt"][50])
-                act = gr["actions_by_ply"].get(ply)
-                if act is None:
-                    all_match = False
-                    break
-                slot = action_to_policy_slot(act)
-                if r["policyTargets"][1, slot] != 1:
-                    all_match = False
-                    break
-            if all_match:
-                matched_game = gr
-                break
+    # Fork games share their opening moves with the parent game, so rows are bound to a replay by the game hash
+    # both carry, not by the played actions.
+    replay_by_hash = {}
+    for gr in game_replays:
+        rh = record_game_hash(gr["rec"])
+        assert rh not in replay_by_hash, f"two records with game hash {rh}"
+        replay_by_hash[rh] = gr
 
+    checked_rows = 0
+    for gh, rows in main_rows_by_hash.items():
+        matched_game = replay_by_hash.get(gh)
         assert matched_game is not None, f"Could not match game hash {gh} to any game replay in C3"
         for r in rows:
             ply = int(r["gt"][50])
+            act = matched_game["actions_by_ply"][ply]
+            assert r["policyTargets"][1, action_to_policy_slot(act)] == 1
             st = matched_game["states_by_ply"][ply]
             exp_spatial, exp_glob = extract_features(st, symmetry=0)
             np.testing.assert_allclose(r["globalInput"], exp_glob, atol=1e-5)
             unpacked = unpack_binary_channel(r["binaryInputPacked"])
             unpacked[10:15] = decode_raw_distances(r["spatialDist"])
             np.testing.assert_array_equal(unpacked, exp_spatial)
+            checked_rows += 1
+    assert checked_rows > 0
 
 
 def test_c4_shuffle_compatibility(tmp_path):

@@ -458,6 +458,9 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
         rec.result = "none";
       }
       rec.events = gameData->endHist.events;
+      rec.hasGameHash = true;
+      rec.gameHash0 = gameData->gameHash.hash0;
+      rec.gameHash1 = gameData->gameHash.hash1;
       rec.comments.clear();
       rec.comments.resize(gameData->startHist.events.size(), "");
       rec.comments.insert(rec.comments.end(), gameData->comments.begin(), gameData->comments.end());

@@ -6,7 +6,8 @@
 
 using json = nlohmann::json;
 
-Q4Record::Q4Record() {
+Q4Record::Q4Record()
+  : hasGameHash(false), gameHash0(0), gameHash1(0) {
   players.resize(4);
   for(int i = 0; i < 4; i++) {
     players[i].name = "P" + Global::intToString(i + 1);
@@ -57,6 +58,9 @@ std::string Q4Record::toJsonLine() const {
   if(!comments.empty()) {
     j["comments"] = comments;
   }
+
+  if(hasGameHash)
+    j["gameHash"] = Global::strprintf("%016llx%016llx", (unsigned long long)gameHash0, (unsigned long long)gameHash1);
 
   return j.dump();
 }
@@ -113,6 +117,15 @@ Q4Record Q4Record::fromJsonLine(const std::string& line) {
 
   if(j.contains("comments") && j["comments"].is_array()) {
     rec.comments = j["comments"].get<std::vector<std::string>>();
+  }
+
+  if(j.contains("gameHash")) {
+    std::string h = j["gameHash"].get<std::string>();
+    if(h.size() != 32)
+      throw StringError("Malformed gameHash in Q4Record: " + h);
+    rec.hasGameHash = true;
+    rec.gameHash0 = std::stoull(h.substr(0, 16), nullptr, 16);
+    rec.gameHash1 = std::stoull(h.substr(16, 16), nullptr, 16);
   }
 
   return rec;
