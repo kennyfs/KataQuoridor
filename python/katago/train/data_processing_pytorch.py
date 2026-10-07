@@ -649,7 +649,10 @@ def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: i
         assert binaryInputNCHW.shape[1] == num_bin_features and globalInputNC.shape[1] == num_global_features, (
             f"{npz_file}: {binaryInputNCHW.shape[1]} spatial / {globalInputNC.shape[1]} global input channels, the model"
             f" expects {num_bin_features} / {num_global_features}")
-    assert globalTargetsNC.shape[1] == Q4_NUM_GLOBAL_TARGETS, f"{npz_file}: globalTargetsNC shape {globalTargetsNC.shape}"
+    # shuffle.py zero-pads globalTargetsNC to the Duel width (pad_global_targets_nc); the Q4 columns are the first 64.
+    assert globalTargetsNC.shape[1] >= Q4_NUM_GLOBAL_TARGETS, f"{npz_file}: globalTargetsNC shape {globalTargetsNC.shape}"
+    assert not globalTargetsNC[:, Q4_NUM_GLOBAL_TARGETS:].any(), f"{npz_file}: nonzero globalTargetsNC beyond column 63"
+    globalTargetsNC = np.ascontiguousarray(globalTargetsNC[:, :Q4_NUM_GLOBAL_TARGETS])
     assert policyTargetsNCMove.shape[1:] == (3, 3 * Q4_POS_AREA), f"{npz_file}: policyTargetsNCMove shape {policyTargetsNCMove.shape}"
     assert valueTargetsNCHW.shape[1:] == (12, Q4_POS_LEN, Q4_POS_LEN), f"{npz_file}: valueTargetsNCHW shape {valueTargetsNCHW.shape}"
     return dict(

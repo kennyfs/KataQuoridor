@@ -21,6 +21,10 @@ parity test (test_nn_parity.py). FP16 (CUDA with half-precision weights and acti
 
 Binaries: $Q4_EIGEN_BIN / $Q4_CUDA_BIN, else cpp/build-eigen (or build-eigen-release) and cpp/build-cuda; a backend
 without a binary is skipped. $Q4_PARITY_OUTDIR keeps the exported models.
+
+Trained nets (round 5): with $Q4_PARITY_CHECKPOINT = a training checkpoint (model.ckpt, its SWA weights if it has
+them, as export_model_pytorch.py -use-swa exports) and $Q4_PARITY_MODEL = the model.bin.gz exported from it (e.g. by
+the self-play loop), the same checks run on that net instead of the random ones.
 """
 
 import json
@@ -38,6 +42,11 @@ from q4.features import (decode_shortterm_value_error, decode_trajectory, extrac
 from q4.reference import action_to_index, legal_moves
 
 CONFIGS = ["b1c32_q4", "b2c64_q4", "tf2_b4c192_q4"]
+PARITY_CHECKPOINT = os.environ.get("Q4_PARITY_CHECKPOINT")
+PARITY_MODEL = os.environ.get("Q4_PARITY_MODEL")
+if PARITY_CHECKPOINT:
+    assert PARITY_MODEL, "Q4_PARITY_CHECKPOINT needs Q4_PARITY_MODEL (the model.bin.gz exported from it)"
+    CONFIGS = ["checkpoint"]
 NUM_POSITIONS = 200
 NUM_SYMS = 8
 FP32_TOL = 1e-4
@@ -80,6 +89,13 @@ def positions():
 @pytest.fixture(scope="module", params=CONFIGS)
 def net(request, workdir):
     name = request.param
+    if name == "checkpoint":
+        from katago.train.load_model import load_checkpoint, load_model
+        has_swa = "swa_model" in load_checkpoint(PARITY_CHECKPOINT)
+        model, swa_model, _ = load_model(PARITY_CHECKPOINT, use_swa=has_swa, device="cpu")
+        model = swa_model if swa_model is not None else model
+        model.eval()
+        return model.config.get("name", os.path.basename(os.path.dirname(PARITY_CHECKPOINT))), model, PARITY_MODEL
     model = make_random_model(name, seed=12345, scale_heads=True)
     return name, model, export_model(model, name, workdir, name + "-parity")
 
