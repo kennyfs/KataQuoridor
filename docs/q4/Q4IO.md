@@ -204,3 +204,62 @@ The key covers everything the inputs read:
   any symmetry produces a symmetry-0 result that serves subsequent queries under any symmetry.
 - `initialWalls` is not in the key: the inputs only read the current wall supply, which is in `board.hash`.
 - From round 6 the style features join the key.
+
+## 8. Training rows (Round 4)
+
+One row per recorded turn, from the perspective of the seat to move. "Relative seat k" means seat
+`(toMove + k) mod 4`.
+- npz keys are the same as Duel's, so `shuffle.py`'s key check passes: `binaryInputNCHWPacked`, `globalInputNC`,
+  `policyTargetsNCMove`, `globalTargetsNC`, `scoreDistrN`, `valueTargetsNCHW`, `spatialDistNCHW`.
+- No `metadataInputNC` and no `qValueTargetsNCMove`.
+- Every spatial tensor is in **symmetry-0 orientation**. The loader (round 5) applies a random symmetry to inputs and
+  targets together.
+
+| Key | dtype, shape | Content |
+|---|---|---|
+| `binaryInputNCHWPacked` | uint8 `[N, 27, 16]` | the 27 spatial input channels bit-packed per channel (121 bits zero-padded to 128, big-endian bit order as KataGo), with the 5 raw-distance channels 10–14 written as 0 |
+| `spatialDistNCHW` | uint8 `[N, 5, 11, 11]` | raw distances of channels 10–14 (`Q4NN::RawDistances`, 255 = unreachable) |
+| `globalInputNC` | float32 `[N, 28]` | the 28 global inputs |
+| `policyTargetsNCMove` | int16 `[N, 3, 363]` | in the net's policy layout (3 planes × 11 × 11: pawn cells, vertical-wall anchors `[ay][ax]`, horizontal-wall anchors). **C0**: the search's policy target (visit counts after KataGo's play-selection pruning, `extractPolicyTarget`). **C1**: the action actually played this turn, one-hot with value 1 (style-policy target). **C2**: the next seat's search policy target (the next row's C0; KataGo's "policy target next turn"), uniform with weight 0 if unavailable |
+| `globalTargetsNC` | float32 `[N, 64]` | the table below |
+| `scoreDistrN` | int8 `[N, 1]` | zeros (kept only so the key exists) |
+| `valueTargetsNCHW` | int8 `[N, 12, 11, 11]` | **C0–3**: cells visited by the pawn of relative seat 0..3 from this row to the end of the game (Q4IO §5.3 "paths"; C0 is also the exported trajectory target). **C4–11**: walls placed from this row on by relative seat k: channel `4 + 2k` vertical, `5 + 2k` horizontal, at `[ay][ax]`. All 0 when the outcome weight C27 is 0; per-seat channels 0 for seats eliminated at this row |
+
+`globalTargetsNC` (all value vectors are in relative-seat order `[me, next, across, previous, draw]`):
+
+| Column | Content |
+|---|---|
+| C0–4 | final result: one-hot of the winner's relative seat, or the draw (KataGo C0–3 with `nowFactor = 0`) |
+| C5–9 | TD value target, `nowFactor = 1/(1 + 121·0.176)` |
+| C10–14 | TD value target, `nowFactor = 1/(1 + 121·0.056)` |
+| C15–19 | TD value target, `nowFactor = 1/(1 + 121·0.016)` (the "short-term" target) |
+| C20–24 | this turn's search value (`nowFactor = 1`) |
+| C25 | row weight (KataGo C25) |
+| C26 | weight of the search policy target C0 (KataGo C26) |
+| C27 | outcome weight (KataGo C27 / Duel C27): value weight on main rows of a finished game, 0 on side positions |
+| C28 | weight of the next-seat policy target (KataGo C28) |
+| C29 | weight of the style-policy target (1 on every written row) |
+| C30, C31, C32 | policy surprise, policy entropy, search entropy (KataGo C30–32) |
+| C33 | 1 − weight of the TD value targets (KataGo C24) |
+| C34 | 1 − weight of the value targets (KataGo C35) |
+| C35 | plies from this row to the end of the game (weighted by C27) |
+| C36–39 | walls-only distance to the center of relative seat 0..3 at the end of the game, in cells (0 for the winner) |
+| C40–43 | weight of C36–39: C27, or 0 if that seat was eliminated before the end |
+| C44–49 | 128-bit game hash in six 22/22/20/22/22/20-bit chunks (KataGo C41–46) |
+| C50 | ply of this row; C51: first ply of the game that is training data (KataGo C53); C52: game mode (0 normal, 2 fork, as KataGo C55) |
+| C53 | visits of the search, before reduction (KataGo C60) |
+| C54 | raw NN utility of the seat to move (Plan §8.3 formula) |
+| C55 | number of alive seats at this row |
+| C56 | `repetitionDrawCount` of the game (0 = off); C57: `maxPlies` |
+| C58 | 1 if the game hit `maxMovesPerGame` without a result (KataGo C52) |
+| C59 | 1 if the game finished and this is not a side position (KataGo C62) |
+| C60 | Q4 data format version, 1 |
+| C61–63 | 0 |
+
+- The TD value targets are KataGo's `fillValueTDTargets` with the 5-vector in place of win/loss/noResult. Read
+  each turn's absolute value vector and rotate it to the relative seats of **this** row.
+- The per-turn value vectors are the root `valueAvg[5]` of each turn's search, and the final entry is the game
+  result, exactly as `whiteValueTargetsByTurn` in KataGo.
+- Rows are written only for turns whose target weight is nonzero after KataGo's surprise weighting and
+  integerization (cheap searches have weight `cheapSearchTargetWeight` = 0 in the config).
+
