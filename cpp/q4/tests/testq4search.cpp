@@ -986,6 +986,27 @@ void testT29RootPlaySelectionNotOneHot(NNEvaluator* nnEval, Logger& logger) {
   }
   cout << "  non-best children with >= 2 edge visits checked: " << numCheckedWithVisits << endl;
   testAssert(numCheckedWithVisits >= 2);
+
+  // getPolicySurpriseAndEntropy (as KataGo): search entropy is the entropy of the normalized play selection values,
+  // policy entropy that of the NN policy.
+  {
+    double surprise, searchEntropy, policyEntropy;
+    testAssert(search.getPolicySurpriseAndEntropy(surprise, searchEntropy, policyEntropy));
+    double sum = 0.0, expectedEntropy = 0.0, expectedPolicyEntropy = 0.0;
+    for(double v : psv2)
+      sum += v;
+    for(double v : psv2)
+      if(v > 0.0)
+        expectedEntropy -= (v / sum) * log(v / sum);
+    for(int a = 0; a < Q4Board::NUM_ACTIONS; a++)
+      if(policy[a] > 0.0)
+        expectedPolicyEntropy -= policy[a] * log((double)policy[a]);
+    cout << "  surprise " << surprise << " search entropy " << searchEntropy << " policy entropy " << policyEntropy << endl;
+    testAssert(std::fabs(searchEntropy - expectedEntropy) < 1e-9);
+    testAssert(std::fabs(policyEntropy - expectedPolicyEntropy) < 1e-6);
+    testAssert(searchEntropy > 0.5);
+    testAssert(surprise >= 0.0);
+  }
   cout << "T29 passed!" << endl;
 }
 

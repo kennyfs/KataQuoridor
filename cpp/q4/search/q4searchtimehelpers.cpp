@@ -230,12 +230,15 @@ double Search::recomputeSearchTimeLimit(
 
   if(searchParams.obviousMovesTimeFactor < 1.0) {
     double surprise = 0.0;
+    double searchEntropy = 0.0;
     double policyEntropy = 0.0;
-    getPolicySurpriseAndEntropy(surprise, policyEntropy);
-    double obviousnessByEntropy = exp(-policyEntropy / searchParams.obviousMovesPolicyEntropyTolerance);
-    double obviousnessBySurprise = exp(-surprise / searchParams.obviousMovesPolicySurpriseTolerance);
-    double obviousnessWeight = std::min(obviousnessByEntropy, obviousnessBySurprise);
-    tcRec *= 1.0 + obviousnessWeight * (searchParams.obviousMovesTimeFactor - 1.0);
+    bool suc = getPolicySurpriseAndEntropy(surprise, searchEntropy, policyEntropy);
+    if(suc) {
+      double obviousnessByEntropy = exp(-policyEntropy / searchParams.obviousMovesPolicyEntropyTolerance);
+      double obviousnessBySurprise = exp(-surprise / searchParams.obviousMovesPolicySurpriseTolerance);
+      double obviousnessWeight = std::min(obviousnessByEntropy, obviousnessBySurprise);
+      tcRec *= 1.0 + obviousnessWeight * (searchParams.obviousMovesTimeFactor - 1.0);
+    }
   }
 
   if(tcRec > 1e-20) {

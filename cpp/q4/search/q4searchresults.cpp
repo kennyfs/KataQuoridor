@@ -439,45 +439,57 @@ void Search::getAnalysisData(std::vector<AnalysisData>& buf) const {
     buf[i].order = (int)i;
 }
 
-void Search::getPolicySurpriseAndEntropy(double& policySurprise, double& policyEntropy) const {
-  policySurprise = 0.0;
-  policyEntropy = 0.0;
+// Safe to call concurrently with search. As KataGo: the search distribution is the (reduced) play selection values.
+bool Search::getPolicySurpriseAndEntropy(double& surpriseRet, double& searchEntropyRet, double& policyEntropyRet) const {
   if(rootNode == NULL)
-    return;
-
+    return false;
   const NNOutput* nnOutput = rootNode->getNNOutput();
   if(nnOutput == NULL)
-    return;
+    return false;
 
   std::vector<int> actions;
   std::vector<double> playSelectionValues;
-  std::vector<double> visitCounts;
+  const bool allowDirectPolicyMoves = true;
+  const bool alwaysComputeLcb = false;
   double lcbBuf[Q4Board::NUM_ACTIONS];
   double radiusBuf[Q4Board::NUM_ACTIONS];
-  getPlaySelectionValues(*rootNode, actions, playSelectionValues, &visitCounts, 1.0, false, false, true, lcbBuf, radiusBuf);
-
-  double visitSum = 0.0;
-  for(double v : visitCounts)
-    visitSum += v;
-
-  if(visitSum <= 0.0)
-    return;
+  bool suc = getPlaySelectionValues(
+    *rootNode, actions, playSelectionValues, NULL, 1.0, allowDirectPolicyMoves, alwaysComputeLcb, false, lcbBuf, radiusBuf
+  );
+  if(!suc)
+    return false;
 
   const float* policyProbs = nnOutput->getPolicyProbsMaybeNoised();
 
-  double kl = 0.0;
-  double ent = 0.0;
-  for(size_t i = 0; i < actions.size(); i++) {
-    double p = visitCounts[i] / visitSum;
-    if(p > 1e-30) {
-      ent -= p * std::log(p);
-      int a = actions[i];
-      double q = (policyProbs != NULL && policyProbs[a] > 1e-30f) ? (double)policyProbs[a] : 1e-30;
-      kl += p * std::log(p / q);
+  double sumPlaySelectionValues = 0.0;
+  for(size_t i = 0; i < playSelectionValues.size(); i++)
+    sumPlaySelectionValues += playSelectionValues[i];
+
+  double surprise = 0.0;
+  double searchEntropy = 0.0;
+  for(size_t i = 0; i < playSelectionValues.size(); i++) {
+    double policy = std::max((double)policyProbs[actions[i]], 1e-100);
+    double target = playSelectionValues[i] / sumPlaySelectionValues;
+    if(target > 1e-100) {
+      double logTarget = log(target);
+      double logPolicy = log(policy);
+      surprise += target * (logTarget - logPolicy);
+      searchEntropy += -target * logTarget;
     }
   }
-  policyEntropy = ent;
-  policySurprise = std::max(0.0, kl);
+
+  double policyEntropy = 0.0;
+  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++) {
+    double policy = policyProbs[a];
+    if(policy > 1e-100)
+      policyEntropy += -policy * log(policy);
+  }
+
+  // Just in case, guard against float imprecision
+  surpriseRet = std::max(0.0, surprise);
+  searchEntropyRet = std::max(0.0, searchEntropy);
+  policyEntropyRet = std::max(0.0, policyEntropy);
+  return true;
 }
 
 void Search::printPV(std::ostream& out, const std::vector<int>& buf) const {

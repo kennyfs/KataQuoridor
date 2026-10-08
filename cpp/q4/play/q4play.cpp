@@ -710,7 +710,7 @@ Q4FinishedGameData* runGame(
       }
 
       double pSurprise = 0.0, pEntropy = 0.0, sEntropy = 0.0;
-      bot->getPolicySurpriseAndEntropy(pSurprise, pEntropy);
+      bot->getPolicySurpriseAndEntropy(pSurprise, sEntropy, pEntropy);
       sp->policySurprise = pSurprise;
       sp->policyEntropy = pEntropy;
       sp->searchEntropy = sEntropy;
