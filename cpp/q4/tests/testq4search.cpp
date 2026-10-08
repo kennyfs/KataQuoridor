@@ -15,6 +15,7 @@
 #include "../search/q4search.h"
 #include "../search/q4analysisdata.h"
 #include "../search/q4reportedsearchvalues.h"
+#include "../search/q4searchnode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -902,11 +903,119 @@ void testT27ConfigGuard() {
   cout << "T27 Config guard passed!" << endl;
 }
 
+
+// T29: the root play selection values are not one-hot. R6 regression: getExploreSelectionValueInverse had its first two
+// parameters swapped relative to its only caller, so every non-best root child got a wanted weight of about 0.
+void testT29RootPlaySelectionNotOneHot(NNEvaluator* nnEval, Logger& logger) {
+  cout << "Running T29 root play selection values..." << endl;
+  Q4Rules rules;
+  Q4PlayState state(rules);
+  SearchParams params = createTestSearchParams(200, 1);
+  Q4S::Search search(params, nnEval, &logger, "t29");
+  search.setPosition(state);
+  search.runWholeSearch();
+
+  const Q4S::SearchNode& root = *search.rootNode;
+  const float* policy = root.getNNOutput()->getPolicyProbsMaybeNoised();
+  Q4S::ConstSearchNodeChildrenReference children = root.getChildren();
+
+  // Pure reduced weights (no LCB), plus the public entry point.
+  vector<int> actions;
+  vector<double> psv, visits;
+  double lcbBuf[Q4Board::NUM_ACTIONS], radiusBuf[Q4Board::NUM_ACTIONS];
+  testAssert(search.getPlaySelectionValues(root, actions, psv, &visits, 0.0, true, false, true, lcbBuf, radiusBuf));
+  vector<int> actions2;
+  vector<double> psv2;
+  testAssert(search.getPlaySelectionValues(actions2, psv2, nullptr, 0.0));
+
+  int numChildren = (int)actions.size();
+  testAssert(numChildren >= 3);
+  testAssert(psv2.size() == psv.size());
+  int numNonzero = 0;
+  for(double v : psv2)
+    numNonzero += v > 0.0 ? 1 : 0;
+  cout << "  children " << numChildren << ", nonzero play selection values " << numNonzero << endl;
+  testAssert(numNonzero >= 3);
+
+  // Independent recomputation of KataGo's formula. Best child as chosen by getPlaySelectionValues; the others get
+  // ceil(min(childWeight, w)) with w = exploreScaling * policy / (bestExploreSelectionValue - utility) - 1 (>= 0).
+  double totalChildWeight = 0.0;
+  vector<double> weights(numChildren);
+  for(int i = 0; i < numChildren; i++) {
+    weights[i] = children[i].getIfAllocated()->stats.getChildWeight(children[i].getEdgeVisits());
+    totalChildWeight += weights[i];
+  }
+  int bestIdx = 0;
+  double maxGoodness = -1e30;
+  for(int i = 0; i < numChildren; i++) {
+    double ev = (double)children[i].getEdgeVisits();
+    double g = weights[i] * std::max(0.0, ev - 1.0) / std::max(1.0, ev) + 2.0 * policy[actions[i]];
+    if(g > maxGoodness) {
+      maxGoodness = g;
+      bestIdx = i;
+    }
+  }
+  double parentUtility, parentWeightPerVisit, parentUtilityStdevFactor;
+  double fpu = search.getFpuValueForChildrenAssumeVisited(
+    root, search.getRootSeat(), true, 1.0, parentUtility, parentWeightPerVisit, parentUtilityStdevFactor
+  );
+  double scaling = search.getExploreScaling(totalChildWeight, parentUtilityStdevFactor);
+  double bestEsv = search.getExploreSelectionValueOfChild(
+    root, policy, children[bestIdx].getIfAllocated(), actions[bestIdx], scaling, totalChildWeight,
+    children[bestIdx].getEdgeVisits(), fpu, parentUtility, parentWeightPerVisit, false, weights[bestIdx], true, NULL
+  );
+  testAssert(psv[bestIdx] == weights[bestIdx]);
+  int numCheckedWithVisits = 0;
+  for(int i = 0; i < numChildren; i++) {
+    if(i == bestIdx)
+      continue;
+    double utility = children[i].getIfAllocated()->stats.utilityAvg[search.getRootSeat()].load();
+    double comp = bestEsv - utility;
+    double wanted = comp <= 0 ? 1e100 : std::max(0.0, scaling * policy[actions[i]] / comp - 1.0);
+    double expected = ceil(std::min(weights[i], wanted));
+    if(std::fabs(psv[i] - expected) > 1e-9) {
+      cout << "  child " << i << " action " << actions[i] << " weight " << weights[i] << " wanted " << wanted
+           << " expected " << expected << " got " << psv[i] << endl;
+    }
+    testAssert(std::fabs(psv[i] - expected) <= 1e-9);
+    // Not dominated (it would still be wanted at a weight > 1) and visited at least twice: must stay nonzero.
+    if(children[i].getEdgeVisits() >= 2 && wanted > 1.0)
+      testAssert(psv[i] > 0.0);
+    if(children[i].getEdgeVisits() >= 2)
+      numCheckedWithVisits++;
+  }
+  cout << "  non-best children with >= 2 edge visits checked: " << numCheckedWithVisits << endl;
+  testAssert(numCheckedWithVisits >= 2);
+  cout << "T29 passed!" << endl;
+}
+
+// T30: getExploreSelectionValueInverse undoes getExploreSelectionValue (the argument order is KataGo's).
+void testT30ExploreSelectionValueInverse(NNEvaluator* nnEval, Logger& logger) {
+  cout << "Running T30 explore selection value inverse..." << endl;
+  SearchParams params = createTestSearchParams(1, 1);
+  Q4S::Search search(params, nnEval, &logger, "t30");
+  struct Case { double scaling, policy, weight, utility; };
+  const Case cases[] = {
+    {1.0, 0.3, 5.0, 0.2}, {2.5, 0.1, 10.0, -0.3}, {0.5, 0.9, 1.0, 0.0}, {3.0, 0.05, 50.0, 0.7},
+    {4.0, 0.6, 3.0, -0.5}, {1.7, 0.25, 0.0, 0.1},
+  };
+  for(const Case& c : cases) {
+    double esv = search.getExploreSelectionValue(c.scaling, c.policy, c.weight, c.utility);
+    double w = search.getExploreSelectionValueInverse(esv, c.scaling, c.policy, c.utility);
+    testAssert(std::fabs(w - c.weight) <= 1e-9 * (1.0 + c.weight));
+  }
+  // Clamped at 0 when the wanted value is below what weight 0 gives; huge when the value is not above the utility.
+  testAssert(search.getExploreSelectionValueInverse(10.0, 1.0, 0.3, 0.0) == 0.0);
+  testAssert(search.getExploreSelectionValueInverse(0.1, 1.0, 0.3, 0.2) >= 1e99);
+  testAssert(search.getExploreSelectionValueInverse(0.5, 1.0, -1.0, 0.0) == 0.0);
+  cout << "T30 passed!" << endl;
+}
+
 }  // namespace
 
 void Tests::runQ4SearchTests() {
   cout << "========================================" << endl;
-  cout << "Starting Q4 Search Test Suite (T19 - T27)" << endl;
+  cout << "Starting Q4 Search Test Suite (T19 - T30)" << endl;
   cout << "========================================" << endl;
 
   testT27ConfigGuard();
@@ -924,6 +1033,8 @@ void Tests::runQ4SearchTests() {
   testT25Threads(nnEval, logger);
   testT26TreeReuse(nnEval, logger);
   testT28A4KataGoBehavior(nnEval, logger);
+  testT29RootPlaySelectionNotOneHot(nnEval, logger);
+  testT30ExploreSelectionValueInverse(nnEval, logger);
 
   delete nnEval;
   cout << "All Q4 Search tests PASSED!" << endl;
