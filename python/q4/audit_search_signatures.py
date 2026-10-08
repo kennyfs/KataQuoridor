@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare parameter names and order of the function definitions in cpp/q4/search/ with their counterparts in
 cpp/search/ (Q4 file `q4foo.cpp` <-> KataGo `foo.cpp`).  Only column-0 definitions are parsed, so call sites are not
-picked up.  Use --calls NAME to list the call sites of a function in the Q4 tree for a manual argument-order check.
+picked up. An overloaded Q4 function is compared with the closest KataGo overload.  Use --calls NAME to list the call sites of a function in the Q4 tree for a manual argument-order check.
 
     python python/q4/audit_search_signatures.py            # table of differences
     python python/q4/audit_search_signatures.py --all      # also list functions whose signatures agree
@@ -70,15 +70,15 @@ def parse_file(path):
         if not re.match(r"(const\s*)?(noexcept\s*)?(override\s*)?\{", tail):
             continue
         params = [param_name(p) for p in split_params(text[start:j - 1])]
-        defs[m.group(1)] = (params, os.path.basename(path), i + 1)
+        defs.setdefault(m.group(1), []).append((params, os.path.basename(path), i + 1))
     return defs
 
 
 def collect(files):
     allf = {}
     for f in files:
-        for name, v in parse_file(f).items():
-            allf.setdefault(name, []).append(v)
+        for name, vs in parse_file(f).items():
+            allf.setdefault(name, []).extend(vs)
     return allf
 
 
@@ -121,10 +121,11 @@ def main():
                     print(f"| `{name}` | = | = | {fn}:{ln} |")
                 continue
             diff += 1
-            if sorted(kp) == sorted(params):
-                note = "**REORDERED**"
-            else:
-                note = "added: " + ",".join(sorted(set(params) - set(kp))) + " removed: " + ",".join(sorted(set(kp) - set(params)))
+            common_kg = [x for x in kp if x in params]
+            common_q4 = [x for x in params if x in kp]
+            note = "added: " + ",".join(sorted(set(params) - set(kp))) + " removed: " + ",".join(sorted(set(kp) - set(params)))
+            if common_kg != common_q4:
+                note = "**REORDERED** " + note
             print(f"| `{name}` | {', '.join(kp)} | {', '.join(params)} | {note} ({fn}:{ln}) |")
     print(f"\n{same} identical, {diff} different, {only_q4} Q4-only definitions", file=sys.stderr)
 
