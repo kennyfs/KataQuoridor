@@ -1,3 +1,4 @@
+#include "../../game/board.h"
 #include "../core/global.h"
 #include "../core/rand.h"
 #include "../core/timer.h"
@@ -272,6 +273,8 @@ Q4History parseHistoryFromJson(const json& j) {
 }
 
 int MainCmds::q4tool(const std::vector<std::string>& args) {
+  // NNEvaluator's transformer warmup builds a Duel Board, which needs the Duel Zobrist tables.
+  Board::initHash();
   std::vector<std::string> subArgs = args;
   if(!subArgs.empty() && subArgs[0] == "q4tool")
     subArgs = std::vector<std::string>(subArgs.begin() + 1, subArgs.end());

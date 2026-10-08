@@ -1,3 +1,4 @@
+#include "../../game/board.h"
 #include "../core/config_parser.h"
 #include "../core/global.h"
 #include "../core/rand.h"
@@ -38,6 +39,8 @@ void respondError(const std::string& msg) {
 }  // namespace
 
 int MainCmds::q4qtp(const std::vector<std::string>& args) {
+  // NNEvaluator's transformer warmup builds a Duel Board, which needs the Duel Zobrist tables.
+  Board::initHash();
   std::vector<std::string> subArgs = args;
   if(!subArgs.empty() && subArgs[0] == "q4qtp")
     subArgs = std::vector<std::string>(subArgs.begin() + 1, subArgs.end());

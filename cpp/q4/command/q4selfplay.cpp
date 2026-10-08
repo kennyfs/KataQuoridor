@@ -1,3 +1,4 @@
+#include "../../game/board.h"
 #include "../../core/global.h"
 #include "../../core/datetime.h"
 #include "../../core/fileutils.h"
@@ -45,6 +46,8 @@ static void signalHandler(int signal) {
 }
 
 int MainCmds::q4selfplay(const vector<string>& args) {
+  // NNEvaluator's transformer warmup builds a Duel Board, which needs the Duel Zobrist tables.
+  Board::initHash();
   Rand seedRand;
 
   ConfigParser cfg;
