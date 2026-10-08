@@ -16,6 +16,7 @@ namespace MainCmds {
   int q4qtp(const std::vector<std::string>& args);
   int q4tool(const std::vector<std::string>& args);
   int q4match(const std::vector<std::string>& args);
+  int q4gatekeeper(const std::vector<std::string>& args);
   int q4selfplay(const std::vector<std::string>& args);
 
   int testgpuerror(const std::vector<std::string>& args);

@@ -112,6 +112,8 @@ static int handleSubcommand(const string& subcommand, const vector<string>& args
     return MainCmds::q4tool(subArgs);
   else if(subcommand == "q4match")
     return MainCmds::q4match(subArgs);
+  else if(subcommand == "q4gatekeeper")
+    return MainCmds::q4gatekeeper(subArgs);
   else if(subcommand == "q4selfplay")
     return MainCmds::q4selfplay(subArgs);
   else if(subcommand == "testgpuerror")
