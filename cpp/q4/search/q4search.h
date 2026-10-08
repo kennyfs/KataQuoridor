@@ -184,8 +184,8 @@ struct Search {
     double childUtility
   ) const;
   double getExploreSelectionValueInverse(
-    double exploreScaling,
     double exploreSelectionValue,
+    double exploreScaling,
     double nnPolicyProb,
     double childUtility
   ) const;

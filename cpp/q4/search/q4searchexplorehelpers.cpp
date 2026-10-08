@@ -43,8 +43,8 @@ double Search::getExploreSelectionValue(
 // Return the childWeight that would make Search::getExploreSelectionValue return the given explore selection value.
 // Or return 0, if it would be less than 0.
 double Search::getExploreSelectionValueInverse(
-  double exploreScaling,
   double exploreSelectionValue,
+  double exploreScaling,
   double nnPolicyProb,
   double childUtility
 ) const {
