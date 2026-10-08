@@ -582,3 +582,37 @@ def test_c4_shuffle_compatibility(tmp_path):
     assert len(orig_rows) > 0
     assert len(orig_rows) == len(shuf_rows)
     assert Counter(orig_rows) == Counter(shuf_rows), "Multiset of rows not preserved by shuffle.py"
+
+
+def test_c7_search_policy_target_is_not_one_hot(tmp_path):
+    """R6 regression: with a real search (100 visits, no cheap searches) the search policy target (channel 0) has
+    several nonzero slots and the search entropy C32 is clearly positive. Before the fix every row was one-hot with
+    C32 = 0 (getExploreSelectionValueInverse had swapped parameters)."""
+    katago = find_katago("eigen")
+    assert katago is not None
+    out_dir = str(tmp_path / "c7_data")
+    subprocess.check_call([
+        katago, "q4selfplay",
+        "-models-dir", get_model_dir(),
+        "-output-dir", out_dir,
+        "-config", get_cfg_path(),
+        "-max-games-total", "2",
+        "-seed", "c7_entropy_seed",
+        "-override-config",
+        "numGameThreads=2,maxVisits=100,maxPlies=40,cheapSearchProb=0.0,logToStdout=false"
+    ])
+    npz_files = glob.glob(os.path.join(out_dir, "*", "tdata", "*.npz"))
+    assert len(npz_files) >= 1
+    nonzero_slots, entropies = [], []
+    for nf in npz_files:
+        data = np.load(nf)
+        gt = data["globalTargetsNC"]
+        pol = data["policyTargetsNCMove"][:, 0].astype(np.float32)
+        for i in range(gt.shape[0]):
+            if gt[i, 26] > 0:  # full-search row; maxVisits = 100 so every such row has >= 50 unreduced visits
+                nonzero_slots.append(int((pol[i] > 0).sum()))
+                entropies.append(float(gt[i, 32]))
+    assert len(nonzero_slots) >= 20, len(nonzero_slots)
+    print(f"c7: {len(entropies)} rows, mean C32 {np.mean(entropies):.3f}, mean nonzero C0 slots {np.mean(nonzero_slots):.2f}")
+    assert np.mean(entropies) > 0.5, np.mean(entropies)
+    assert np.mean(nonzero_slots) > 1.0, np.mean(nonzero_slots)
