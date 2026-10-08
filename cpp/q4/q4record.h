@@ -23,6 +23,13 @@ struct Q4Record {
   std::vector<std::string> comments; // optional per-event comments
   // Optional: the game hash of the training rows (globalTargetsNC C44-49), written by q4selfplay.
   // JSON "gameHash": 32 hex digits, hash0 then hash1.
+  // Optional match metadata (written by q4match, JSON "match": {...}); matchOpening < 0 means none.
+  std::string matchTable;
+  int matchOpening = -1;
+  int matchRotation = 0;
+  int matchOpeningPlies = 0;
+  std::string drawReason;            // "", "maxPlies", "repetition" or "unfinished"
+
   bool hasGameHash;
   uint64_t gameHash0;
   uint64_t gameHash1;

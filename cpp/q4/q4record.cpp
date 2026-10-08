@@ -59,6 +59,16 @@ std::string Q4Record::toJsonLine() const {
     j["comments"] = comments;
   }
 
+  if(matchOpening >= 0) {
+    json mj;
+    mj["table"] = matchTable;
+    mj["opening"] = matchOpening;
+    mj["rotation"] = matchRotation;
+    mj["openingPlies"] = matchOpeningPlies;
+    mj["drawReason"] = drawReason;
+    j["match"] = mj;
+  }
+
   if(hasGameHash)
     j["gameHash"] = Global::strprintf("%016llx%016llx", (unsigned long long)gameHash0, (unsigned long long)gameHash1);
 
@@ -117,6 +127,15 @@ Q4Record Q4Record::fromJsonLine(const std::string& line) {
 
   if(j.contains("comments") && j["comments"].is_array()) {
     rec.comments = j["comments"].get<std::vector<std::string>>();
+  }
+
+  if(j.contains("match")) {
+    const auto& mj = j["match"];
+    rec.matchTable = mj.value("table", std::string());
+    rec.matchOpening = mj.value("opening", 0);
+    rec.matchRotation = mj.value("rotation", 0);
+    rec.matchOpeningPlies = mj.value("openingPlies", 0);
+    rec.drawReason = mj.value("drawReason", std::string());
   }
 
   if(j.contains("gameHash")) {

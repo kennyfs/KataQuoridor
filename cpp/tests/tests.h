@@ -163,6 +163,7 @@ namespace Tests {
   void runQ4SlowTests();
   void runQ4NNTests();
   void runQ4SearchTests();
+  void runQ4MatchTests();
 }
 
 namespace TestCommon {

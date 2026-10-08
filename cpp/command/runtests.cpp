@@ -82,6 +82,9 @@ int MainCmds::runtests(const vector<string>& args) {
   if(shouldRun("q4search"))
     Tests::runQ4SearchTests();
 
+  if(shouldRun("q4match"))
+    Tests::runQ4MatchTests();
+
   if(shouldRun("q4selfplay"))
     Tests::runQ4SelfplayTests();
 
