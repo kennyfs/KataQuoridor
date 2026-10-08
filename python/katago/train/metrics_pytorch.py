@@ -1553,12 +1553,17 @@ class Metrics:
             * huber_loss(pred_misc[:, 0], target_remaining_plies, delta=0.75)
         ).sum()
         # Slots 1-4: each relative seat's final walls-only distance / 32 (C36-39, weights C40-43, 0 for a seat
-        # eliminated before the end). Duel's lead loss 0.054 x Huber(delta 3) on the distance in cells (32 x slot),
-        # per seat.
+        # eliminated before the end). Duel's lead loss 0.054 x Huber(delta 3) on the distance in cells (32 x slot).
+        # The coefficient is divided by the number of seats with nonzero weight, so a row's total matches Duel's
+        # single lead term (the weights equal the row's outcome weight C27, which can be fractional, so their sum
+        # is not a seat count).
         target_final_dist = target_global_nc[:, 36:40]
         target_weight_final_dist = target_global_nc[:, 40:44]
+        num_weighted_seats = (target_weight_final_dist > 0).sum(dim=1, keepdim=True).clamp(min=1)
         final_dist_huber = huber_loss(32.0 * pred_misc[:, 1:5], target_final_dist, delta=3.0)
-        loss_final_dist = (0.054 * global_weight.unsqueeze(1) * target_weight_final_dist * final_dist_huber).sum()
+        loss_final_dist = (
+            0.054 / num_weighted_seats * global_weight.unsqueeze(1) * target_weight_final_dist * final_dist_huber
+        ).sum()
         # Slot 5: short-term value error, as Duel / upstream loss_shortterm_value_error_samplewise (2.0, Huber delta
         # 0.4, squared softplus x shortterm_value_error_multiplier) against the short-term TD target (horizon index
         # 2, C15-19). KataGo's value (win - loss) is replaced by the Plan §8.3 utility of the seat to move.

@@ -237,14 +237,14 @@ def make_hand_batch(seed=0):
         gt[:, c:c + 5] = v / v.sum(axis=1, keepdims=True)
     gt[:, 25] = [1.0, 0.7]   # row weight
     gt[:, 26] = [1.0, 0.0]   # search policy weight (row 1: cheap search)
-    gt[:, 27] = [1.0, 1.0]   # outcome weight
+    gt[:, 27] = [1.0, 0.5]   # outcome weight (row 1 fractional)
     gt[:, 28] = [1.0, 0.5]   # next-seat policy weight
     gt[:, 29] = 1.0          # style policy weight
     gt[:, 33] = [0.0, 0.25]  # 1 - TD weight
     gt[:, 34] = [0.0, 0.5]   # 1 - value weight
     gt[:, 35] = [37, 12]
     gt[:, 36:40] = [[0, 3, 7, 12], [4, 0, 0, 9]]
-    gt[:, 40:44] = [[1, 1, 1, 1], [1, 1, 0, 1]]
+    gt[:, 40:44] = [[1, 1, 1, 1], [0.5, 0.5, 0, 0.5]]   # = C27 per surviving seat
     pol = np.zeros((n, 3, 363), dtype=np.float32)
     pol[:, 0, rng.choice(121, 5)] = rng.integers(1, 20, 5)
     pol[:, 0, 121 + 3 * 11 + 4] = 7
@@ -321,7 +321,10 @@ def expected_losses(batch, outputs):
 
     wo = gt[:, 27]
     out["rtloss_sum"] = np.sum(5.0 / 9.0 * gw * wo * huber(misc[:, 0], gt[:, 35] / 100.0, 0.75))
-    out["fdistloss_sum"] = np.sum(0.054 * gw[:, None] * gt[:, 40:44] * huber(32 * misc[:, 1:5], gt[:, 36:40], 3.0))
+    # Duel's single lead term (0.054) is split over the seats with nonzero weight (a count, not the weight sum).
+    n_weighted = np.maximum((gt[:, 40:44] > 0).sum(axis=1, keepdims=True), 1)
+    out["fdistloss_sum"] = np.sum(
+        0.054 / n_weighted * gw[:, None] * gt[:, 40:44] * huber(32 * misc[:, 1:5], gt[:, 36:40], 3.0))
     nalive = gi[:, 8:12].sum(axis=1)
     p_short = np.exp(log_softmax(td_l[:, 2]))
     u_pred = 2 * p_short[:, 0] + 2 / nalive * p_short[:, 4] - 1
