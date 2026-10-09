@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Q4 SGFS Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1><span class="dot" style="background:var(--s-acc)"></span><span class="dot" style="background:var(--w-acc)"></span><span class="dot" style="background:var(--n-acc)"></span><span class="dot" style="background:var(--e-acc)"></span> Q4 SGFS Viewer</h1>
+  <div class="tabs"><button id="tabView" class="on">Viewer</button><button id="tabStats">Statistics</button></div>
+  <span id="fileName">No file loaded</span>
+  <label class="btn" for="fileInput">Open<span class="long"> .sgfs…</span></label>
+  <input type="file" id="fileInput" accept=".sgfs,.sgf,.txt">
+  <button id="pathBtn" class="toggle on" title="Show all shortest paths to the centre (P)">Paths</button>
+  <button id="flipBtn" title="Rotate the board by 90° (R)">Rotate</button>
+</header>
+
+<main>
+  <section class="panel games" id="gamesPanel">
+    <h2 id="gamesHead">Games <span id="gamesHeadInfo"></span></h2>
+    <div class="filters">
+      <select id="fRes" title="Result"></select>
+      <select id="fRule" title="Repetition rule"></select>
+      <select id="fWalls" title="Initial walls"><option value="">Any walls</option><option value="std">Walls 7/7/7/7</option><option value="other">Other walls</option></select>
+      <select id="fType" title="Game type"></select>
+      <select id="fTable" title="Match table"></select>
+      <select id="fPType" title="Player type of any seat"></select>
+      <select id="fModel" title="Model of any seat"></select>
+      <select id="fElim" title="Eliminations"><option value="">Elim: any</option><option value="yes">With eliminations</option><option value="no">No eliminations</option></select>
+      <input id="fMin" type="number" min="0" placeholder="min plies">
+      <input id="fMax" type="number" min="0" placeholder="max plies">
+    </div>
+    <div class="chips" id="fChips"></div>
+    <div class="filters sortrow">
+      <select id="sortKey" title="Sort games by"></select>
+      <button id="sortDir" title="Flip sort direction">↓</button>
+      <button id="randBtn" title="Jump to a random game in the list">🎲</button>
+    </div>
+    <div class="sortdesc" id="sortDesc"></div>
+    <div id="gameList"></div>
+    <div id="listCount"></div>
+  </section>
+  <div id="listResize" title="Drag to resize the game list (double-click: default width)"></div>
+
+  <section class="panel center">
+    <div class="empty" id="empty">
+      Drop a Q4 <b>.sgfs</b> file here or use <b>Open .sgfs…</b><br><br>
+      Or run <code>python3 python/q4_sgfs_viewer/serve.py &lt;file.sgfs&gt;</code>
+    </div>
+    <div class="players vis" id="players" hidden></div>
+    <div id="boardWrap" class="vis" hidden title="Scroll to step through moves"><svg id="board" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    <div id="evalStrip" class="vis" hidden>
+      <div class="ev-tile wide" id="evWin">
+        <div class="k" id="evWinK">Win probability · search before this move</div>
+        <div class="pbar" id="evBar"></div>
+        <div class="pnums" id="evNums"></div>
+      </div>
+      <div class="ev-tile" id="evVis">
+        <div class="k">Visits · weight</div>
+        <div class="v" id="evVisV">—</div>
+        <div class="s" id="evVisS"></div>
+      </div>
+      <div class="ev-tile" id="evDist">
+        <div class="k">Steps to the centre</div>
+        <div class="v" id="evDistV">—</div>
+        <div class="s" id="evDistS"></div>
+      </div>
+    </div>
+    <input type="range" id="moveSlider" class="vis" min="0" max="0" value="0" hidden>
+    <div class="controls vis" hidden>
+      <button id="bFirst" title="Home">⏮</button>
+      <button id="bPrev10" title="PgUp">−10</button>
+      <button id="bPrev" title="←">◀</button>
+      <span id="moveInfo"></span>
+      <button id="bNext" title="→">▶</button>
+      <button id="bNext10" title="PgDn">+10</button>
+      <button id="bLast" title="End">⏭</button>
+    </div>
+    <div class="hint vis" hidden>Scroll on board / ← → step · PgUp/PgDn ±10 · Home/End · ↑ ↓ prev/next game · R rotate · P paths</div>
+  </section>
+
+  <section class="panel right">
+    <h2>Game</h2>
+    <dl id="info"></dl>
+    <h2 class="trace-h">Win probabilities (search before each move)</h2>
+    <div class="legend" id="chartLegend"></div>
+    <svg id="chart"></svg>
+    <div id="moveList"></div>
+  </section>
+</main>
+
+<section id="statsView">
+  <div class="stats-top">
+    <span id="statsNote"></span>
+    <span id="statsFilters"></span>
+  </div>
+  <div id="matchSection" hidden>
+    <div class="sec" id="matchTitle"></div>
+    <div class="cards" id="matchCards"></div>
+  </div>
+  <div class="sec" id="genTitle">All games</div>
+  <div class="tiles" id="statTiles"></div>
+  <div class="cards" id="statCards"></div>
+</section>
+
+<div id="tip"></div>
+
+<script src="js/core.js"></script>
+<script src="js/viewer.js"></script>
+<script src="js/stats.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

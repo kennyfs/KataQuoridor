@@ -448,6 +448,10 @@ function stepGame(d) {
 // ---- Loading ---------------------------------------------------------------
 function loadText(text, name) {
   lines = text.split(/\r?\n/).filter(l => l.startsWith("(;"));
+  if (lines.some(l => l.includes("GM[Q4]"))) {   // a four-player game record: it has its own viewer
+    $("fileName").textContent = `${name}: this is a Q4 (GM[Q4]) file, open it with python/q4_sgfs_viewer/serve.py`;
+    return;
+  }
   games = lines.map(headerOf);
   match = detectMatch();
   statsCache = null;
