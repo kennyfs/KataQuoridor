@@ -5,6 +5,7 @@
 #include "../q4notation.h"
 #include "../q4record.h"
 #include "../q4rules.h"
+#include "../q4style.h"
 #include "../q4symmetry.h"
 
 #include <algorithm>
@@ -712,6 +713,100 @@ void testPlayStateConsistency() {
   }
 }
 
+bool sameTracker(const Q4StyleTracker& a, const Q4StyleTracker& b) {
+  for(int s = 0; s < 4; s++) {
+    if(a.numMoves[s] != b.numMoves[s])
+      return false;
+    for(int h = 0; h < 2; h++)
+      for(int d = 0; d < Q4StyleTracker::NUM_DESCRIPTORS; d++)
+        if(a.mean[s][h][d] != b.mean[s][h][d])
+          return false;
+  }
+  return true;
+}
+
+// S1 (C++ half): scripted history with hand-derived feature values, and undo restores the tracker exactly.
+void testStyleTracker() {
+  cout << "Running S1 style tracker (scripted values, undo)..." << endl;
+  const float EPS = 1e-6f;
+  // Seat 0 steps f1 -> f2 (distance 5 -> 4: progress 0.5, a greedy step). Seat 1 then walls e2h (blocks column e/f
+  // between rows 2 and 3), which lengthens seat 0's path from 4 to 6 (its detour is one column to g2 and back), and
+  // nobody else's: it hits the race leader (seat 0: arrival estimate 16 vs 18 and 19), victim column 0.25.
+  Q4History hist{Q4Rules()};
+  hist.play(Q4Notation::stringToAction("f2"));
+  {
+    float f[Q4StyleTracker::NUM_FEATURES];
+    hist.getStyleFeatures(f);   // perspective: seat 1
+    // seat 0 is "previous" (k = 3): its block starts at 3 * 19
+    const float* b = f + 3 * Q4StyleTracker::PER_SEAT;
+    const float exp[9] = {0, 0.5f, 1, 0, 0, 0, 0, 0, 0};
+    for(int h = 0; h < 2; h++)
+      for(int d = 0; d < 9; d++)
+        testAssert(std::fabs(b[h * 9 + d] - exp[d]) < EPS);
+    testAssert(std::fabs(b[18] - 1.0f / 64.0f) < EPS);
+    for(int i = 0; i < 3 * Q4StyleTracker::PER_SEAT; i++)
+      testAssert(f[i] == 0.0f);
+  }
+  Q4StyleTracker afterFirst = hist.style;
+  hist.play(Q4Notation::stringToAction("e2h"));
+  testAssert(hist.currentBoard.distToCenter[hist.currentBoard.pawn[0]] == 6);
+  {
+    float f[Q4StyleTracker::NUM_FEATURES];
+    hist.getStyleFeatures(f);   // perspective: seat 2 = (me, next 3, across 0, previous 1)
+    const float* b = f + 3 * Q4StyleTracker::PER_SEAT;           // seat 1 (previous)
+    // wall, hit the leader, harmless 0; victim = absolute seat 0 = relative column 3 + (0 - 2) mod 4 = 5
+    const float exp[9] = {1, 0, 0, 0, 0, 0.25f, 0, 1, 0};
+    for(int h = 0; h < 2; h++)
+      for(int d = 0; d < 9; d++)
+        testAssert(std::fabs(b[h * 9 + d] - exp[d]) < EPS);
+    testAssert(std::fabs(b[18] - 1.0f / 64.0f) < EPS);
+    const float* a = f + 2 * Q4StyleTracker::PER_SEAT;           // seat 0 (across) unchanged
+    const float expA[9] = {0, 0.5f, 1, 0, 0, 0, 0, 0, 0};
+    for(int d = 0; d < 9; d++)
+      testAssert(std::fabs(a[d] - expA[d]) < EPS);
+  }
+  // undo restores the tracker
+  testAssert(hist.undo());
+  testAssert(sameTracker(hist.style, afterFirst));
+  testAssert(hist.undo());
+  testAssert(sameTracker(hist.style, Q4StyleTracker()));
+  testAssert(!hist.undo());
+
+  // random population-like games with eliminations: undo all the way back restores every intermediate tracker
+  Rand rand("s1_undo");
+  static const char* const bots[5] = {"random", "randomPawn", "greedy", "basher", "grudge"};
+  for(int g = 0; g < 40; g++) {
+    Q4Rules rules;
+    rules.maxPlies = 100;
+    Q4History h(rules);
+    std::unique_ptr<Q4Bot> players[4];
+    for(int s = 0; s < 4; s++)
+      players[s] = Q4Bots::makeBot(bots[rand.nextUInt(5)], rand.nextUInt64(), (s + 1) % 4);
+    std::vector<Q4StyleTracker> saved = {h.style};
+    while(!h.isFinished && h.events.size() < 120) {
+      if(rand.nextBool(0.03)) {
+        std::vector<int> alive;
+        for(int s = 0; s < 4; s++)
+          if(h.currentBoard.isAlive(s))
+            alive.push_back(s);
+        if(alive.size() > 1)
+          h.eliminate(alive[rand.nextUInt((uint32_t)alive.size())]);
+      }
+      else {
+        h.play(players[h.currentBoard.toMove]->getMove(h.currentBoard));
+      }
+      saved.push_back(h.style);
+    }
+    testAssert(saved.size() == h.events.size() + 1);
+    for(int i = (int)saved.size() - 1; i >= 0; i--) {
+      testAssert(sameTracker(h.style, saved[i]));
+      if(i > 0)
+        testAssert(h.undo());
+    }
+  }
+  cout << "S1 (C++) passed!" << endl;
+}
+
 }  // namespace
 
 void Tests::runQ4BoardTests() {
@@ -726,6 +821,7 @@ void Tests::runQ4BoardTests() {
   testPerft();
   testWallFloodFillFuzz();
   testPlayStateConsistency();
+  testStyleTracker();
 
   cout << "All Q4 Board tests PASSED!" << endl;
 }

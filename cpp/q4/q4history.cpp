@@ -26,6 +26,8 @@ void Q4History::clear(const Q4Board& b, const Q4Rules& r) {
   boardHistory.clear();
   events.clear();
   repetitionHistory.clear();
+  styleHistory.clear();
+  style.reset();
   state.clear(b, r);
   syncFromState();
 }
@@ -39,6 +41,7 @@ void Q4History::play(int action) {
 
   boardHistory.push_back(state.board);
   repetitionHistory.push_back(state.repetitionHashes);
+  styleHistory.push_back(style);
   Q4Event ev;
   ev.isElimination = false;
   ev.action = action;
@@ -46,6 +49,7 @@ void Q4History::play(int action) {
   events.push_back(ev);
 
   state.playAssumeLegal(action);
+  style.observeMove(boardHistory.back(), state.board, action);
   syncFromState();
 }
 
@@ -57,6 +61,7 @@ void Q4History::eliminate(int seat) {
 
   boardHistory.push_back(state.board);
   repetitionHistory.push_back(state.repetitionHashes);
+  styleHistory.push_back(style);
   Q4Event ev;
   ev.isElimination = true;
   ev.action = Q4Board::NULL_ACTION;
@@ -64,11 +69,12 @@ void Q4History::eliminate(int seat) {
   events.push_back(ev);
 
   state.eliminate(seat);
+  style.observeElimination(seat);
   syncFromState();
 }
 
 bool Q4History::undo() {
-  if(boardHistory.empty() || events.empty() || repetitionHistory.empty())
+  if(boardHistory.empty() || events.empty() || repetitionHistory.empty() || styleHistory.empty())
     return false;
 
   state.board = boardHistory.back();
@@ -76,6 +82,9 @@ bool Q4History::undo() {
 
   state.repetitionHashes = repetitionHistory.back();
   repetitionHistory.pop_back();
+
+  style = styleHistory.back();
+  styleHistory.pop_back();
 
   Q4Event lastEv = events.back();
   events.pop_back();

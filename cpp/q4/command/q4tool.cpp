@@ -6,6 +6,7 @@
 #include "../main.h"
 #include "command/q4json.h"
 #include "command/q4nntool.h"
+#include "command/q4styletool.h"
 #include "q4board.h"
 #include "q4bots.h"
 #include "q4history.h"
@@ -290,11 +291,16 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
               << "  nnbench               Input-fill time, NN evaluations per second (-model <file>)\n"
               << "  perft <depth>         Run perft from start position\n"
               << "  bench                 Run performance benchmarks (movegen and playouts)\n"
+              << "  style                 Style features (Q4IO §9) of game records (JSON lines on stdin)\n"
+              << "  popgames              Random population-like games (random bots, eliminations) as records\n"
               << "  wallbench             isLegalWallBruteForce flood fill vs BFS, ns per call; sizeof(NNOutput)\n";
     return 0;
   }
 
   std::string subcmd = subArgs[0];
+
+  if(isQ4StyleCommand(subcmd))
+    return runQ4StyleCommand(subcmd, std::vector<std::string>(subArgs.begin() + 1, subArgs.end()));
 
   if(subcmd == "legal") {
     std::string line;

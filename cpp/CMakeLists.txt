@@ -1126,6 +1126,7 @@ add_executable(katago
   q4/q4board.cpp
   q4/q4playstate.cpp
   q4/q4history.cpp
+  q4/q4style.cpp
   q4/q4notation.cpp
   q4/q4symmetry.cpp
   q4/q4record.cpp
@@ -1135,6 +1136,7 @@ add_executable(katago
   q4/command/q4nntool.cpp
   q4/command/q4qtp.cpp
   q4/command/q4tool.cpp
+  q4/command/q4styletool.cpp
   q4/command/q4match.cpp
   q4/command/q4matchengine.cpp
   q4/command/q4gatekeeper.cpp

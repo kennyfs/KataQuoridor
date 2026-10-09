@@ -282,3 +282,55 @@ A game seats 1–4 *learners* (the current net; they share one search tree) and 
   a non-learner row); C53 is the observer's visits; C30–C32 come from the observer search (policy surprise 0).
 - Side positions are only generated on learner rows; their C61 is 0.
 - The net never sees C61: it has to infer a seat's style from the style features of Q4IO §9.
+
+---
+
+## 9. Style features (Round 7; game logic only, no net)
+
+Per-seat statistics of how each seat has played so far, computed from the real game history. They are the input of
+the metadata encoder of Q4 I/O v2 (§10) and nothing else uses them. Code: `cpp/q4/q4style.{h,cpp}` (`Q4StyleTracker`,
+kept by `Q4History`) and the independent `python/q4/style.py`.
+
+### 9.1 Per-move descriptors
+
+When seat `m` plays an action (walls-only distances to the center, `d(s)` = distance of seat `s`'s pawn, before the
+move on the board `B`, after it on `B'`; eliminations are not moves), the move has 9 descriptors `x[0..8]`, all in
+`[-1, 1]`:
+
+| # | Descriptor | Definition |
+|:-:|:---|:---|
+| 0 | wall placed | 1 for a wall, 0 for a pawn move |
+| 1 | progress | pawn move: `clamp((d_B(m) − d_B'(m)) / 2, −1, 1)`; 0 for a wall |
+| 2 | greedy step | pawn move to a destination of minimal distance among `m`'s legal pawn moves on `B` (the `greedy` bot's choice; ties all count), 1/0; 0 for a wall |
+| 3–6 | victims | wall: for each **absolute** seat `s` = 0..3 (`m` itself included): `min(Δ(s) / 8, 1)` with `Δ(s) = d_B'(s) − d_B(s)` (0 if `s` is not alive); 0 for a pawn move |
+| 7 | hit the leader | wall: 1 if `lead` is alive and `Δ(lead) = max over the opponents of Δ > 0`, else 0. `lead` = the other alive seat (not `m`) with the smallest arrival estimate on `B` (`Q4Bots::arrivalEstimate`, Q4IO §4 slots 16–19; the estimates of two seats never tie; unreachable seats have the maximal estimate) |
+| 8 | harmless wall | wall: 1 if no opponent's distance increased (`Δ(s) = 0` for every alive `s ≠ m`), else 0 |
+
+### 9.2 Per-seat summary
+
+For every seat, two exponential moving averages of its descriptors with half-lives `h ∈ {4, 16}` *of that seat's own
+moves*, and a move count. After its `n`-th observed move with descriptors `x`:
+
+> `n ← n + 1;  mean_h ← mean_h + (x − mean_h) · max(1/n, 1 − 2^(−1/h))`  (`mean_h = 0` before the first move)
+
+so the first moves are a plain average (`1/n` is the larger rate while `n ≤ 6` for `h = 4`, `n ≤ 23` for `h = 16`).
+The count enters as `min(n / 64, 1)`. An eliminated seat has all of its numbers reset to 0 and stays 0.
+
+### 9.3 Encoding for perspective `p`
+
+The perspective is the seat to move at the root of a search or of a training row. Seats in relative order (me, next,
+across, previous) = seats `(p + k) mod 4`, `k = 0..3`. Per seat 19 numbers:
+
+> `[ mean_4 (9) | mean_16 (9) | min(n/64, 1) ]`
+
+where, inside each 9-vector, the absolute victim columns 3–6 are **rotated into the relative order**: relative column
+`3 + k` holds the victim column of absolute seat `(p + k) mod 4`. Total 4 × 19 = **76 numbers**, written to the
+metadata input slots `0..75` (§10; the other slots are 0 and slot 86, which KataGo's `feature_mask` zeroes, stays
+unused). Under a board symmetry nothing changes (distances and seat identities are invariant), so the features need no
+symmetry handling.
+
+### 9.4 Ownership
+
+`Q4History` maintains the tracker: `play` observes the move, `eliminate` zeroes the seat, `undo` restores the tracker
+(a copy of the tracker is kept per event, as boards are). `Q4PlayState` does not: inside a search the features are
+frozen at the root (Plan §12.2).

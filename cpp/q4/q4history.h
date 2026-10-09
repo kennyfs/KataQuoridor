@@ -4,6 +4,7 @@
 #include "q4board.h"
 #include "q4rules.h"
 #include "q4playstate.h"
+#include "q4style.h"
 
 #include <string>
 #include <vector>
@@ -22,6 +23,10 @@ public:
 
   // Search playout state representing current position
   Q4PlayState state;
+
+  // Style statistics of the real history (docs/q4/Q4IO.md §9); a copy before each event is kept, as for boards.
+  Q4StyleTracker style;
+  std::vector<Q4StyleTracker> styleHistory;
 
   std::vector<Q4Board> boardHistory; // Stored state BEFORE each event
   std::vector<Q4Event> events;
@@ -45,6 +50,8 @@ public:
   bool undo();
 
   const Q4PlayState& getState() const { return state; }
+  // The 76 style features for the seat to move (metadata slots 0..75 of Q4 I/O v2).
+  void getStyleFeatures(float out[Q4StyleTracker::NUM_FEATURES]) const { style.encode(currentBoard.toMove, out); }
   int currentPositionRepetitionCount() const;
   std::string getResultString() const;
 
