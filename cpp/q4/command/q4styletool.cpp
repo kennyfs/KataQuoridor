@@ -41,26 +41,27 @@ static int runStyle(const std::vector<std::string>& args) {
   while(std::getline(in, line)) {
     if(Global::trim(line).empty())
       continue;
-    // A game record (an SGF line), or {"rules": {...}, "initialBoard": {...}, "events": [{"a": "e5h"} | {"elim": seat0to3}]} (a
-    // start position that is not the standard one, for the symmetry tests).
+    // A game record (an SGF line), or the test input {"rules": {...}, "initialBoard": {...}?, "events": [{"a": "e5h"} |
+    // {"elim": seat}]} (events of the symmetry tests that need not be a played game, or a start position that is not
+    // the standard one; elim counts seats from 1 without initialBoard, as the former JSON records did).
     Q4Record rec;
     Q4History hist;
     // A game record is an SGF line; the JSON form below is only an input of the symmetry tests.
     const bool isJson = Global::trim(line)[0] == '{';
     json j = isJson ? json::parse(line) : json::object();
-    if(isJson && j.contains("initialBoard")) {
+    if(isJson) {
       Q4Rules rules;
       if(j.contains("rules")) {
         const json& r = j["rules"];
         rules.maxPlies = r.value("maxPlies", rules.maxPlies);
         rules.repetitionDrawCount = r.value("repetitionDrawCount", rules.repetitionDrawCount);
       }
-      hist.clear(parseBoardFromJson(j["initialBoard"]), rules);
+      hist.clear(j.contains("initialBoard") ? parseBoardFromJson(j["initialBoard"]) : Q4Board(rules), rules);
       for(const json& item : j["events"]) {
         Q4Event ev;
         ev.isElimination = item.contains("elim");
         ev.action = ev.isElimination ? Q4Board::NULL_ACTION : Q4Notation::stringToAction(item["a"].get<std::string>());
-        ev.eliminatedSeat = ev.isElimination ? item["elim"].get<int>() : -1;
+        ev.eliminatedSeat = ev.isElimination ? item["elim"].get<int>() - (j.contains("initialBoard") ? 0 : 1) : -1;
         rec.events.push_back(ev);
       }
     }

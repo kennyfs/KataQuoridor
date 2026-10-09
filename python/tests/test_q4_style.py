@@ -17,6 +17,7 @@ PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PYTHON_DIR)
 
 from q4.features import apply_anchor, apply_cell  # noqa: E402
+from q4.record import Q4Record  # noqa: E402
 from q4.reference import START_POSITIONS, action_to_str, str_to_action  # noqa: E402
 from q4.style import NUM_FEATURES, PER_SEAT, StyleTracker, record_features  # noqa: E402
 from tests.q4_testutil import find_katago  # noqa: E402
@@ -37,6 +38,11 @@ def cpp_style(lines, stdin_is_records=True):
         d = json.loads(line)
         out.append((d["perspectives"], np.array(d["features"]).reshape(d["numPositions"], NUM_FEATURES)))
     return out
+
+
+def parse_record(line):
+    """A game record (dict of load_records) from an SGF line."""
+    return Q4Record.from_sgf_line(line).to_dict()
 
 
 def popgames(n, seed, extra=()):
@@ -122,7 +128,7 @@ def test_s1_bots_styles():
     walls_seen = {1: 0, 2: 0}
     basher_ratio = []
     for line in lines:
-        rec = json.loads(line)
+        rec = parse_record(line)
         persp, f = nonterminal(rec, *record_features(rec))
         # the features with seat to move 0 at the end of the game are in absolute order (perspective 0)
         last = len(persp) - 1
@@ -190,7 +196,7 @@ def python_features_of_transformed(t):
 
 
 def test_s1_invariant_under_the_8_symmetries():
-    recs = [json.loads(l) for l in popgames(60, 21, ["-maxplies", "100"])]
+    recs = [parse_record(l) for l in popgames(60, 21, ["-maxplies", "100"])]
     n_checked = 0
     for rec in recs:
         base_persp, base = record_features(rec)
@@ -213,7 +219,7 @@ def test_s1_cpp_equals_python_on_2000_population_games():
     cpp = cpp_style(lines)
     max_diff, positions, with_elim, walls = 0.0, 0, 0, 0
     for line, (cpersp, cfeat) in zip(lines, cpp):
-        rec = json.loads(line)
+        rec = parse_record(line)
         persp, py = nonterminal(rec, *record_features(rec))
         cpersp, cfeat = nonterminal(rec, cpersp, cfeat)
         assert cpersp == persp

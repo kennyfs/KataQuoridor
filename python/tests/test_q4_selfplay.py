@@ -1,7 +1,7 @@
 """Tests for Q4 Selfplay and Training Data Writer (Round 4).
 
 Covers:
-- C1: Writer vs Replay (replaying games from .q4.jsonl records, checking inputs with features.py,
+- C1: Writer vs Replay (replaying games from .sgfs records, checking inputs with features.py,
       targets, relative-seat rotation, one-hot style policy target, paths, future walls).
 - C2: TD targets (hand-built sequence and written rows vs KataGo TD formula at 1e-6).
 - C3: Side positions and forks (C27=0 and C59=0 on side positions, C52=2 on fork games).
@@ -26,6 +26,7 @@ REPO_DIR = os.path.dirname(PYTHON_DIR)
 sys.path.insert(0, PYTHON_DIR)
 
 from q4.features import extract_features, decode_raw_distances
+from q4.record import Q4Record
 from q4.reference import Pos, eliminate, play, str_to_action, compute_distances_to_center
 from tests.q4_testutil import find_katago, export_model, make_random_model
 
@@ -78,7 +79,7 @@ def decode_game_hash(row_global):
 
 
 def record_game_hash(rec):
-    """(hash0, hash1) of a .q4.jsonl record ("gameHash": 32 hex digits), as decode_game_hash returns it."""
+    """(hash0, hash1) of a .sgfs record ("gameHash": 32 hex digits), as decode_game_hash returns it."""
     h = rec["gameHash"]
     assert len(h) == 32, h
     return (int(h[:16], 16), int(h[16:], 16))
@@ -212,7 +213,7 @@ def test_c1_c2_writer_vs_replay(tmp_path):
     subprocess.check_call(cmd3)
 
     # Read all records
-    record_files = glob.glob(os.path.join(out_dir, "*", "records", "*.q4.jsonl"))
+    record_files = glob.glob(os.path.join(out_dir, "*", "sgfs", "*.sgfs"))
     assert len(record_files) >= 1
 
     records = []
@@ -221,7 +222,7 @@ def test_c1_c2_writer_vs_replay(tmp_path):
             for line in f:
                 line = line.strip()
                 if line:
-                    records.append(json.loads(line))
+                    records.append(Q4Record.from_sgf_line(line).to_dict())
 
     assert len(records) >= 20, f"Expected at least 20 games, got {len(records)}"
 
@@ -457,14 +458,14 @@ def test_c3_side_positions_and_forks(tmp_path):
     assert found_fork_game, "Expected to observe fork games with forkGameProb=1.0"
 
     # Verify every main row matches replay inputs
-    record_files = glob.glob(os.path.join(out_dir, "*", "records", "*.q4.jsonl"))
+    record_files = glob.glob(os.path.join(out_dir, "*", "sgfs", "*.sgfs"))
     records = []
     for rf in record_files:
         with open(rf) as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    records.append(json.loads(line))
+                    records.append(Q4Record.from_sgf_line(line).to_dict())
     game_replays = []
     for rec in records:
         rules = rec.get("rules", {})
@@ -667,9 +668,9 @@ def run_selfplay(katago, models_dir, out_dir, seed, overrides, games, cfg_edits=
 
 def read_records(out_dir):
     records = []
-    for rf in sorted(glob.glob(os.path.join(out_dir, "*", "records", "*.q4.jsonl"))):
+    for rf in sorted(glob.glob(os.path.join(out_dir, "*", "sgfs", "*.sgfs"))):
         with open(rf) as f:
-            records.extend(json.loads(line) for line in f if line.strip())
+            records.extend(Q4Record.from_sgf_line(line).to_dict() for line in f if line.strip())
     return records
 
 
@@ -833,10 +834,9 @@ def test_p3_mixed_games_rows(tmp_path):
         assert gt[53] <= 24
         assert gt[30] == 0.0              # policy surprise 0
         # C20-24 is the observer's root value vector (printed in the record's comment, absolute seats)
-        comment = rec["comments"][event_of_ply[ply]]
-        v_abs = [float(x) for x in comment[comment.index("[") + 1:comment.index("]")].split(",")]
+        v_abs = rec["moveComments"][event_of_ply[ply]]["p"]
         exp = rotate_to_relative(v_abs, mover)
-        assert np.max(np.abs(exp - gt[20:25])) < 2e-4, (exp, gt[20:25])
+        assert np.max(np.abs(exp - gt[20:25])) < 6e-3, (exp, gt[20:25])   # the comment has two decimals
     assert n_observer > 100 and n_learner > 50, (n_observer, n_learner)
     print(f"p3: {len(records)} games, {n_observer} observer rows, {n_learner} learner rows, kinds {sorted(kinds_seen)}")
 

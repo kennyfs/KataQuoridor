@@ -117,7 +117,7 @@ class StyleTracker:
 
 
 def record_features(record: dict) -> Tuple[List[int], np.ndarray]:
-    """Replays a record (dict of a .jsonl line); returns the seat to move and the 76 features at the start position
+    """Replays a record (a dict of load_records); returns the seat to move and the 76 features at the start position
     and after every event."""
     rules = record.get("rules", {})
     pos = Pos(max_plies=rules.get("maxPlies", 400), repetition_draw_count=rules.get("repetitionDrawCount", 0),

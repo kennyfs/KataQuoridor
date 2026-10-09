@@ -19,6 +19,7 @@ def record(names, winner, table="t", opening=0, rotation=0, draw_reason="", even
         "players": [{"name": n, "type": "x"} for n in names],
         "result": result,
         "events": [{"a": "e2"}] * events,
+        "drawReason": draw_reason if winner is None else "",
         "match": {"table": table, "opening": opening, "rotation": rotation, "openingPlies": 4,
                   "drawReason": draw_reason if winner is None else ""},
     }

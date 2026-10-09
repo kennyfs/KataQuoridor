@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
-"""Report of Q4 match results (katago q4match -output games.jsonl, docs/q4/rounds/R6.md).
+"""Report of Q4 match results (katago q4match -output games.sgfs, docs/q4/rounds/R6.md).
 
 Per table: the win rate of every player (wins / games, and per copy at the table: wins / (games x copies), 25% =
 even), its score (a draw counts half), both with a 95% bootstrap CI over openings (all rotations of an opening share
 the opening and are not independent); the win rate of every seat (the first-move advantage); the draw rate split by
 reason; the mean game length.
 
-    python q4/match_report.py games.jsonl [more.jsonl ...] [--json report.json] [--bootstrap 2000]
+    python q4/match_report.py games.sgfs [more.sgfs ...] [--json report.json] [--bootstrap 2000]
 """
 import argparse
 import collections
 import json
 import sys
 
+import os
+
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from q4.record import load_records  # noqa: E402
 
 
 def load_games(paths):
     games = []
     for path in paths:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    games.append(json.loads(line))
+        games += list(load_records(path))
     return games
 
 
@@ -49,9 +51,8 @@ def winner_seat(g):
 def draw_reason(g):
     if winner_seat(g) is not None:
         return None
-    m = g.get("match")
-    if m is not None and m.get("drawReason"):
-        return m["drawReason"]
+    if g.get("drawReason"):
+        return g["drawReason"]
     return "draw" if g["result"] == "Draw" else "unfinished"
 
 

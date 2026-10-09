@@ -29,6 +29,7 @@ from katago.train import data_processing_pytorch as dp
 from katago.train.metrics_pytorch import Metrics
 from katago.train.model_pytorch import Model
 from q4.features import extract_features, apply_cell, apply_anchor
+from q4.record import Q4Record
 from q4.reference import Pos, eliminate, play, str_to_action
 from tests.q4_testutil import find_katago
 from tests.test_q4_selfplay import decode_game_hash, record_game_hash, action_to_policy_slot, get_model_dir
@@ -56,14 +57,14 @@ def selfplay_dir(tmp_path_factory):
 
 
 def replay_records(out_dir):
-    """game hash -> {ply: position before the action of that ply} for every .q4.jsonl record."""
+    """game hash -> {ply: position before the action of that ply} for every .sgfs record."""
     states_by_hash = {}
-    for rf in glob.glob(os.path.join(out_dir, "*", "records", "*.q4.jsonl")):
+    for rf in glob.glob(os.path.join(out_dir, "*", "sgfs", "*.sgfs")):
         with open(rf) as f:
             for line in f:
                 if not line.strip():
                     continue
-                rec = json.loads(line)
+                rec = Q4Record.from_sgf_line(line).to_dict()
                 rules = rec.get("rules", {})
                 pos = Pos(
                     max_plies=rules.get("maxPlies", 400),

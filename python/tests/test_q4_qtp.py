@@ -175,7 +175,7 @@ def test_q4qtp_record_round_trip():
 
         # Save record
         ok, rec_line = engine.send("printrecord")
-        assert ok and "events" in rec_line
+        assert ok and rec_line.startswith("(;FF[4]GM[Q4]")
         assert "e5h" in rec_line
 
         # Read distances and walls
@@ -184,7 +184,7 @@ def test_q4qtp_record_round_trip():
         _, to_move_before = engine.send("to_move")
 
         # Save to temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".jsonl", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile("w+", suffix=".sgfs", delete=False) as tmp:
             tmp.write(rec_line + "\n")
             tmp_path = tmp.name
 

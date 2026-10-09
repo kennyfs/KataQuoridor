@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ratings of Q4 players from match games (katago q4match -output games.jsonl, docs/q4/rounds/R6.md).
+"""Ratings of Q4 players from match games (katago q4match -output games.sgfs, docs/q4/rounds/R6.md).
 
 Bradley-Terry, fitted by the Duel ladder's code (quoridor_arena.elo.fit_bt: Elo scale, one virtual draw between every
 pair that met, maximum likelihood), on "the winner beats every other player at the table": a game with winner W is
@@ -9,7 +9,7 @@ table half a point each, with weight 1/2 per pair so a draw carries the same tot
 Ratings are anchored at `random` = 0. Intervals: 95% bootstrap over openings (all rotations of an opening of a table
 are one unit), as the Duel ladder resamples paired-game units.
 
-    python q4/rating.py games.jsonl [more.jsonl ...] [--anchor random] [--bootstrap 1000] [--json out.json]
+    python q4/rating.py games.sgfs [more.sgfs ...] [--anchor random] [--bootstrap 1000] [--json out.json]
 """
 import argparse
 import collections
@@ -22,6 +22,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from q4.record import load_records  # noqa: E402
 from quoridor_arena import elo  # noqa: E402  (the Duel ladder's Bradley-Terry fit)
 
 
@@ -104,8 +105,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     games = []
     for path in args.games:
-        with open(path) as f:
-            games += [json.loads(line) for line in f if line.strip()]
+        games += list(load_records(path))
     ratings = rate(games, args.anchor, args.bootstrap, args.seed)
     sys.stdout.write("Anchor: %s = 0 Elo; %d games.\n\n" % (args.anchor, len(games)) + format_markdown(ratings) + "\n")
     if args.json:
