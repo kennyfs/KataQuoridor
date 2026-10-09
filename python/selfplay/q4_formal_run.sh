@@ -32,11 +32,11 @@ export SELFPLAY_EXTRA_ARGS="${SELFPLAY_EXTRA_ARGS:-}"
 
 # Training (Plan §15): Aurora from scratch with KataGo's warmup, LR scale x8 -> x4 -> x2 by training samples
 # (train.py keeps global_step_samples in the checkpoint, so the schedule continues across cycles), batch 256,
-# MAX_TRAIN_PER_DATA 6, validation on 5% of the files with at most 10k validation samples per epoch.
+# MAX_TRAIN_PER_DATA 6, validation on 1% of the files with at most 10k validation samples per epoch.
 export BATCHSIZE="${BATCHSIZE:-256}"
 export MAX_TRAIN_PER_DATA="${MAX_TRAIN_PER_DATA:-6}"
 export VALIDATE="${VALIDATE:-1}"
-export VALIDATION_PROP="${VALIDATION_PROP:-0.05}"
+export VALIDATION_PROP="${VALIDATION_PROP:-0.01}"
 LR_SCHEDULE="${LR_SCHEDULE:-(0,8.0),(4M,4.0),(12M,2.0)}"
 MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-10000}"
 export TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:--use-aurora -wd-floor-frac 0.5 -lr-schedule $LR_SCHEDULE -max-val-samples $MAX_VAL_SAMPLES}"
