@@ -144,15 +144,21 @@ void testT19TerminalValues(NNEvaluator* nnEval, Logger& logger) {
     state.board.recomputeCachedPaths();
     state.board.hash = state.board.getHashFromScratch();
 
+    // The test asserts the chosen move, so the play selection must be deterministic.
     SearchParams params = createTestSearchParams(64, 1);
-    Q4S::Search search(params, nnEval, &logger, "t19a");
-    search.setPosition(state);
-    int move = search.runWholeSearchAndGetMove();
+    params.chosenMoveTemperatureEarly = 0.0;
+    params.chosenMoveTemperature = 0.0;
+    // 200 seeds: the winning step must be chosen every time.
+    for(int seed = 0; seed < 200; seed++) {
+      Q4S::Search search(params, nnEval, &logger, "t19a_seed" + to_string(seed));
+      search.setPosition(state);
+      int move = search.runWholeSearchAndGetMove();
 
-    testAssert(move == Q4Board::actionOfPawn(center));
-    Q4S::ReportedSearchValues values;
-    testAssert(search.getRootValues(values));
-    testAssert(values.value[0] > 0.9);
+      testAssert(move == Q4Board::actionOfPawn(center));
+      Q4S::ReportedSearchValues values;
+      testAssert(search.getRootValues(values));
+      testAssert(values.value[0] > 0.9);
+    }
   }
 
   // (b) Only the next seat can reach the center next turn and the mover cannot win at once:
@@ -188,6 +194,8 @@ void testT19TerminalValues(NNEvaluator* nnEval, Logger& logger) {
 
     SearchParams params = createTestSearchParams(400, 1);
     params.nnPolicyTemperature = 20.0f;
+    params.chosenMoveTemperatureEarly = 0.0;
+    params.chosenMoveTemperature = 0.0;
     Q4S::Search search(params, nnEval, &logger, "t19b");
     search.setPosition(state);
     int move = search.runWholeSearchAndGetMove();
@@ -225,6 +233,8 @@ void testT19TerminalValues(NNEvaluator* nnEval, Logger& logger) {
     state.board.hash = state.board.getHashFromScratch();
 
     SearchParams params = createTestSearchParams(100, 1);
+    params.chosenMoveTemperatureEarly = 0.0;
+    params.chosenMoveTemperature = 0.0;
     Q4S::Search search(params, nnEval, &logger, "t19c");
     search.setPosition(state);
     int move = search.runWholeSearchAndGetMove();
@@ -494,6 +504,9 @@ void testT21ExactEndgames(NNEvaluator* nnEval, Logger& logger) {
   testAssert(solvedPositions.size() >= 20);
 
   SearchParams params = createTestSearchParams(350, 1);
+  // The chosen move is asserted below: deterministic play selection.
+  params.chosenMoveTemperatureEarly = 0.0;
+  params.chosenMoveTemperature = 0.0;
   for(size_t i = 0; i < solvedPositions.size(); i++) {
     Q4S::Search search(params, nnEval, &logger, "t21_" + to_string(i));
     search.setPosition(solvedPositions[i]);
