@@ -924,3 +924,53 @@ def test_p4_snapshot_players_use_only_older_models(tmp_path):
                  "numGameThreads=2,maxVisits=16,maxPlies=60,q4PopulationMixedProb=1.0,logToStdout=false", 30)
     types = {p["type"] for rec in read_records(out1) for p in rec["players"]}
     assert "snapshot" not in types and "weak" in types, types
+
+
+def test_r1_random_net_selfplay(tmp_path):
+    """R1 (round 8b): selfplay with an empty models/ dir uses the random net, writing normal Q4 training data."""
+    katago = find_katago("eigen")
+    models_dir = str(tmp_path / "models")
+    os.makedirs(models_dir, exist_ok=True)
+    out_dir = str(tmp_path / "out")
+    cfg_path = get_cfg_path()
+    cmd = [
+        katago, "q4selfplay",
+        "-models-dir", models_dir,
+        "-output-dir", out_dir,
+        "-config", cfg_path,
+        "-max-games-total", "4",
+        "-seed", "r",
+        "-override-config", "numGameThreads=2,logToStdout=true,maxVisits=100,cheapSearchVisits=25"
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    assert proc.returncode == 0, f"q4selfplay failed:\n{proc.stdout}\n{proc.stderr}"
+
+    npz_files = sorted(glob.glob(os.path.join(out_dir, "random", "tdata", "*.npz")))
+    assert len(npz_files) >= 1, f"Expected at least one npz under out/random/tdata/, found: {npz_files}"
+
+    expected_keys = {
+        "binaryInputNCHWPacked",
+        "spatialDistNCHW",
+        "globalInputNC",
+        "policyTargetsNCMove",
+        "globalTargetsNC",
+        "scoreDistrN",
+        "valueTargetsNCHW",
+        "metadataInputNC",
+    }
+
+    found_c26_gt_0 = False
+    for nf in npz_files:
+        data = np.load(nf)
+        assert set(data.files) == expected_keys, f"Keys in {nf} do not match normal Q4 keys: {data.files}"
+        assert data["metadataInputNC"].shape == (data["globalTargetsNC"].shape[0], 192)
+        gt = data["globalTargetsNC"]
+        if np.any(gt[:, 26] > 0):
+            found_c26_gt_0 = True
+        v0_4_sum = np.sum(gt[:, 0:5], axis=-1)
+        v20_24_sum = np.sum(gt[:, 20:25], axis=-1)
+        assert np.all(np.abs(v0_4_sum - 1.0) < 1e-4), f"Value targets C0-4 sum failed: {v0_4_sum}"
+        assert np.all(np.abs(v20_24_sum - 1.0) < 1e-4), f"Value targets C20-24 sum failed: {v20_24_sum}"
+
+    assert found_c26_gt_0, "Expected rows with C26 > 0"
+

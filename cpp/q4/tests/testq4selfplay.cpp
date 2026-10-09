@@ -18,6 +18,7 @@
 #include "../play/q4playsettings.h"
 #include "../play/q4population.h"
 #include "../play/q4selfplaymanager.h"
+#include "../search/q4search.h"
 
 #include <cmath>
 #include <iostream>
@@ -443,6 +444,136 @@ void testSelfplayIntegration() {
   delete nnEval;
 }
 
+void testR1RandomNet() {
+  cout << "Testing R1 random net..." << endl;
+  Logger logger;
+
+  ConfigParser cfg;
+  cfg.overrideKey("nnCacheSizePowerOfTwo", "16");
+  cfg.overrideKey("nnMutexPoolSizePowerOfTwo", "12");
+  cfg.overrideKey("maxVisits", "100");
+  cfg.overrideKey("numSearchThreads", "1");
+  cfg.overrideKey("winLossUtilityFactor", "1.0");
+  cfg.overrideKey("cpuctExploration", "1.1");
+  cfg.overrideKey("fpuReductionMax", "0.2");
+  cfg.overrideKey("nnPolicyTemperature", "4.0");
+  cfg.overrideKey("valueWeightExponent", "0.5");
+  cfg.overrideKey("useUncertainty", "true");
+  cfg.overrideKey("useLcbForSelection", "false");
+  cfg.overrideKey("rootNoiseEnabled", "false");
+  cfg.overrideKey("rootNumSymmetriesToSample", "1");
+  cfg.overrideKey("staticScoreUtilityFactor", "0.0");
+  cfg.overrideKey("dynamicScoreUtilityFactor", "0.0");
+  cfg.overrideKey("useGraphSearch", "false");
+  cfg.overrideKey("rootEndingBonusPoints", "0.0");
+  cfg.overrideKey("rootPruneUselessMoves", "false");
+  cfg.overrideKey("maxPlies", "30");
+  cfg.overrideKey("initGamesWithPolicy", "false");
+  cfg.overrideKey("cheapSearchProb", "0.0");
+  cfg.overrideKey("cheapSearchVisits", "1");
+  cfg.overrideKey("cheapSearchTargetWeight", "0.0");
+  cfg.overrideKey("reduceVisits", "false");
+  cfg.overrideKey("reduceVisitsThreshold", "0.5");
+  cfg.overrideKey("reduceVisitsThresholdLookback", "1");
+  cfg.overrideKey("reducedVisitsMin", "1");
+  cfg.overrideKey("reducedVisitsWeight", "1.0");
+  cfg.overrideKey("earlyForkGameProb", "0.0");
+  cfg.overrideKey("earlyForkGameExpectedMoveProp", "0.0");
+  cfg.overrideKey("forkGameProb", "0.0");
+  cfg.overrideKey("forkGameMinChoices", "1");
+  cfg.overrideKey("earlyForkGameMaxChoices", "1");
+  cfg.overrideKey("forkGameMaxChoices", "1");
+  cfg.overrideKey("sidePositionProb", "0.0");
+  cfg.overrideKey("policySurpriseDataWeight", "0.0");
+  cfg.overrideKey("valueSurpriseDataWeight", "0.0");
+  cfg.overrideKey("scaleDataWeight", "1.0");
+  cfg.overrideKey("logSearchInfo", "false");
+  cfg.overrideKey("logMoves", "false");
+  cfg.overrideKey("q4EliminationProb", "0.0");
+  addPopulationKeys(cfg, "0");
+
+  Rand rand("testr1randomnet");
+  NNEvaluator* nnEval = Setup::initializeNNEvaluator(
+    "random", "/dev/null", "", cfg, logger, rand, 1,
+    Q4NNConst::POS_LEN, Q4NNConst::POS_LEN,
+    Setup::MaxBatchSizeRequest::explicitSize(16), true, false, Setup::SETUP_FOR_OTHER
+  );
+
+  // 1. Q4NN::evaluate on the start position
+  NNResultBuf buf;
+  Q4History history;
+  Q4NN::Eval out;
+  Q4NN::evaluate(*nnEval, buf, history, 0, false, out, nullptr, 1.0f);
+
+  float policySum = 0.0f;
+  testAssert(out.numLegalActions > 0);
+  for(int i = 0; i < out.numLegalActions; i++) {
+    int act = out.legalActions[i];
+    float p = out.policyProbs[0][act];
+    testAssert(isfinite(p));
+    testAssert(p > 0.0f);
+    policySum += p;
+  }
+  testAssert(std::abs(policySum - 1.0f) < 1e-5);
+
+  float valueSum = 0.0f;
+  for(int i = 0; i < 5; i++) {
+    testAssert(isfinite(out.valueAbs[i]));
+    valueSum += out.valueAbs[i];
+  }
+  testAssert(std::abs(valueSum - 1.0f) < 1e-5);
+
+  testAssert(isfinite(out.shorttermWinlossError));
+  testAssert(out.shorttermWinlossError < 0.01f);
+
+  // 2. Q4S::Search with 100 visits from start position
+  SearchParams searchParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_OTHER);
+  searchParams.maxVisits = 100;
+  searchParams.numThreads = 1;
+  Q4S::Search::checkParams(searchParams);
+
+  Q4S::Search search(searchParams, nnEval, &logger, "r1_random_net_search");
+  search.setPosition(history);
+  int searchAction = search.runWholeSearchAndGetMove();
+  testAssert(searchAction != Q4Board::NULL_ACTION);
+  testAssert(history.state.isLegalAction(searchAction));
+
+  // 3. One full self-play game through Q4GameRunner::runGame
+  Q4PlaySettings playSettings = Q4PlaySettings::loadForSelfplay(cfg);
+  Q4GameRunner runner(cfg, playSettings, logger);
+
+  Q4GameRunner::BotSpec botSpec;
+  botSpec.botIdx = 0;
+  botSpec.botName = "random";
+  botSpec.nnEval = nnEval;
+  botSpec.baseParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_OTHER);
+
+  Q4FinishedGameData* gameData = runner.runGame(
+    "test_random_net_game", botSpec, nullptr, logger,
+    []() noexcept { return false; }, nullptr, nullptr, nullptr, nullptr
+  );
+
+  testAssert(gameData != nullptr);
+  testAssert(!gameData->valueTargetsByTurn.empty());
+  testAssert(!gameData->comments.empty());
+  testAssert(gameData->comments.size() == gameData->endHist.events.size());
+
+  string scratchDir = "cpp/tests/scratch";
+  if(!FileUtils::exists(scratchDir))
+    MakeDir::make(scratchDir);
+  string tmpDir = "cpp/tests/scratch/q4_random_net_test";
+  if(!FileUtils::exists(tmpDir))
+    MakeDir::make(tmpDir);
+  Q4TrainingDataWriter writer(tmpDir, 100, 0.0, 54321);
+  writer.writeGame(*gameData);
+  writer.flushIfNonempty();
+  testAssert(writer.numGamesWritten() == 1);
+  testAssert(writer.numRowsWritten() > 0);
+
+  delete gameData;
+  delete nnEval;
+}
+
 } // namespace
 
 void Tests::runQ4SelfplayTests() {
@@ -451,5 +582,6 @@ void Tests::runQ4SelfplayTests() {
   testPlaySettingsValidation();
   testP2CompositionSampler();
   testSelfplayIntegration();
+  testR1RandomNet();
   cout << "All Q4 selfplay C++ tests passed!" << endl;
 }
