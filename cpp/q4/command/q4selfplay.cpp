@@ -327,7 +327,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     logger.write("Loaded latest neural net " + modelName + " from: " + modelFile);
 
     string modelOutputDir = outputDir + "/" + modelName;
-    string recordsOutputDir = modelOutputDir + "/records";
+    string recordsOutputDir = modelOutputDir + "/sgfs";
     string tdataOutputDir = modelOutputDir + "/tdata";
 
     int maxTries = 5;
@@ -367,7 +367,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
       tdataOutputDir, maxRowsPerTrainFile, firstFileRandMinProp, rand.nextUInt64()
     );
     ofstream* recordsOut = new ofstream();
-    FileUtils::open(*recordsOut, recordsOutputDir + "/" + Global::uint64ToHexString(rand.nextUInt64()) + ".q4.jsonl");
+    FileUtils::open(*recordsOut, recordsOutputDir + "/" + Global::uint64ToHexString(rand.nextUInt64()) + ".sgfs");
 
     logger.write("Model loading loop loaded new neural net " + nnEval->getModelName());
     manager->loadModelAndStartDataWriting(nnEval, tdataWriter, recordsOut);

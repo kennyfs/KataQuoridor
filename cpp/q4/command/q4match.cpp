@@ -36,7 +36,7 @@ struct TableTally {
 
 }  // namespace
 
-// katago q4match -config match.cfg [-override-config k=v,k=v] [-output games.jsonl] [-summary summary.json] [-list-games]
+// katago q4match -config match.cfg [-override-config k=v,k=v] [-output games.sgfs] [-summary summary.json] [-list-games]
 // Config mode: players / player_<name> / tables / table_<t> / table_<t>_openings (see q4matchengine.h and
 // cpp/configs/q4/match/). Quick mode (the Round 3 interface): -players spec,spec,spec,spec -games N [-rotate] [-maxplies N].
 int MainCmds::q4match(const std::vector<std::string>& args) {
@@ -208,7 +208,7 @@ int MainCmds::q4match(const std::vector<std::string>& args) {
     else
       tt.drawsOther++;
     if(outStream.is_open())
-      outStream << Q4Match::resultToJsonLine(mc, r) << "\n";
+      outStream << Q4Match::resultToSgfLine(mc, r) << "\n";
     played++;
     if(played % 25 == 0 || played == total)
       std::cout << "Played " << played << "/" << total << " games..." << std::endl;

@@ -392,12 +392,17 @@ void testSelfplayIntegration() {
   testAssert(!gameData->comments.empty());
   testAssert(gameData->comments.size() == gameData->endHist.events.size());
 
-  // Check move comment format
+  // Check move comment content: five probabilities that sum to 1, the visits and the weight
   for(size_t i = 0; i < gameData->endHist.events.size(); i++) {
     if(!gameData->endHist.events[i].isElimination) {
-      testAssert(gameData->comments[i].find("v=[") != string::npos);
-      testAssert(gameData->comments[i].find("visits=") != string::npos);
-      testAssert(gameData->comments[i].find("cheap=") != string::npos);
+      const Q4MoveComment& mc = gameData->comments[i];
+      testAssert(mc.valid);
+      float sum = 0.0f;
+      for(int c = 0; c < 5; c++)
+        sum += mc.p[c];
+      testAssert(sum > 0.99f && sum < 1.01f);
+      testAssert(mc.visits > 0);
+      testAssert(mc.weight >= 0.0f);
     }
   }
 
@@ -407,25 +412,34 @@ void testSelfplayIntegration() {
   rec.players.clear();
   for(int s = 0; s < 4; s++) {
     Q4PlayerInfo p;
-    p.name = "Seat " + to_string(s);
+    p.name = "b1c32_q4";
     p.type = "selfplay";
     p.net = "b1c32_q4";
     rec.players.push_back(p);
   }
   rec.result = gameData->endHist.isDraw ? "Draw" : (to_string(gameData->endHist.winnerSeat + 1) + "+");
   rec.events = gameData->endHist.events;
-  rec.comments = gameData->comments;
+  for(size_t i = 0; i < gameData->comments.size(); i++)
+    rec.setMoveComment(i, gameData->comments[i]);
   rec.hasGameHash = true;
   rec.gameHash0 = gameData->gameHash.hash0;
   rec.gameHash1 = gameData->gameHash.hash1;
-  string jsonLine = rec.toJsonLine();
-  testAssert(!jsonLine.empty());
-  Q4Record parsedRec = Q4Record::fromJsonLine(jsonLine);
+  string sgfLine = rec.toSgfLine();
+  testAssert(!sgfLine.empty() && sgfLine.find('\n') == string::npos);
+  Q4Record parsedRec = Q4Record::fromSgfLine(sgfLine);
   testAssert(parsedRec.events.size() == rec.events.size());
   testAssert(parsedRec.comments.size() == rec.comments.size());
   testAssert(parsedRec.hasGameHash);
   testAssert(parsedRec.gameHash0 == gameData->gameHash.hash0);
   testAssert(parsedRec.gameHash1 == gameData->gameHash.hash1);
+  for(size_t i = 0; i < rec.events.size(); i++) {
+    testAssert(parsedRec.moveComments[i].valid == rec.moveComments[i].valid);
+    if(rec.moveComments[i].valid) {
+      testAssert(parsedRec.moveComments[i].visits == rec.moveComments[i].visits);
+      for(int c = 0; c < 5; c++)
+        testAssert(std::abs(parsedRec.moveComments[i].p[c] - rec.moveComments[i].p[c]) <= 0.0051f);
+    }
+  }
 
   // Check data writer
   string scratchDir = "cpp/tests/scratch";

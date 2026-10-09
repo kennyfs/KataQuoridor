@@ -438,6 +438,7 @@ Q4FinishedGameData* runGame(
 
   gameData->startState = state;
   gameData->startHist = hist;
+  std::vector<int> commentTurnIdx;   // per comment: its index in the per-turn vectors, -1 for an elimination
 
   // The searches of the game: the learners' one (tree reuse across all their plies) and one per weak / snapshot seat.
   // After every ply every search gets makeMove.
@@ -505,7 +506,8 @@ Q4FinishedGameData* runGame(
           search->setPosition(hist);
         }
         eliminationDone = true;
-        gameData->comments.push_back("elim=" + std::to_string(sElim + 1));
+        gameData->comments.push_back(Q4MoveComment());   // an elimination has no search
+        commentTurnIdx.push_back(-1);
         if(state.isFinished)
           break;
       }
@@ -617,14 +619,14 @@ Q4FinishedGameData* runGame(
     gameData->targetWeightByTurn.push_back(limits.targetWeight);
     gameData->wasCheapSearchByTurn.push_back(limits.isCheapSearch);
 
-    // Record move comment
-    std::ostringstream cmt;
-    cmt << "v=[";
-    for(int vi = 0; vi < 5; vi++) {
-      cmt << (vi > 0 ? ", " : "") << std::fixed << std::setprecision(4) << vt.value[vi];
-    }
-    cmt << "] visits=" << unreducedVisits << " cheap=" << (limits.isCheapSearch ? 1 : 0);
-    gameData->comments.push_back(cmt.str());
+    // Record move comment (weight is filled in once the turn weights are final)
+    Q4MoveComment mc;
+    mc.valid = true;
+    for(int vi = 0; vi < 5; vi++)
+      mc.p[vi] = vt.value[vi];
+    mc.visits = unreducedVisits;
+    gameData->comments.push_back(mc);
+    commentTurnIdx.push_back((int)gameData->targetWeightByTurn.size() - 1);
 
     // Candidate side position
     if(!isObserverTurn && playSettings.sidePositionProb > 0.0 && gameRand.nextBool(playSettings.sidePositionProb) && rootNNOutput != nullptr) {
@@ -783,6 +785,9 @@ Q4FinishedGameData* runGame(
 
   // Unrounded copy
   gameData->targetWeightByTurnUnrounded = gameData->targetWeightByTurn;
+  for(size_t k = 0; k < gameData->comments.size(); k++)
+    if(commentTurnIdx[k] >= 0)
+      gameData->comments[k].weight = gameData->targetWeightByTurnUnrounded[commentTurnIdx[k]];
   for(auto* sp : gameData->sidePositions) sp->targetWeightUnrounded = sp->targetWeight;
 
   // Stochastic integerization

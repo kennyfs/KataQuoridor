@@ -110,8 +110,8 @@ void runGames(
   const std::function<void(const GameResult&)>& onGameDone
 );
 
-// The record of a finished game with its match metadata ("match": table, opening, rotation, ...).
-std::string resultToJsonLine(const MatchConfig& mc, const GameResult& r);
+// The record of a finished game as one SGF line (with its match metadata and the search comments).
+std::string resultToSgfLine(const MatchConfig& mc, const GameResult& r);
 
 }  // namespace Q4Match
 

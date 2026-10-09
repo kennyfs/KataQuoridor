@@ -132,17 +132,23 @@ void testM3PairedOpenings() {
     testAssert(rec.matchTable == mc.tables[r.spec.table].name);
     // The games use the self-play rules and the record says so.
     testAssert(rec.rules.repetitionDrawCount == 3 && rec.rules.maxPlies == 200);
-    testAssert(Q4Record::fromJsonLine(rec.toJsonLine()).rules.repetitionDrawCount == 3);
-    testAssert(rec.matchOpeningPlies >= 1 && rec.matchOpeningPlies <= 9);
+    testAssert(Q4Record::fromSgfLine(rec.toSgfLine()).rules.repetitionDrawCount == 3);
+    testAssert(rec.startTurnIdx >= 1 && rec.startTurnIdx <= 9);
     vector<int> opening;
-    for(int i = 0; i < rec.matchOpeningPlies; i++)
+    for(int i = 0; i < rec.startTurnIdx; i++)
       opening.push_back(rec.events[i].action);
     openingsByIndex[r.spec.opening].insert(opening);
     indexesByOpening[opening].insert(r.spec.opening);
-    // The record replays to the recorded result and survives a JSON round trip with its match metadata.
-    Q4Record back = Q4Record::fromJsonLine(rec.toJsonLine());
+    // The record replays to the recorded result and survives an SGF round trip with its match metadata.
+    Q4Record back = Q4Record::fromSgfLine(rec.toSgfLine());
     testAssert(back.matchTable == rec.matchTable && back.matchOpening == rec.matchOpening);
     testAssert(back.matchRotation == rec.matchRotation && back.drawReason == rec.drawReason);
+    testAssert(back.startTurnIdx == rec.startTurnIdx);
+    // Search players have a comment on each of their moves (not on the opening plies), bots have none.
+    for(size_t i = 0; i < rec.events.size(); i++) {
+      if(i < (size_t)rec.startTurnIdx)
+        testAssert(i >= back.moveComments.size() || !back.moveComments[i].valid);
+    }
     Q4History h(rec.rules);
     back.replay(h);
     testAssert(h.getResultString() == rec.result);

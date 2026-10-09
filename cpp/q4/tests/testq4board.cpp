@@ -9,7 +9,9 @@
 #include "../q4symmetry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -807,6 +809,117 @@ void testStyleTracker() {
   cout << "S1 (C++) passed!" << endl;
 }
 
+void testSgfRecord() {
+  // A random game with an elimination, played to a maxPlies draw; every move carries a comment.
+  Q4Rules rules;
+  rules.maxPlies = 30;
+  rules.repetitionDrawCount = 3;
+  rules.initialWalls[2] = 5;
+  Q4History hist(rules);
+  std::unique_ptr<Q4Bot> bot = Q4Bots::makeBot("random", 99, 0);
+  Q4Record rec;
+  rec.rules = rules;
+  rec.players[0].name = "netA"; rec.players[0].type = "selfplay"; rec.players[0].net = "netA"; rec.players[0].visits = 600;
+  rec.players[1].type = "weak"; rec.players[1].visits = 20;
+  bool eliminated = false;
+  while(!hist.isFinished) {
+    if(!eliminated && hist.plies >= 5) {
+      hist.eliminate(2);
+      eliminated = true;
+      continue;
+    }
+    int act = bot->getMove(hist.currentBoard);
+    hist.play(act);
+  }
+  rec.events = hist.events;
+  rec.result = hist.getResultString();
+  testAssert(rec.result == "Draw");
+  testAssert(eliminated);
+  rec.gtype = "fork";
+  rec.startTurnIdx = 2;
+  rec.hasGameHash = true;
+  rec.gameHash0 = 0x0123456789abcdefULL;
+  rec.gameHash1 = 0xfedcba9876543210ULL;
+  for(size_t i = 3; i < rec.events.size(); i += 2) {
+    if(rec.events[i].isElimination)
+      continue;
+    Q4MoveComment mc;
+    mc.valid = true;
+    float ps[5] = {0.31f, 0.22f, 0.27f, 0.15f, 0.05f};
+    for(int c = 0; c < 5; c++) mc.p[c] = ps[c];
+    mc.visits = 600 + (int)i;
+    mc.weight = 0.5f;
+    rec.setMoveComment(i, mc);
+  }
+  std::string line = rec.toSgfLine();
+  testAssert(line.compare(0, 9, "(;FF[4]GM") == 0 && line.find("GM[Q4]SZ[11]") != string::npos);
+  testAssert(line.find("RE[0]DR[maxPlies]") != string::npos);
+  testAssert(line.find("WN[5]") != string::npos);
+  testAssert(line.find(";EL[N]") != string::npos);
+  testAssert(line.find("C[0.31 0.22 0.27 0.15 0.05 v=603 weight=0.50]") != string::npos);
+  testAssert(line.find('\n') == string::npos);
+  Q4Record back = Q4Record::fromSgfLine(line);
+  testAssert(back.rules == rules);
+  testAssert(back.result == "Draw" && back.drawReason == "maxPlies" && back.gtype == "fork");
+  testAssert(back.startTurnIdx == 2 && back.matchOpening < 0);
+  testAssert(back.hasGameHash && back.gameHash0 == rec.gameHash0 && back.gameHash1 == rec.gameHash1);
+  testAssert(back.players[0].name == "netA" && back.players[0].net == "netA" && back.players[0].visits == 600);
+  testAssert(back.players[1].type == "weak" && back.players[1].visits == 20 && back.players[2].net.empty());
+  testAssert(back.events.size() == rec.events.size());
+  for(size_t i = 0; i < rec.events.size(); i++) {
+    testAssert(back.events[i].isElimination == rec.events[i].isElimination);
+    testAssert(back.events[i].action == rec.events[i].action);
+    testAssert(back.events[i].eliminatedSeat == rec.events[i].eliminatedSeat);
+    testAssert(back.moveComments[i].valid == rec.moveComments[i].valid);
+    if(rec.moveComments[i].valid) {
+      testAssert(back.moveComments[i].visits == rec.moveComments[i].visits);
+      testAssert(std::abs(back.moveComments[i].p[1] - 0.22f) < 1e-4f && back.moveComments[i].weight == 0.5f);
+    }
+  }
+  Q4History h2;
+  back.replay(h2);
+  testAssert(h2.getResultString() == "Draw" && h2.plies == hist.plies);
+  testAssert(back.toSgfLine() == line);
+
+  // A decided game with match metadata and no comments; names are escaped
+  Q4Rules plain;
+  Q4History h3(plain);
+  Q4Record win;
+  win.rules = plain;
+  win.players[3].name = "we]ird\\name";
+  while(!h3.isFinished && h3.plies < 300)
+    h3.play(bot->getMove(h3.currentBoard));
+  win.events = h3.events;
+  win.result = h3.isFinished && h3.winnerSeat >= 0 ? h3.getResultString() : "none";
+  win.matchTable = "t1"; win.matchOpening = 3; win.matchRotation = 1; win.startTurnIdx = 6;
+  std::string wline = win.toSgfLine();
+  testAssert(wline.find("table=t1,opening=3,rotation=1") != string::npos);
+  Q4Record wback = Q4Record::fromSgfLine(wline);
+  testAssert(wback.players[3].name == "we]ird\\name" && wback.result == win.result);
+  testAssert(wback.matchTable == "t1" && wback.matchOpening == 3 && wback.matchRotation == 1);
+  testAssert(wback.comments.empty() && wback.moveComments.empty());
+  if(win.result == "none")
+    testAssert(wline.find("RE[?]DR[unfinished]") != string::npos);
+
+  // Malformed lines are rejected
+  auto rejects = [](const std::string& text) {
+    try { Q4Record::fromSgfLine(text); }
+    catch(const StringError&) { return true; }
+    return false;
+  };
+  testAssert(rejects(""));
+  testAssert(rejects("{\"rules\": {}}"));
+  testAssert(rejects("(;FF[4]GM[1]SZ[17])"));                                    // a Duel game
+  testAssert(rejects("(;FF[4]GM[Q4]SZ[11]RE[0];S[f2]"));                         // no closing )
+  testAssert(rejects("(;FF[4]GM[Q4]SZ[11]RE[X])"));                              // bad result
+  testAssert(rejects("(;FF[4]GM[Q4]SZ[11]RE[S];W[b6])"));                        // not the seat to move
+  testAssert(rejects("(;FF[4]GM[Q4]SZ[11]RE[S];S[zz])"));                        // bad action
+  testAssert(rejects("(;FF[4]GM[Q4]SZ[11]RE[S];S[f2)"));                         // unterminated value
+  Q4MoveComment junk;
+  testAssert(!Q4MoveComment::parse("elim", junk) && !junk.valid);
+  cout << "SGF record test passed" << endl;
+}
+
 }  // namespace
 
 void Tests::runQ4BoardTests() {
@@ -822,6 +935,7 @@ void Tests::runQ4BoardTests() {
   testWallFloodFillFuzz();
   testPlayStateConsistency();
   testStyleTracker();
+  testSgfRecord();
 
   cout << "All Q4 Board tests PASSED!" << endl;
 }

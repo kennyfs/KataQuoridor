@@ -14,6 +14,7 @@
 #include "../q4board.h"
 #include "../q4style.h"
 #include "../q4history.h"
+#include "../q4record.h"
 #include "../q4playstate.h"
 #include "../q4rules.h"
 #include "../nn/q4nn.h"
@@ -116,7 +117,7 @@ struct Q4FinishedGameData {
 
   std::vector<Q4SidePosition*> sidePositions;
   std::vector<ChangedNeuralNet*> changedNeuralNets;
-  std::vector<std::string> comments;
+  std::vector<Q4MoveComment> comments;   // one per event after startHist (an elimination: not valid)
 
   double trainingWeight;
   int startPly;

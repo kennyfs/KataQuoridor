@@ -532,14 +532,15 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
       for(int s = 0; s < 4; s++) {
         const Q4SeatInfo& info = gameData->seatInfo[s];
         Q4PlayerInfo p;
-        p.name = "Seat " + std::to_string(s);
-        if(info.kind == SEAT_GRUDGE)
-          p.name += " >" + std::to_string(info.grudgeTarget);
         if(info.kind == SEAT_LEARNER) {
+          p.name = modelData->modelName;
           p.type = "selfplay";
           p.net = modelData->modelName;
         }
         else {
+          p.name = info.net.empty() ? std::string(seatKindName(info.kind)) : info.net;
+          if(info.kind == SEAT_GRUDGE)
+            p.name += ">" + std::to_string(info.grudgeTarget);
           p.type = seatKindName(info.kind);
           p.net = info.net;
           p.visits = info.visits;
@@ -562,10 +563,16 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
       rec.hasGameHash = true;
       rec.gameHash0 = gameData->gameHash.hash0;
       rec.gameHash1 = gameData->gameHash.hash1;
-      rec.comments.clear();
-      rec.comments.resize(gameData->startHist.events.size(), "");
-      rec.comments.insert(rec.comments.end(), gameData->comments.begin(), gameData->comments.end());
-      *modelData->recordsOut << rec.toJsonLine() << "\n";
+      rec.startTurnIdx = (int)gameData->startHist.events.size();
+      bool anyOther = false;
+      for(int s = 0; s < 4; s++)
+        anyOther = anyOther || gameData->seatInfo[s].kind != SEAT_LEARNER;
+      rec.gtype = gameData->mode == Q4FinishedGameData::MODE_FORK ? "fork" : (anyOther ? "mixed" : "normal");
+      if(gameData->endHist.isDraw)
+        rec.drawReason = gameData->endHist.plies >= gameData->rules.maxPlies ? "maxPlies" : "repetition";
+      for(size_t k = 0; k < gameData->comments.size(); k++)
+        rec.setMoveComment(rec.startTurnIdx + k, gameData->comments[k]);
+      *modelData->recordsOut << rec.toSgfLine() << "\n";
       modelData->recordsOut->flush();
     }
 

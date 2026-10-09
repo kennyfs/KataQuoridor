@@ -41,12 +41,14 @@ static int runStyle(const std::vector<std::string>& args) {
   while(std::getline(in, line)) {
     if(Global::trim(line).empty())
       continue;
-    // A game record, or {"rules": {...}, "initialBoard": {...}, "events": [{"a": "e5h"} | {"elim": seat0to3}]} (a
+    // A game record (an SGF line), or {"rules": {...}, "initialBoard": {...}, "events": [{"a": "e5h"} | {"elim": seat0to3}]} (a
     // start position that is not the standard one, for the symmetry tests).
     Q4Record rec;
     Q4History hist;
-    json j = json::parse(line);
-    if(j.contains("initialBoard")) {
+    // A game record is an SGF line; the JSON form below is only an input of the symmetry tests.
+    const bool isJson = Global::trim(line)[0] == '{';
+    json j = isJson ? json::parse(line) : json::object();
+    if(isJson && j.contains("initialBoard")) {
       Q4Rules rules;
       if(j.contains("rules")) {
         const json& r = j["rules"];
@@ -63,7 +65,7 @@ static int runStyle(const std::vector<std::string>& args) {
       }
     }
     else {
-      rec = Q4Record::fromJsonLine(line);
+      rec = Q4Record::fromSgfLine(Global::trim(line));
       hist.clear(Q4Board(rec.rules), rec.rules);
     }
     std::vector<int> perspectives;
@@ -165,7 +167,7 @@ static int runPopGames(const std::vector<std::string>& args) {
     }
     rec.events = hist.events;
     rec.result = hist.getResultString();
-    std::cout << rec.toJsonLine() << "\n";
+    std::cout << rec.toSgfLine() << "\n";
   }
   return 0;
 }

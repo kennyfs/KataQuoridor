@@ -273,17 +273,29 @@ GameResult playGame(
   }
 
   bool aborted = false;
+  std::vector<std::pair<size_t, Q4MoveComment>> comments;   // (event index, search values of the move)
   while(!history.isFinished) {
     int toMove = history.currentBoard.toMove;
     int act;
-    if(players[toMove].search != nullptr)
+    Q4MoveComment mc;
+    if(players[toMove].search != nullptr) {
       act = players[toMove].search->runWholeSearchAndGetMove();
+      Q4S::ReportedSearchValues values;
+      players[toMove].search->getRootValues(values);
+      mc.valid = true;
+      for(int c = 0; c < 5; c++)
+        mc.p[c] = (float)values.value[c];
+      mc.visits = players[toMove].search->getRootVisits();
+      mc.weight = 1.0f;
+    }
     else
       act = players[toMove].bot->getMove(history.currentBoard);
     if(act == Q4Board::NULL_ACTION) {
       aborted = true;
       break;
     }
+    if(mc.valid)
+      comments.emplace_back(history.events.size(), mc);
     history.play(act);
     for(int s = 0; s < 4; s++) {
       if(players[s].search != nullptr) {
@@ -315,8 +327,10 @@ GameResult playGame(
   rec.matchTable = mc.tables[g.table].name;
   rec.matchOpening = g.opening;
   rec.matchRotation = g.rotation;
-  rec.matchOpeningPlies = (int)opening.size();
+  rec.startTurnIdx = (int)opening.size();
   rec.drawReason = res.drawReason;
+  for(const auto& c : comments)
+    rec.setMoveComment(c.first, c.second);
   return res;
 }
 
@@ -385,9 +399,9 @@ void runGames(
     std::rethrow_exception(error);
 }
 
-std::string resultToJsonLine(const MatchConfig& mc, const GameResult& r) {
+std::string resultToSgfLine(const MatchConfig& mc, const GameResult& r) {
   (void)mc;
-  return r.record.toJsonLine();
+  return r.record.toSgfLine();
 }
 
 }  // namespace Q4Match

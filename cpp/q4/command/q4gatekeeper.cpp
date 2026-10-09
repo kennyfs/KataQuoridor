@@ -189,13 +189,13 @@ int MainCmds::q4gatekeeper(const std::vector<std::string>& args) {
 
     const std::string outThis = outputDir + "/" + testName;
     MakeDir::make(outThis);
-    std::ofstream gamesOut(outThis + "/games.jsonl");
+    std::ofstream gamesOut(outThis + "/games.sgfs");
     double ababPoints = 0.0;
     int ababGames = 0;
     std::map<int, double> benchCandPoints, benchBasePoints;   // opening -> summed points of the tested net
     std::map<int, int> benchCandGames, benchBaseGames;
     Q4Match::runGames(mc, games, cfg, searchParams, logger, Setup::SETUP_FOR_OTHER, [&](const Q4Match::GameResult& r) {
-      gamesOut << Q4Match::resultToJsonLine(mc, r) << "\n";
+      gamesOut << Q4Match::resultToSgfLine(mc, r) << "\n";
       const std::string& tname = mc.tables[r.spec.table].name;
       if(tname == "abab") {
         ababGames++;

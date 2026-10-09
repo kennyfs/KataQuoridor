@@ -358,7 +358,7 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
         rec.rules = history.rules;
         rec.events = history.events;
         rec.result = history.getResultString();
-        respondSuccess(rec.toJsonLine());
+        respondSuccess(rec.toSgfLine());
       }
       else if(cmd == "loadrecord") {
         if(cmdArgs.empty())
@@ -386,7 +386,7 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
         if(!found)
           throw StringError("Record number " + Global::intToString(targetLine) + " not found in " + file);
 
-        Q4Record rec = Q4Record::fromJsonLine(rline);
+        Q4Record rec = Q4Record::fromSgfLine(rline);
         rules = rec.rules;
         rec.replay(history);
         if(search) { search->clearSearch(); search->setPosition(history); }
