@@ -3,6 +3,7 @@
 #   python/selfplay/q4_run1.sh [BASEDIR]     (default BASEDIR: /home/kenny/q4/run1)
 BASEDIR="${1:-/home/kenny/q4/run1}"
 HERE="$(dirname "$(realpath "$0")")"
+export KATAGO_BIN="${KATAGO_BIN:-$(realpath "$HERE/../../cpp/katago")}"   # the binary built in cpp/ (cmake . && make)
 
 export MAX_CYCLES="${MAX_CYCLES:-1}"
 export START_AT="${START_AT:-shuffle}"
