@@ -14,6 +14,7 @@
 #include "../dataio/q4trainingwrite.h"
 #include "../q4record.h"
 #include "q4play.h"
+#include "q4population.h"
 
 namespace Q4Play {
 
@@ -54,6 +55,9 @@ class Q4SelfPlayManager {
   void release(NNEvaluator* nnEval);
 
   void cleanupUnusedModelsOlderThan(double seconds);
+  // Unloads the models that are not acquired and whose name is not in `keep` (the snapshot manager of Q4 population
+  // self-play, which has no "latest" model).
+  void unloadUnusedModelsNotIn(const std::vector<std::string>& keep);
   void clearUnusedModelCaches();
 
   void countOneGameStarted(NNEvaluator* nnEval);
@@ -87,6 +91,16 @@ class Q4SelfPlayManager {
       int64_t cutoffGames = 0;
       int64_t eliminations = 0;
       int64_t rowsWritten = 0;
+      // Population self-play: learner seats' results by number of learners (index = learners, 1..4) and by the
+      // kinds of the other seats in the game (index = Q4SeatKind of the opponent, 1..6).
+      int64_t popGames[5] = {0, 0, 0, 0, 0};
+      int64_t popLearnerSeats[5] = {0, 0, 0, 0, 0};  // learner seats summed over the games
+      double popLearnerPoints[5] = {0, 0, 0, 0, 0};  // 1 per game won by a learner seat, 1/n for a draw with n alive
+      int64_t kindGames[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};       // games with at least one such seat
+      int64_t kindSeats[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};       // such seats summed over those games
+      double kindPoints[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};       // points won by seats of that kind
+      double kindLearnerPoints[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0}; // points of the learner seats in those games
+      int64_t kindLearnerSeats[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0}; // learner seats in those games
     };
     Q4Stats q4Stats;
 

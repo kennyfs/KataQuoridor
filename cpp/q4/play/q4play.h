@@ -18,7 +18,9 @@
 #include "../q4playstate.h"
 #include "../q4rules.h"
 #include "../search/q4search.h"
+#include "../q4bots.h"
 #include "q4playsettings.h"
+#include "q4population.h"
 
 namespace Q4Play {
 
@@ -91,6 +93,31 @@ class Q4GameInitializer {
   std::vector<double> q4RepetitionDrawCountWeights;
 };
 
+// The non-learner players of one game (population self-play). Seats of kind SEAT_LEARNER are played by the
+// learners' search (the `bot` of Play::runGame); the others by a q4bot or by their own search (not owned here).
+struct Q4SeatPlayer {
+  int kind = SEAT_LEARNER;
+  std::unique_ptr<Q4Bot> bot;
+  Q4S::Search* search = nullptr;
+};
+
+struct Q4GameSeats {
+  Q4SeatPlayer players[4];
+  Q4SeatInfo info[4];
+};
+
+// A snapshot model acquired for the duration of a game.
+struct Q4SnapshotRef {
+  std::string name;
+  NNEvaluator* nnEval;
+};
+
+// How the game runner gets the snapshot nets of population games (null: there are none).
+struct Q4SnapshotSource {
+  std::function<std::vector<Q4SnapshotRef>()> acquireAll;
+  std::function<void(const std::vector<Q4SnapshotRef>&)> releaseAll;
+};
+
 namespace Play {
   int loadMaxMovesPerGame(ConfigParser& cfg);
 
@@ -128,7 +155,8 @@ namespace Play {
     const Q4OtherGameProperties& otherGameProps,
     Rand& gameRand,
     const std::function<NNEvaluator*()>& checkForNewNNEval,
-    const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove
+    const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove,
+    Q4GameSeats* seats = nullptr
   );
 
   void maybeForkGame(
@@ -172,7 +200,8 @@ class Q4GameRunner {
     const WaitableFlag* shouldPause,
     const std::function<NNEvaluator*()>& checkForNewNNEval,
     const std::function<void(const BotSpec&, Q4S::Search*)>& afterInitialization,
-    const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove
+    const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove,
+    const Q4SnapshotSource* snapshotSource = nullptr
   );
 
   const Q4GameInitializer* getGameInitializer() const { return gameInit.get(); }

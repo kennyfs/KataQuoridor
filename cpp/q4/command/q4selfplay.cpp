@@ -17,6 +17,7 @@
 #include "../play/q4selfplaymanager.h"
 #include "../search/q4search.h"
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <fstream>
@@ -35,6 +36,41 @@ static void createDirectoriesRecursive(const string& path) {
   if(ec)
     throw StringError("Error creating directory: " + ec.message());
 }
+
+namespace {
+
+struct ListedModel {
+  string name;
+  string file;
+  ghc::filesystem::file_time_type time;
+};
+
+// All models under modelsDir, named as LoadModel::findLatestModel names them (the directory for a generic file name).
+vector<ListedModel> listModels(const string& modelsDir) {
+  static const vector<string> suffixes = {".bin.gz", ".bin", "model.txt.gz", "model.txt"};
+  static const vector<string> genericNames = {"model.bin.gz", "model.bin", "model.txt.gz", "model.txt"};
+  vector<ListedModel> models;
+  for(const auto& entry : gfs::recursive_directory_iterator(gfs::u8path(modelsDir))) {
+    const gfs::path& path = entry.path();
+    if(!gfs::is_regular_file(path))
+      continue;
+    string filename = path.filename().u8string();
+    bool acceptable = false;
+    for(const string& suffix : suffixes)
+      acceptable = acceptable || Global::isSuffix(filename, suffix);
+    if(!acceptable)
+      continue;
+    ListedModel m;
+    m.file = path.u8string();
+    m.time = gfs::last_write_time(path);
+    bool generic = std::find(genericNames.begin(), genericNames.end(), filename) != genericNames.end();
+    m.name = generic ? path.parent_path().filename().u8string() : filename;
+    models.push_back(m);
+  }
+  return models;
+}
+
+}  // namespace
 
 static std::atomic<bool> sigReceived(false);
 static std::atomic<bool> shouldStop(false);
@@ -153,11 +189,87 @@ int MainCmds::q4selfplay(const vector<string>& args) {
   }
 
   Q4Play::Q4PlaySettings playSettings = Q4Play::Q4PlaySettings::loadForSelfplay(cfg);
+  const Q4Play::Q4PopulationSettings popSettings = playSettings.population;
   Q4Play::Q4GameRunner* gameRunner = new Q4Play::Q4GameRunner(cfg, gameSeedBase + ":gameInit", playSettings, logger);
   bool autoCleanupAllButLatestIfUnused = true;
   Q4Play::Q4SelfPlayManager* manager = new Q4Play::Q4SelfPlayManager(
     maxDataQueueSize, &logger, logGamesEvery, autoCleanupAllButLatestIfUnused
   );
+
+  // Snapshot nets of population games: the numSnapshots most recent other models, kept in a second manager (no
+  // data-writing loops, as KataGo keeps models whose games write no data), refreshed when the current net changes.
+  Q4Play::Q4SelfPlayManager* snapshotManager = new Q4Play::Q4SelfPlayManager(
+    1, &logger, 1, false
+  );
+  std::mutex wantedSnapshotsMutex;
+  vector<string> wantedSnapshots;
+  auto refreshSnapshots = [&](const string& currentName) {
+    if(!popSettings.usesSnapshots())
+      return;
+    vector<ListedModel> models = listModels(modelsDir);
+    const ListedModel* current = nullptr;
+    for(const ListedModel& m : models)
+      if(m.name == currentName)
+        current = &m;
+    vector<const ListedModel*> older;
+    if(current != nullptr) {
+      for(const ListedModel& m : models)
+        if(m.name != currentName && m.time < current->time)
+          older.push_back(&m);
+    }
+    std::sort(older.begin(), older.end(), [](const ListedModel* a, const ListedModel* b) {
+      return a->time != b->time ? a->time > b->time : a->name > b->name;
+    });
+    vector<string> wanted;
+    for(const ListedModel* m : older) {
+      if((int)wanted.size() >= popSettings.numSnapshots)
+        break;
+      if(std::find(wanted.begin(), wanted.end(), m->name) != wanted.end())
+        continue;
+      if(!snapshotManager->hasModel(m->name)) {
+        ConfigParser snapCfg = cfg;
+        snapCfg.overrideKey("nnCacheSizePowerOfTwo", Global::intToString(popSettings.snapshotCacheSizePowerOfTwo));
+        Rand snapRand(gameSeedBase + ":snapshot:" + m->name);
+        NNEvaluator* snapEval = Setup::initializeNNEvaluator(
+          m->name, m->file, "", snapCfg, logger, snapRand, cfg.getInt("numSearchThreads") * numGameThreads,
+          Q4NNConst::POS_LEN, Q4NNConst::POS_LEN, Setup::MaxBatchSizeRequest::requireFromConfig(),
+          true, false, Setup::SETUP_FOR_OTHER
+        );
+        snapshotManager->loadModelNoDataWritingLoop(snapEval, nullptr, nullptr);
+        logger.write("Loaded snapshot neural net " + m->name + " from: " + m->file);
+      }
+      wanted.push_back(m->name);
+    }
+    {
+      std::lock_guard<std::mutex> lock(wantedSnapshotsMutex);
+      wantedSnapshots = wanted;
+    }
+    snapshotManager->unloadUnusedModelsNotIn(wanted);
+    string list;
+    for(const string& w : wanted)
+      list += " " + w;
+    logger.write("Snapshots for population games (current " + currentName + "):" + (list.empty() ? " none" : list));
+  };
+  Q4Play::Q4SnapshotSource snapshotSource;
+  snapshotSource.acquireAll = [&]() {
+    vector<string> names;
+    {
+      std::lock_guard<std::mutex> lock(wantedSnapshotsMutex);
+      names = wantedSnapshots;
+    }
+    std::sort(names.begin(), names.end());
+    vector<Q4Play::Q4SnapshotRef> refs;
+    for(const string& n : names) {
+      NNEvaluator* eval = snapshotManager->acquireModel(n);
+      if(eval != nullptr)
+        refs.push_back({n, eval});
+    }
+    return refs;
+  };
+  snapshotSource.releaseAll = [&](const vector<Q4Play::Q4SnapshotRef>& refs) {
+    for(const Q4Play::Q4SnapshotRef& r : refs)
+      snapshotManager->release(r.name);
+  };
 
   Setup::initializeSession(cfg);
 
@@ -173,7 +285,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
   std::signal(SIGTERM, signalHandler);
 
   auto loadLatestNeuralNetIntoManager =
-    [&manager, maxRowsPerTrainFile, firstFileRandMinProp,
+    [&manager, maxRowsPerTrainFile, firstFileRandMinProp, &refreshSnapshots,
      &modelsDir, &outputDir, &logger, &cfg, numGameThreads, gameSeedBase](const string* lastNetName) -> bool {
 
     string modelName;
@@ -249,6 +361,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
 
     logger.write("Model loading loop loaded new neural net " + nnEval->getModelName());
     manager->loadModelAndStartDataWriting(nnEval, tdataWriter, recordsOut);
+    refreshSnapshots(modelName);
     return true;
   };
 
@@ -278,7 +391,8 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     maxValidGamesTotal,
     maxRowsTotal,
     &baseParams,
-    &gameSeedBase
+    &gameSeedBase,
+    &snapshotSource
   ](int threadIdx) {
     auto shouldStopFunc = []() noexcept {
       return shouldStop.load();
@@ -342,7 +456,8 @@ int MainCmds::q4selfplay(const vector<string>& args) {
           shouldPause,
           (switchNetsMidGame ? checkForNewNNEval : nullptr),
           nullptr,
-          nullptr
+          nullptr,
+          &snapshotSource
         );
       }
 
@@ -418,6 +533,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
   modelLoadLoopThread.join();
 
   delete manager;
+  delete snapshotManager;
   delete gameRunner;
   delete forkData;
 

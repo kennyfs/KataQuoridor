@@ -16,6 +16,7 @@
 #include "../dataio/q4trainingwrite.h"
 #include "../play/q4play.h"
 #include "../play/q4playsettings.h"
+#include "../play/q4population.h"
 #include "../play/q4selfplaymanager.h"
 
 #include <cmath>
@@ -120,6 +121,156 @@ void testTDTargetsMath() {
   testAssert(std::abs(buf[3] - 0.3f) < 1e-6); // prev = seat 1
 }
 
+void addPopulationKeys(ConfigParser& cfg, const string& mixedProb) {
+  cfg.overrideKey("q4PopulationMixedProb", mixedProb);
+  cfg.overrideKey("q4PopulationWeights", "weak:1, snapshot:1, greedy:0.5, randomPawn:0.5, basher:0.5, grudge:0.5");
+  cfg.overrideKey("q4PopulationWeakVisits", "1, 2, 4, 8, 16, 32");
+  cfg.overrideKey("q4PopulationWeakTemperatureMin", "0.5");
+  cfg.overrideKey("q4PopulationWeakTemperatureMax", "1.5");
+  cfg.overrideKey("q4PopulationNumSnapshots", "3");
+  cfg.overrideKey("q4PopulationSnapshotVisits", "100");
+  cfg.overrideKey("q4PopulationSnapshotChosenMoveTemperatureEarly", "0.6");
+  cfg.overrideKey("q4PopulationSnapshotChosenMoveTemperature", "0.2");
+  cfg.overrideKey("q4PopulationSnapshotCacheSizePowerOfTwo", "16");
+}
+
+// P2: the composition sampler on 10,000 draws matches the configured probabilities (docs/q4/rounds/R7.md).
+void testP2CompositionSampler() {
+  cout << "Running P2 composition sampler..." << endl;
+  ConfigParser cfg;
+  addPopulationKeys(cfg, "0.5");
+  Q4PopulationSettings pop = Q4PopulationSettings::load(cfg);
+  testAssert(pop.mixedProb == 0.5 && pop.numSnapshots == 3 && pop.snapshotVisits == 100);
+  testAssert(pop.kindWeights[SEAT_WEAK] == 1.0 && pop.kindWeights[SEAT_GRUDGE] == 0.5);
+
+  const int N = 10000;
+  Rand rand("p2_sampler");
+  int numMixed = 0;
+  int learnersCount[5] = {0, 0, 0, 0, 0};
+  int learnerSeatCount[4] = {0, 0, 0, 0};   // among mixed games with 1 learner
+  int kindCount[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};
+  int weakVisitsCount[64] = {0};
+  int snapshotIdxCount[3] = {0, 0, 0};
+  double weakTempSum = 0.0, weakTempMin = 1e9, weakTempMax = -1e9;
+  int numWeak = 0, numNonLearner = 0, numSnapshot = 0, numGrudgeInTwoLearner = 0;
+  for(int i = 0; i < N; i++) {
+    Q4Composition c = sampleComposition(rand, pop, 3);
+    int nl = c.numLearners();
+    testAssert(nl >= 1 && nl <= 4);
+    learnersCount[nl]++;
+    if(nl == 4)
+      continue;
+    numMixed++;
+    if(nl == 1)
+      for(int s = 0; s < 4; s++)
+        if(c.seats[s].kind == SEAT_LEARNER)
+          learnerSeatCount[s]++;
+    for(int s = 0; s < 4; s++) {
+      const Q4SeatSpec& spec = c.seats[s];
+      if(spec.kind == SEAT_LEARNER)
+        continue;
+      numNonLearner++;
+      kindCount[spec.kind]++;
+      if(spec.kind == SEAT_WEAK) {
+        numWeak++;
+        testAssert(spec.weakVisits >= 1 && spec.weakVisits <= 32 && (spec.weakVisits & (spec.weakVisits - 1)) == 0);
+        weakVisitsCount[spec.weakVisits]++;
+        testAssert(spec.weakTemperature >= 0.5 && spec.weakTemperature <= 1.5);
+        weakTempSum += spec.weakTemperature;
+        weakTempMin = std::min(weakTempMin, spec.weakTemperature);
+        weakTempMax = std::max(weakTempMax, spec.weakTemperature);
+      }
+      if(spec.kind == SEAT_SNAPSHOT) {
+        numSnapshot++;
+        testAssert(spec.snapshotIdx >= 0 && spec.snapshotIdx < 3);
+        snapshotIdxCount[spec.snapshotIdx]++;
+      }
+      if(spec.kind == SEAT_GRUDGE) {
+        // the target is a learner seat
+        testAssert(spec.grudgeTarget >= 0 && spec.grudgeTarget < 4 && c.seats[spec.grudgeTarget].kind == SEAT_LEARNER);
+        if(nl == 2) {
+          numGrudgeInTwoLearner++;
+        }
+      }
+    }
+  }
+  auto near = [](double observed, double expected, double sigmas, double n) {
+    double sd = std::sqrt(expected * (1.0 - expected) / n);
+    return std::fabs(observed - expected) <= sigmas * sd;
+  };
+  // all-learner games: probability 1 - mixedProb
+  testAssert(near((double)learnersCount[4] / N, 0.5, 4.0, N));
+  // among the mixed games the number of learners is uniform in {1,2,3}
+  for(int nl = 1; nl <= 3; nl++)
+    testAssert(near((double)learnersCount[nl] / numMixed, 1.0 / 3.0, 4.0, numMixed));
+  // the seat of a single learner is uniform
+  int numOneLearner = learnersCount[1];
+  for(int s = 0; s < 4; s++)
+    testAssert(near((double)learnerSeatCount[s] / numOneLearner, 0.25, 4.0, numOneLearner));
+  // the kinds of the other seats follow the weights (chi-square, 5 degrees of freedom: 20.5 is the 0.001 quantile)
+  double totalWeight = 0.0;
+  for(int k = SEAT_WEAK; k < NUM_SEAT_KINDS; k++)
+    totalWeight += pop.kindWeights[k];
+  double chi2 = 0.0;
+  for(int k = SEAT_WEAK; k < NUM_SEAT_KINDS; k++) {
+    double expected = numNonLearner * pop.kindWeights[k] / totalWeight;
+    chi2 += (kindCount[k] - expected) * (kindCount[k] - expected) / expected;
+  }
+  cout << "  P2: " << N << " draws, all-learner " << learnersCount[4] << ", mixed " << numMixed << " (1/2/3 learners "
+       << learnersCount[1] << "/" << learnersCount[2] << "/" << learnersCount[3] << "), kind chi2 " << chi2 << endl;
+  testAssert(chi2 < 20.5);
+  // weak players: visits uniform over {1,2,4,8,16,32}, temperature uniform in [0.5,1.5]
+  for(int v = 1; v <= 32; v *= 2)
+    testAssert(near((double)weakVisitsCount[v] / numWeak, 1.0 / 6.0, 4.0, numWeak));
+  testAssert(std::fabs(weakTempSum / numWeak - 1.0) < 0.02 && weakTempMin < 0.51 && weakTempMax > 1.49);
+  // snapshots uniform; grudge targets uniform over the 2 learner seats of a 2-learner game
+  for(int i = 0; i < 3; i++)
+    testAssert(near((double)snapshotIdxCount[i] / numSnapshot, 1.0 / 3.0, 4.0, numSnapshot));
+  testAssert(numGrudgeInTwoLearner > 100);
+
+  // No snapshot available: the kind is never drawn
+  {
+    Rand r2("p2_nosnap");
+    for(int i = 0; i < 2000; i++) {
+      Q4Composition c = sampleComposition(r2, pop, 0);
+      for(int s = 0; s < 4; s++)
+        testAssert(c.seats[s].kind != SEAT_SNAPSHOT);
+    }
+  }
+  // mixedProb 0: always all learners; mixedProb 1: never
+  {
+    ConfigParser c0, c1;
+    addPopulationKeys(c0, "0");
+    addPopulationKeys(c1, "1");
+    Q4PopulationSettings p0 = Q4PopulationSettings::load(c0), p1 = Q4PopulationSettings::load(c1);
+    Rand r3("p2_extremes");
+    for(int i = 0; i < 2000; i++) {
+      testAssert(sampleComposition(r3, p0, 3).numLearners() == 4);
+      testAssert(sampleComposition(r3, p1, 3).numLearners() < 4);
+    }
+  }
+  // config errors are hard errors
+  {
+    ConfigParser bad;
+    addPopulationKeys(bad, "0.5");
+    bad.overrideKey("q4PopulationWeights", "weak:1, snapshot:1");  // kinds missing
+    bool threw = false;
+    try { Q4PopulationSettings::load(bad); } catch(const StringError&) { threw = true; }
+    testAssert(threw);
+    ConfigParser bad2;
+    addPopulationKeys(bad2, "0.5");
+    bad2.overrideKey("q4PopulationWeights", "weak:1, snapshot:1, greedy:1, randomPawn:1, basher:1, grudge:1, learner:1");
+    threw = false;
+    try { Q4PopulationSettings::load(bad2); } catch(const StringError&) { threw = true; }
+    testAssert(threw);
+    ConfigParser bad3;
+    threw = false;
+    try { Q4PopulationSettings::load(bad3); } catch(const StringError&) { threw = true; }  // no keys at all
+    testAssert(threw);
+  }
+  cout << "P2 passed!" << endl;
+}
+
 void testPlaySettingsValidation() {
   cout << "Testing PlaySettings config rejection..." << endl;
   {
@@ -211,6 +362,7 @@ void testSelfplayIntegration() {
   cfg.overrideKey("logSearchInfo", "false");
   cfg.overrideKey("logMoves", "false");
   cfg.overrideKey("q4EliminationProb", "0.5"); // Force high chance of elimination
+  addPopulationKeys(cfg, "0");
 
   Q4PlaySettings playSettings = Q4PlaySettings::loadForSelfplay(cfg);
   Q4GameRunner runner(cfg, playSettings, logger);
@@ -295,6 +447,7 @@ void Tests::runQ4SelfplayTests() {
   testActionToPolicySlot();
   testTDTargetsMath();
   testPlaySettingsValidation();
+  testP2CompositionSampler();
   testSelfplayIntegration();
   cout << "All Q4 selfplay C++ tests passed!" << endl;
 }

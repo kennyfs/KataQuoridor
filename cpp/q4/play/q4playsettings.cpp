@@ -95,6 +95,8 @@ Q4PlaySettings Q4PlaySettings::loadForSelfplay(ConfigParser& cfg) {
 
   playSettings.q4EliminationProb = cfg.contains("q4EliminationProb") ? cfg.getDouble("q4EliminationProb", 0.0, 1.0) : 0.03;
 
+  playSettings.population = Q4PopulationSettings::load(cfg);
+
   playSettings.forSelfPlay = true;
   playSettings.recordTimePerMove = cfg.contains("recordTimePerMove") ? cfg.getBool("recordTimePerMove") : false;
   playSettings.logSearchTreeOptions = Setup::loadLogSearchTreeOptions(cfg);

@@ -77,6 +77,15 @@ struct ChangedNeuralNet {
   ChangedNeuralNet(const std::string& n, int t) : name(n), turnIdx(t) {}
 };
 
+// Who sat in a seat of a game (population self-play, docs/q4/Q4IO.md §8); kind is a Q4SeatKind.
+struct Q4SeatInfo {
+  int kind = 0;
+  std::string net;
+  int visits = 0;
+  double temperature = 0.0;
+  int grudgeTarget = -1;
+};
+
 struct Q4FinishedGameData {
   std::string modelName;
   Q4PlayState startState;
@@ -98,6 +107,8 @@ struct Q4FinishedGameData {
   std::vector<Q4NNRawStats> nnRawStatsByTurn;
   std::vector<double> valueSurpriseByTurn;
   std::vector<bool> wasCheapSearchByTurn;
+  std::vector<int> seatKindByTurn; // Q4SeatKind of the seat that moved; != 0 rows are observer rows (no search policy)
+  Q4SeatInfo seatInfo[4];
 
   std::vector<Q4SidePosition*> sidePositions;
   std::vector<ChangedNeuralNet*> changedNeuralNets;
@@ -182,7 +193,8 @@ class Q4TrainingWriteBuffers {
     const bool seatEliminatedBeforeEnd[4],
     const std::vector<Q4Board>& boardHistoryFromTurnToEnd,
     const std::vector<int>& actionsPlayedFromTurnToEnd,
-    const std::vector<int>& actionSeatsFromTurnToEnd
+    const std::vector<int>& actionSeatsFromTurnToEnd,
+    int seatKind
   );
 
   static int actionToPolicySlot(int action);

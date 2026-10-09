@@ -1,5 +1,6 @@
 #include "q4selfplaymanager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -178,6 +179,25 @@ void Q4SelfPlayManager::cleanupUnusedModelsOlderThan(double seconds) {
   }
 }
 
+void Q4SelfPlayManager::unloadUnusedModelsNotIn(const std::vector<std::string>& keep) {
+  std::lock_guard<std::mutex> lock(managerMutex);
+  for(size_t i = 0; i < modelDatas.size(); i++) {
+    ModelData* foundData = modelDatas[i];
+    bool wanted = std::find(keep.begin(), keep.end(), foundData->modelName) != keep.end();
+    if(!wanted && foundData->acquireCount <= 0) {
+      if(logger != nullptr)
+        logger->write("Unloading snapshot network: " + foundData->modelName);
+      foundData->finishedGameQueue.setReadOnly();
+      totalNumRowsProcessed += foundData->nnEval->numRowsProcessed();
+      if(!foundData->hasDataWriteLoop) {
+        delete foundData;
+      }
+      modelDatas.erase(modelDatas.begin() + i);
+      i--;
+    }
+  }
+}
+
 void Q4SelfPlayManager::clearUnusedModelCaches() {
   std::lock_guard<std::mutex> lock(managerMutex);
   for(size_t i = 0; i < modelDatas.size(); i++) {
@@ -311,6 +331,26 @@ std::string Q4SelfPlayManager::q4StatsSummary(ModelData* modelData) {
       << ", rep: " << (100.0 * s.repetitionDraws / s.games) << "%)"
       << " | eliminations = " << s.eliminations
       << " | rows written = " << s.rowsWritten;
+  // Learner seats' win rate (points per learner seat; 0.25 is parity at a four-learner table) by number of learners
+  // and by the kind of the other seats in the game.
+  bool anyMixed = false;
+  for(int n = 1; n <= 3; n++)
+    anyMixed = anyMixed || s.popGames[n] > 0;
+  if(anyMixed) {
+    out << "\n  learner win rate by number of learners:";
+    for(int n = 1; n <= 4; n++) {
+      if(s.popGames[n] <= 0) continue;
+      out << " " << n << ": " << std::setprecision(1) << (100.0 * s.popLearnerPoints[n] / s.popLearnerSeats[n])
+          << "% per learner seat (" << s.popGames[n] << " games)";
+    }
+    out << "\n  by opponent kind (learner / opponent points per seat in games containing that kind):";
+    for(int k = SEAT_WEAK; k < NUM_SEAT_KINDS; k++) {
+      if(s.kindGames[k] <= 0) continue;
+      out << " " << seatKindName(k) << ": " << std::setprecision(1)
+          << (100.0 * s.kindLearnerPoints[k] / std::max<int64_t>(1, s.kindLearnerSeats[k])) << "% / "
+          << (100.0 * s.kindPoints[k] / s.kindSeats[k]) << "% (" << s.kindGames[k] << " games)";
+    }
+  }
   return out.str();
 }
 
@@ -348,6 +388,44 @@ void Q4SelfPlayManager::countQ4GameResult(NNEvaluator* nnEval, const Q4FinishedG
     }
     else if(gameData.hitTurnLimit) {
       s.cutoffGames++;
+    }
+
+    if(!gameData.hitTurnLimit) {
+      // points of the seats: the winner 1, a draw 1/numAlive for each alive seat
+      double points[4] = {0, 0, 0, 0};
+      if(gameData.endHist.winnerSeat >= 0 && gameData.endHist.winnerSeat < 4) {
+        points[gameData.endHist.winnerSeat] = 1.0;
+      }
+      else if(gameData.endHist.isDraw) {
+        int numAlive = gameData.endHist.currentBoard.getNumAlive();
+        for(int seat = 0; seat < 4; seat++)
+          if(gameData.endHist.currentBoard.isAlive(seat))
+            points[seat] = 1.0 / numAlive;
+      }
+      int numLearners = 0;
+      double learnerPoints = 0.0;
+      int kindCount[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};
+      double kindPts[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};
+      for(int seat = 0; seat < 4; seat++) {
+        int kind = gameData.seatInfo[seat].kind;
+        kindCount[kind]++;
+        kindPts[kind] += points[seat];
+        if(kind == SEAT_LEARNER) {
+          numLearners++;
+          learnerPoints += points[seat];
+        }
+      }
+      s.popGames[numLearners]++;
+      s.popLearnerSeats[numLearners] += numLearners;
+      s.popLearnerPoints[numLearners] += learnerPoints;
+      for(int kind = SEAT_WEAK; kind < NUM_SEAT_KINDS; kind++) {
+        if(kindCount[kind] <= 0) continue;
+        s.kindGames[kind]++;
+        s.kindSeats[kind] += kindCount[kind];
+        s.kindPoints[kind] += kindPts[kind];
+        s.kindLearnerSeats[kind] += numLearners;
+        s.kindLearnerPoints[kind] += learnerPoints;
+      }
     }
 
     for(const auto& ev : gameData.endHist.events) {
@@ -439,10 +517,20 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
       rec.rules = gameData->rules;
       rec.players.clear();
       for(int s = 0; s < 4; s++) {
+        const Q4SeatInfo& info = gameData->seatInfo[s];
         Q4PlayerInfo p;
         p.name = "Seat " + std::to_string(s);
-        p.type = "selfplay";
-        p.net = modelData->modelName;
+        if(info.kind == SEAT_GRUDGE)
+          p.name += " >" + std::to_string(info.grudgeTarget);
+        if(info.kind == SEAT_LEARNER) {
+          p.type = "selfplay";
+          p.net = modelData->modelName;
+        }
+        else {
+          p.type = seatKindName(info.kind);
+          p.net = info.net;
+          p.visits = info.visits;
+        }
         rec.players.push_back(p);
       }
       if(gameData->hitTurnLimit) {
@@ -479,6 +567,11 @@ void Q4SelfPlayManager::runDataWriteLoopImpl(ModelData* modelData) {
   if(modelData->tdataWriter != nullptr) {
     modelData->tdataWriter->flushIfNonempty();
   }
+
+  // End of this net's cycle: the final statistics (including the population win rates)
+  std::string summary = q4StatsSummary(modelData);
+  if(!summary.empty() && logger != nullptr)
+    logger->write("Final " + summary);
 }
 
 }  // namespace Q4Play

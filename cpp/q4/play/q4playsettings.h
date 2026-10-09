@@ -3,6 +3,7 @@
 
 #include "../../core/config_parser.h"
 #include "../../search/searchprint.h"
+#include "q4population.h"
 
 namespace Q4Play {
 
@@ -49,6 +50,9 @@ struct Q4PlaySettings {
 
   // Q4 elimination probability per game
   double q4EliminationProb;
+
+  // Population self-play: learners and other players at one table (docs/q4/rounds/R7.md)
+  Q4PopulationSettings population;
 
   // Enable full data recording and minor tweaks applying only for self-play training.
   bool forSelfPlay;

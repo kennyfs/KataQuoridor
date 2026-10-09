@@ -27,7 +27,7 @@ sys.path.insert(0, PYTHON_DIR)
 
 from q4.features import extract_features, decode_raw_distances
 from q4.reference import Pos, eliminate, play, str_to_action, compute_distances_to_center
-from tests.q4_testutil import find_katago
+from tests.q4_testutil import find_katago, export_model, make_random_model
 
 
 def action_to_policy_slot(act):
@@ -41,15 +41,26 @@ def action_to_policy_slot(act):
     raise ValueError(f"Unknown action {act}")
 
 
+_MODEL_DIR_CACHE = []
+
+
 def get_model_dir():
-    candidates = [
-        os.path.join(REPO_DIR, "cpp", "tests", "models"),
-        os.path.join(REPO_DIR, "tests", "models"),
-    ]
-    for c in candidates:
-        if os.path.isdir(c):
-            return c
-    raise RuntimeError("Models dir not found")
+    """A models dir holding only the Q4 test net b1c32_q4 (cpp/tests/models also holds Duel nets and empty files for
+    the findLatestModel tests; population self-play lists the models dir for snapshots, so it needs a clean one)."""
+    if _MODEL_DIR_CACHE:
+        return _MODEL_DIR_CACHE[0]
+    src = None
+    for c in [os.path.join(REPO_DIR, "cpp", "tests", "models", "b1c32_q4"), os.path.join(REPO_DIR, "tests", "models", "b1c32_q4")]:
+        if os.path.isfile(os.path.join(c, "model.bin.gz")):
+            src = c
+    if src is None:
+        raise RuntimeError("b1c32_q4 test model not found (python q4/make_random_model.py b1c32_q4 cpp/tests/models --scale-heads)")
+    import tempfile
+    d = tempfile.mkdtemp(prefix="q4models_")
+    os.makedirs(os.path.join(d, "b1c32_q4"))
+    shutil.copy(os.path.join(src, "model.bin.gz"), os.path.join(d, "b1c32_q4", "model.bin.gz"))
+    _MODEL_DIR_CACHE.append(d)
+    return d
 
 
 def get_cfg_path():
@@ -389,8 +400,9 @@ def test_c1_c2_writer_vs_replay(tmp_path):
                     np.testing.assert_array_equal(r["valueTargets"][5 + 2 * k], exp_hwalls)
 
             # 7. Check version and zeros
-            assert gt[60] == 1.0
-            assert np.all(gt[61:64] == 0.0)
+            assert gt[60] == 2.0
+            assert gt[61] in (0, 1, 2, 3, 4, 5, 6)
+            assert np.all(gt[62:64] == 0.0)
 
             checked_rows += 1
 
@@ -616,3 +628,250 @@ def test_c7_search_policy_target_is_not_one_hot(tmp_path):
     print(f"c7: {len(entropies)} rows, mean C32 {np.mean(entropies):.3f}, mean nonzero C0 slots {np.mean(nonzero_slots):.2f}")
     assert np.mean(entropies) > 0.5, np.mean(entropies)
     assert np.mean(nonzero_slots) > 1.0, np.mean(nonzero_slots)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Round 7, Part A: population self-play (docs/q4/rounds/R7.md, Q4IO.md §8.1)
+# ---------------------------------------------------------------------------------------------------------------
+
+KIND_OF_TYPE = {"selfplay": 0, "weak": 1, "snapshot": 2, "greedy": 3, "randomPawn": 4, "basher": 5, "grudge": 6}
+NO_FORKS = "earlyForkGameProb=0,forkGameProb=0"
+
+
+def run_selfplay(katago, models_dir, out_dir, seed, overrides, games, cfg_edits=None):
+    """q4selfplay with the repo config; `overrides` is the -override-config string, `cfg_edits` {key: value} replaces
+    keys in a copy of the config (for values with commas)."""
+    cfg_path = get_cfg_path()
+    if cfg_edits:
+        lines = open(cfg_path).read().splitlines()
+        for key, value in cfg_edits.items():
+            lines = [l for l in lines if not l.startswith(key + " ")]
+            lines.append(f"{key} = {value}")
+        cfg_path = out_dir + "_edited.cfg"
+        os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+        with open(cfg_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    out = subprocess.run(
+        [katago, "q4selfplay", "-models-dir", models_dir, "-output-dir", out_dir, "-config", cfg_path,
+         "-max-games-total", str(games), "-seed", seed, "-override-config", overrides],
+        check=True, capture_output=True, text=True)
+    return out.stdout + out.stderr
+
+
+def read_records(out_dir):
+    records = []
+    for rf in sorted(glob.glob(os.path.join(out_dir, "*", "records", "*.q4.jsonl"))):
+        with open(rf) as f:
+            records.extend(json.loads(line) for line in f if line.strip())
+    return records
+
+
+def read_rows(out_dir):
+    """All written rows: dicts keyed by npz key plus the decoded game hash."""
+    rows = []
+    for nf in sorted(glob.glob(os.path.join(out_dir, "*", "tdata", "*.npz"))):
+        data = np.load(nf)
+        for i in range(data["globalInputNC"].shape[0]):
+            row = {k: data[k][i] for k in data.files}
+            row["hash"] = decode_game_hash(row["globalTargetsNC"])
+            rows.append(row)
+    return rows
+
+
+def replay_states(rec):
+    """ply -> (position before the move, action) for the moves of a record, in event order."""
+    rules = rec.get("rules", {})
+    pos = Pos(max_plies=rules.get("maxPlies", 400), repetition_draw_count=rules.get("repetitionDrawCount", 0),
+              initial_walls=rules.get("initialWalls", [7, 7, 7, 7]))
+    states, actions, event_of_ply = {}, {}, {}
+    for e, ev in enumerate(rec["events"]):
+        if "elim" in ev:
+            pos = eliminate(pos, ev["elim"] - 1)
+        else:
+            states[pos.plies] = pos.copy()
+            actions[pos.plies] = str_to_action(ev["a"])
+            event_of_ply[pos.plies] = e
+            pos = play(pos, actions[pos.plies])
+    return states, actions, event_of_ply
+
+
+def rotate_to_relative(v_abs, to_move):
+    """[abs seats 0..3, draw] -> [relative seats, draw]"""
+    return np.array([v_abs[(to_move + k) % 4] for k in range(4)] + [v_abs[4]])
+
+
+def test_p1_all_learner_games_do_not_depend_on_the_population(tmp_path):
+    """P1: the composition is drawn from its own stream, so an all-learner game is bit-identical whether the run has
+    q4PopulationMixedProb = 0 or 0.5 (same seed, forks off). Against the Part 0 head binary ($Q4_PART0_BIN, if set)
+    the data written with q4PopulationMixedProb = 0 is bit-identical except for the column C60 (format version 1 -> 2)."""
+    katago = find_katago("eigen")
+    models = get_model_dir()
+    common = f"numGameThreads=1,maxVisits=8,maxPlies=60,nnRandomize=false,logToStdout=false,{NO_FORKS},"
+    run_selfplay(katago, models, str(tmp_path / "mixed0"), "p1_seed", common + "q4PopulationMixedProb=0", 40)
+    run_selfplay(katago, models, str(tmp_path / "mixed05"), "p1_seed", common + "q4PopulationMixedProb=0.5", 40)
+    rec0 = read_records(str(tmp_path / "mixed0"))
+    rec05 = read_records(str(tmp_path / "mixed05"))
+    assert len(rec0) == 40 and len(rec05) == 40
+    for r in rec0:
+        assert all(p["type"] == "selfplay" for p in r["players"])
+    rows0 = read_rows(str(tmp_path / "mixed0"))
+    rows05 = read_rows(str(tmp_path / "mixed05"))
+    by_hash0 = {}
+    for r in rows0:
+        by_hash0.setdefault(r["hash"], []).append(r)
+    by_hash05 = {}
+    for r in rows05:
+        by_hash05.setdefault(r["hash"], []).append(r)
+    all_learner = [r for r in rec05 if all(p["type"] == "selfplay" for p in r["players"])]
+    mixed = [r for r in rec05 if not all(p["type"] == "selfplay" for p in r["players"])]
+    assert len(all_learner) >= 3 and len(mixed) >= 3, (len(all_learner), len(mixed))
+    n_compared = 0
+    for rec in all_learner:
+        gh = record_game_hash(rec)
+        assert gh in by_hash0, "an all-learner game of the mixed run is missing from the mixedProb = 0 run"
+        a, b = by_hash0[gh], by_hash05[gh]
+        assert len(a) == len(b)
+        for ra, rb in zip(a, b):
+            for k in ra:
+                if k != "hash":
+                    assert np.array_equal(ra[k], rb[k]), f"key {k} differs in an all-learner game"
+            n_compared += 1
+    assert n_compared > 50
+    print(f"p1: {len(all_learner)} all-learner games ({n_compared} rows) identical; {len(mixed)} mixed games")
+
+    part0 = os.environ.get("Q4_PART0_BIN")
+    if part0:
+        part0_cfg = os.environ.get("Q4_PART0_CFG", get_cfg_path())
+        subprocess.run(
+            [part0, "q4selfplay", "-models-dir", models, "-output-dir", str(tmp_path / "part0"), "-config", part0_cfg,
+             "-max-games-total", "40", "-seed", "p1_seed", "-override-config", common.rstrip(",")],
+            check=True, capture_output=True)
+        rows_p0 = read_rows(str(tmp_path / "part0"))
+        assert len(rows_p0) == len(rows0)
+        for ra, rb in zip(rows_p0, rows0):
+            for k in ra:
+                if k == "hash":
+                    continue
+                if k == "globalTargetsNC":
+                    x, y = ra[k].copy(), rb[k].copy()
+                    assert x[60] == 1.0 and y[60] == 2.0
+                    x[60] = y[60] = 0
+                    assert np.array_equal(x, y)
+                else:
+                    assert np.array_equal(ra[k], rb[k]), f"key {k} differs from the Part 0 head"
+        print(f"p1: {len(rows0)} rows identical to the Part 0 head binary except C60")
+
+
+def test_p3_mixed_games_rows(tmp_path):
+    """P3: a mixed self-play run. Non-learner rows have C26 = 0, an all-zero channel 0, C29 = 1 and the played move as
+    the style target, C61 = the kind of the seat to move (as the record says); the observer's value vector is the
+    row's C20-24; every row's TD columns are finite and each value vector sums to 1; grudge targets are learners."""
+    katago = find_katago("eigen")
+    out_dir = str(tmp_path / "p3")
+    run_selfplay(katago, get_model_dir(), out_dir, "p3_seed",
+                 "numGameThreads=2,maxVisits=24,maxPlies=100,logToStdout=false,q4PopulationMixedProb=1.0,"
+                 "q4EliminationProb=0.2", 40)
+    records = read_records(out_dir)
+    rows = read_rows(out_dir)
+    assert len(records) == 40
+    rec_by_hash = {record_game_hash(r): r for r in records}
+    replays = {h: replay_states(r) for h, r in rec_by_hash.items()}
+
+    kinds_seen = set()
+    num_learners_seen = set()
+    for rec in records:
+        types = [p["type"] for p in rec["players"]]
+        kinds_seen.update(types)
+        num_learners_seen.add(types.count("selfplay"))
+        assert 1 <= types.count("selfplay") <= 3, types
+        for s, p in enumerate(rec["players"]):
+            if p["type"] == "grudge":
+                target = int(p["name"].split(">")[1])
+                assert rec["players"][target]["type"] == "selfplay", f"grudge target {target} is not a learner: {types}"
+            if p["type"] == "weak":
+                assert p["visits"] in (1, 2, 4, 8, 16, 32)
+    assert num_learners_seen == {1, 2, 3}, num_learners_seen
+    assert {"selfplay", "weak", "greedy", "randomPawn", "basher", "grudge"} <= kinds_seen, kinds_seen
+
+    n_observer = n_learner = 0
+    for row in rows:
+        gt = row["globalTargetsNC"]
+        pol = row["policyTargetsNCMove"].astype(np.float32)
+        rec = rec_by_hash[row["hash"]]
+        states, actions, event_of_ply = replays[row["hash"]]
+        ply = int(gt[50])
+        mover = states[ply].to_move
+        kind = KIND_OF_TYPE[rec["players"][mover]["type"]]
+        assert gt[60] == 2.0 and np.all(gt[62:64] == 0)
+        if gt[59] == 0.0:       # side position: searched by the learners' search whoever would move; C61 = 0
+            assert gt[61] == 0
+        else:
+            assert int(gt[61]) == kind, (gt[61], kind)
+        # TD columns: finite, each value vector a distribution
+        for c0 in (0, 5, 10, 15, 20):
+            v = gt[c0:c0 + 5]
+            assert np.all(np.isfinite(v)) and np.all(v >= -1e-6) and abs(float(v.sum()) - 1.0) < 1e-5, (c0, v)
+        assert np.isfinite(gt[30:33]).all()
+        if gt[59] == 0.0:
+            continue
+        slot = action_to_policy_slot(actions[ply])
+        assert pol[1].sum() == 1 and pol[1][slot] == 1 and gt[29] == 1.0, "style target = the move actually played"
+        if kind == 0:
+            n_learner += 1
+            assert gt[26] > 0 or gt[26] == 0  # cheap-search rows are not written; full rows have C26 = 1
+            continue
+        n_observer += 1
+        assert gt[26] == 0.0 and not np.any(pol[0]), "observer row must have no search policy target"
+        assert gt[27] > 0 and gt[53] > 0  # outcome weight; C53 = the observer's visits
+        assert gt[53] <= 24
+        assert gt[30] == 0.0              # policy surprise 0
+        # C20-24 is the observer's root value vector (printed in the record's comment, absolute seats)
+        comment = rec["comments"][event_of_ply[ply]]
+        v_abs = [float(x) for x in comment[comment.index("[") + 1:comment.index("]")].split(",")]
+        exp = rotate_to_relative(v_abs, mover)
+        assert np.max(np.abs(exp - gt[20:25])) < 2e-4, (exp, gt[20:25])
+    assert n_observer > 100 and n_learner > 50, (n_observer, n_learner)
+    print(f"p3: {len(records)} games, {n_observer} observer rows, {n_learner} learner rows, kinds {sorted(kinds_seen)}")
+
+
+def make_models_dir(tmp_path, names, base_time=1700000000):
+    """A models dir of random b1c32_q4 nets, modified in the order given."""
+    d = str(tmp_path / "models")
+    for i, name in enumerate(names):
+        model = make_random_model("b1c32_q4", seed=100 + i, scale_heads=True)
+        path = export_model(model, "b1c32_q4", d, name)
+        os.utime(path, (base_time + 100 * i, base_time + 100 * i))
+    return d
+
+
+def test_p4_snapshot_players_use_only_older_models(tmp_path):
+    """P4: with several models in models/, snapshot players are older models only (never the current net), at most
+    q4PopulationNumSnapshots of the most recent ones; with a single model there is no snapshot player."""
+    katago = find_katago("eigen")
+    # 4 nets, the newest is the current one; snapshots: the 2 most recent others = m3, m2 (never m1)
+    models = make_models_dir(tmp_path, ["m1", "m2", "m3", "m4"])
+    out_dir = str(tmp_path / "p4")
+    log = run_selfplay(katago, models, out_dir, "p4_seed",
+                       "numGameThreads=3,maxVisits=16,maxPlies=60,q4PopulationMixedProb=1.0,"
+                       "q4PopulationNumSnapshots=2,q4PopulationSnapshotVisits=8,logToStdout=true", 60,
+                       cfg_edits={"q4PopulationWeights": "weak:0, snapshot:1, greedy:0, randomPawn:0, basher:0, grudge:0"})
+    assert "Snapshots for population games (current m4): m3 m2" in log, log[-2000:]
+    records = read_records(out_dir)
+    nets = set()
+    for rec in records:
+        for p in rec["players"]:
+            if p["type"] == "snapshot":
+                nets.add(p["net"])
+                assert p["visits"] == 8
+            else:
+                assert p["type"] == "selfplay" or p["type"] == "weak" or p["type"] in KIND_OF_TYPE
+    assert nets == {"m2", "m3"}, nets
+    # the games are recorded under the current net only
+    assert [os.path.basename(d) for d in glob.glob(os.path.join(out_dir, "*"))] == ["m4"]
+
+    # a single model: cycle 1 has no snapshots, the kind is redrawn
+    out1 = str(tmp_path / "p4_cycle1")
+    run_selfplay(katago, get_model_dir(), out1, "p4_seed_c1",
+                 "numGameThreads=2,maxVisits=16,maxPlies=60,q4PopulationMixedProb=1.0,logToStdout=false", 30)
+    types = {p["type"] for rec in read_records(out1) for p in rec["players"]}
+    assert "snapshot" not in types and "weak" in types, types

@@ -407,7 +407,8 @@ Q4FinishedGameData* runGame(
   const Q4OtherGameProperties& otherGameProps,
   Rand& gameRand,
   const std::function<NNEvaluator*()>& checkForNewNNEval,
-  const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove
+  const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove,
+  Q4GameSeats* seats
 ) {
   (void)searchRandSeed;
   (void)clearBotBeforeSearch;
@@ -438,7 +439,23 @@ Q4FinishedGameData* runGame(
   gameData->startState = state;
   gameData->startHist = hist;
 
-  bot->setPosition(state);
+  // The searches of the game: the learners' one (tree reuse across all their plies) and one per weak / snapshot seat.
+  // After every ply every search gets makeMove.
+  std::vector<Q4S::Search*> allSearches = {bot};
+  std::vector<Q4S::Search*> weakSearches;
+  if(seats != nullptr) {
+    for(int s = 0; s < 4; s++) {
+      gameData->seatInfo[s] = seats->info[s];
+      Q4S::Search* other = seats->players[s].search;
+      if(other != nullptr) {
+        allSearches.push_back(other);
+        if(seats->players[s].kind == SEAT_WEAK)
+          weakSearches.push_back(other);
+      }
+    }
+  }
+  for(Q4S::Search* search : allSearches)
+    search->setPosition(state);
 
   // Elimination setup (prompt B4): with prob q4EliminationProb, at ply in [1, min(maxPlies, 200)]
   bool willEliminate = gameRand.nextBool(playSettings.q4EliminationProb);
@@ -452,11 +469,13 @@ Q4FinishedGameData* runGame(
   std::vector<double> historicalMaxWinrates;
   std::vector<std::vector<float>> rawNNValuesByTurn;
 
-  auto maybeCheckForNewNNEval = [&bot, &checkForNewNNEval, &gameRand, &gameData](int nextTurnIdx) {
+  auto maybeCheckForNewNNEval = [&bot, &weakSearches, &checkForNewNNEval, &gameRand, &gameData](int nextTurnIdx) {
     if(checkForNewNNEval != nullptr && gameRand.nextBool(0.1)) {
       NNEvaluator* newNNEval = checkForNewNNEval();
       if(newNNEval != nullptr) {
         bot->setNNEval(newNNEval);
+        for(Q4S::Search* weak : weakSearches)
+          weak->setNNEval(newNNEval);  // "the current net"
         gameData->changedNeuralNets.push_back(new ChangedNeuralNet(newNNEval->getModelName(), nextTurnIdx));
       }
     }
@@ -481,8 +500,10 @@ Q4FinishedGameData* runGame(
         int sElim = alive[gameRand.nextUInt((uint32_t)alive.size())];
         hist.eliminate(sElim);
         state.eliminate(sElim);
-        bot->clearSearch();
-        bot->setPosition(state);
+        for(Q4S::Search* search : allSearches) {
+          search->clearSearch();
+          search->setPosition(state);
+        }
         eliminationDone = true;
         gameData->comments.push_back("elim=" + std::to_string(sElim + 1));
         if(state.isFinished)
@@ -491,7 +512,21 @@ Q4FinishedGameData* runGame(
     }
 
     int toMove = state.board.toMove;
-    SearchLimitsThisMove limits = getSearchLimitsThisMove(bot, playSettings, gameRand, historicalMaxWinrates);
+    // Who plays this ply. A non-learner seat's ply is observed by the learners' search (cheap-search settings, no
+    // root noise) so that the ply has its root value vector; the seat's own player then picks the move.
+    const int seatKind = (seats != nullptr) ? seats->players[toMove].kind : (int)SEAT_LEARNER;
+    const bool isObserverTurn = seatKind != SEAT_LEARNER;
+    SearchLimitsThisMove limits;
+    if(!isObserverTurn) {
+      limits = getSearchLimitsThisMove(bot, playSettings, gameRand, historicalMaxWinrates);
+    }
+    else {
+      limits.numAlterVisits = std::min((int64_t)bot->searchParams.maxVisits, (int64_t)playSettings.cheapSearchVisits);
+      limits.doAlterVisits = true;
+      limits.removeRootNoise = true;
+      limits.isCheapSearch = true;
+      limits.targetWeight = 1.0f;
+    }
 
     int action = Q4Board::NULL_ACTION;
     if(limits.doAlterVisits) {
@@ -510,6 +545,15 @@ Q4FinishedGameData* runGame(
     }
     else {
       action = bot->runWholeSearchAndGetMove();
+    }
+
+    if(isObserverTurn) {
+      // The observer search only provides the targets of this ply; the move comes from the seat's own player.
+      Q4SeatPlayer& player = seats->players[toMove];
+      if(player.search != nullptr)
+        action = player.search->runWholeSearchAndGetMove();
+      else
+        action = player.bot->getMove(state.board);
     }
 
     if(action == Q4Board::NULL_ACTION || !state.isLegalAction(action)) {
@@ -534,8 +578,10 @@ Q4FinishedGameData* runGame(
 
     // Extract search policy target
     auto* ptBuf = new std::vector<Q4PolicyTargetMove>();
-    extractPolicyTarget(*ptBuf, bot, bot->rootNode, actionsBuf, playSelectionValuesBuf);
+    if(!isObserverTurn)
+      extractPolicyTarget(*ptBuf, bot, bot->rootNode, actionsBuf, playSelectionValuesBuf);
     gameData->policyTargetsByTurn.emplace_back(ptBuf, unreducedVisits);
+    gameData->seatKindByTurn.push_back(seatKind);
 
     // NN raw values and stats
     const Q4S::NNOutput* rootNNOutput = (bot->rootNode != nullptr) ? bot->rootNode->getNNOutput() : nullptr;
@@ -560,6 +606,8 @@ Q4FinishedGameData* runGame(
     nnRaw.policyEntropy = policyEntropy;
     gameData->nnRawStatsByTurn.push_back(nnRaw);
 
+    if(isObserverTurn)
+      policySurprise = 0.0;  // the search did not produce the policy of this seat
     gameData->policySurpriseByTurn.push_back(std::max(0.0, policySurprise));
     gameData->policyEntropyByTurn.push_back(policyEntropy);
     gameData->searchEntropyByTurn.push_back(std::max(0.0, searchEntropy));
@@ -576,7 +624,7 @@ Q4FinishedGameData* runGame(
     gameData->comments.push_back(cmt.str());
 
     // Candidate side position
-    if(playSettings.sidePositionProb > 0.0 && gameRand.nextBool(playSettings.sidePositionProb) && rootNNOutput != nullptr) {
+    if(!isObserverTurn && playSettings.sidePositionProb > 0.0 && gameRand.nextBool(playSettings.sidePositionProb) && rootNNOutput != nullptr) {
       int sideAct = chooseRandomForkingMove(rootNNOutput->getPolicyProbsMaybeNoised(), state, gameRand, action);
       if(sideAct != Q4Board::NULL_ACTION && state.isLegalAction(sideAct)) {
         Q4PlayState sideState = state;
@@ -590,8 +638,9 @@ Q4FinishedGameData* runGame(
     if(onEachMove != nullptr)
       onEachMove(state, action, bot);
 
-    // Advance search and game
-    bot->makeMove(action);
+    // Advance searches and game
+    for(Q4S::Search* search : allSearches)
+      search->makeMove(action);
     hist.play(action);
     state.playAssumeLegal(action);
 
@@ -860,7 +909,8 @@ Q4FinishedGameData* Q4GameRunner::runGame(
   const WaitableFlag* shouldPause,
   const std::function<NNEvaluator*()>& checkForNewNNEval,
   const std::function<void(const BotSpec&, Q4S::Search*)>& afterInitialization,
-  const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove
+  const std::function<void(const Q4PlayState&, int, const Q4S::Search*)>& onEachMove,
+  const Q4SnapshotSource* snapshotSource
 ) {
   Rand gameRand(seed);
 
@@ -887,6 +937,67 @@ Q4FinishedGameData* Q4GameRunner::runGame(
     afterInitialization(botSpec, bot.get());
   }
 
+  // The composition of the table. Drawn from its own stream (seeded from the game seed) so that the game RNG, and
+  // therefore every all-learner game, does not depend on the population settings.
+  Rand popRand(seed + ":population");
+  std::vector<Q4SnapshotRef> snapshots;
+  if(snapshotSource != nullptr && playSettings.population.usesSnapshots())
+    snapshots = snapshotSource->acquireAll();
+  if((int)snapshots.size() > playSettings.population.numSnapshots)
+    snapshots.resize(playSettings.population.numSnapshots);
+  Q4Composition comp = sampleComposition(popRand, playSettings.population, (int)snapshots.size());
+
+  std::unique_ptr<Q4GameSeats> seats = std::make_unique<Q4GameSeats>();
+  std::vector<std::unique_ptr<Q4S::Search>> otherSearches;
+  for(int s = 0; s < 4; s++) {
+    const Q4SeatSpec& spec = comp.seats[s];
+    Q4SeatPlayer& player = seats->players[s];
+    Q4SeatInfo& info = seats->info[s];
+    player.kind = spec.kind;
+    info.kind = spec.kind;
+    info.net = botSpec.botName;
+    if(spec.kind == SEAT_LEARNER) {
+      info.visits = botSpec.baseParams.maxVisits;
+      continue;
+    }
+    if(spec.kind == SEAT_WEAK || spec.kind == SEAT_SNAPSHOT) {
+      SearchParams params = botSpec.baseParams;
+      NNEvaluator* eval = botSpec.nnEval;
+      if(spec.kind == SEAT_WEAK) {
+        params.maxVisits = spec.weakVisits;
+        params.chosenMoveTemperatureEarly = spec.weakTemperature;
+        params.chosenMoveTemperature = spec.weakTemperature;
+        info.temperature = spec.weakTemperature;
+      }
+      else {
+        const Q4SnapshotRef& snap = snapshots.at(spec.snapshotIdx);
+        eval = snap.nnEval;
+        info.net = snap.name;
+        params.maxVisits = playSettings.population.snapshotVisits;
+        params.chosenMoveTemperatureEarly = playSettings.population.snapshotTemperatureEarly;
+        params.chosenMoveTemperature = playSettings.population.snapshotTemperature;
+        info.temperature = playSettings.population.snapshotTemperature;
+      }
+      params.maxPlayouts = params.maxVisits;
+      // No root exploration for the other players: this is a net playing, not generating data
+      params.rootNoiseEnabled = false;
+      params.rootPolicyTemperature = 1.0;
+      params.rootPolicyTemperatureEarly = 1.0;
+      params.rootDesiredPerChildVisitsCoeff = 0.0;
+      params.rootNumSymmetriesToSample = 1;
+      Q4S::Search::checkParams(params);
+      otherSearches.push_back(std::make_unique<Q4S::Search>(params, eval, &logger, seed + ":seat" + Global::intToString(s)));
+      player.search = otherSearches.back().get();
+      info.visits = params.maxVisits;
+    }
+    else {
+      Rand botRand(seed + ":bot" + Global::intToString(s));
+      player.bot = Q4Bots::makeBot(seatKindName(spec.kind), botRand.nextUInt64(), spec.grudgeTarget);
+      info.grudgeTarget = spec.grudgeTarget;
+      info.net = "";
+    }
+  }
+
   Q4FinishedGameData* finishedGameData = Play::runGame(
     seed,
     bot.get(),
@@ -903,13 +1014,21 @@ Q4FinishedGameData* Q4GameRunner::runGame(
     otherGameProps,
     gameRand,
     checkForNewNNEval,
-    onEachMove
+    onEachMove,
+    comp.numLearners() == 4 ? nullptr : seats.get()
   );
+  if(finishedGameData != nullptr && comp.numLearners() == 4) {
+    for(int s = 0; s < 4; s++)
+      finishedGameData->seatInfo[s] = seats->info[s];
+  }
 
   if(finishedGameData != nullptr && forkData != nullptr) {
     Play::maybeForkGame(finishedGameData, forkData, playSettings, gameRand, bot.get());
   }
 
+  otherSearches.clear();
+  if(snapshotSource != nullptr && !snapshots.empty())
+    snapshotSource->releaseAll(snapshots);
   return finishedGameData;
 }
 

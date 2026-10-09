@@ -235,10 +235,10 @@ One row per recorded turn, from the perspective of the seat to move. "Relative s
 | C15–19 | TD value target, `nowFactor = 1/(1 + 121·0.016)` (the "short-term" target) |
 | C20–24 | this turn's search value (`nowFactor = 1`) |
 | C25 | row weight (KataGo C25) |
-| C26 | weight of the search policy target C0 (KataGo C26) |
+| C26 | weight of the search policy target C0 (KataGo C26); **0 on the rows of non-learner seats** (C61 ≠ 0, below) |
 | C27 | outcome weight (KataGo C27 / Duel C27): value weight on main rows of a finished game, 0 on side positions |
 | C28 | weight of the next-seat policy target (KataGo C28) |
-| C29 | weight of the style-policy target (1 on every written row) |
+| C29 | weight of the style-policy target (1 on every written row; on a non-learner row the target is the move that seat actually played) |
 | C30, C31, C32 | policy surprise, policy entropy, search entropy (KataGo C30–32) |
 | C33 | 1 − weight of the TD value targets (KataGo C24) |
 | C34 | 1 − weight of the value targets (KataGo C35) |
@@ -247,14 +247,15 @@ One row per recorded turn, from the perspective of the seat to move. "Relative s
 | C40–43 | weight of C36–39: C27, or 0 if that seat was eliminated before the end |
 | C44–49 | 128-bit game hash in six 22/22/20/22/22/20-bit chunks (KataGo C41–46) |
 | C50 | ply of this row; C51: first ply of the game that is training data (KataGo C53); C52: game mode (0 normal, 2 fork, as KataGo C55) |
-| C53 | visits of the search, before reduction (KataGo C60) |
+| C53 | visits of the search, before reduction (KataGo C60); on a non-learner row the visits of the observer search |
 | C54 | raw NN utility of the seat to move (Plan §8.3 formula) |
 | C55 | number of alive seats at this row |
 | C56 | `repetitionDrawCount` of the game (0 = off); C57: `maxPlies` |
 | C58 | 1 if the game hit `maxMovesPerGame` without a result (KataGo C52) |
 | C59 | 1 if the game finished and this is not a side position (KataGo C62) |
-| C60 | Q4 data format version, 1 |
-| C61–63 | 0 |
+| C60 | Q4 data format version, **2** (population self-play; version 1 had C61 = 0 and only learner rows) |
+| C61 | kind of the seat to move: 0 learner, 1 weak, 2 snapshot, 3 greedy, 4 randomPawn, 5 basher, 6 grudge (§8.1) |
+| C62–63 | 0 |
 
 - The TD value targets are KataGo's `fillValueTDTargets` with the 5-vector in place of win/loss/noResult. Read
   each turn's absolute value vector and rotate it to the relative seats of **this** row.
@@ -263,3 +264,21 @@ One row per recorded turn, from the perspective of the seat to move. "Relative s
 - Rows are written only for turns whose target weight is nonzero after KataGo's surprise weighting and
   integerization (cheap searches have weight `cheapSearchTargetWeight` = 0 in the config).
 
+
+### 8.1 Population self-play rows (Round 7)
+
+A game seats 1–4 *learners* (the current net; they share one search tree) and fills the other seats from a pool
+(`weak`, `snapshot`, `greedy`, `randomPawn`, `basher`, `grudge`; the composition is sampled per game, see
+`docs/q4/rounds/R7.md`). Every ply of the game is a row, whoever moves:
+
+- **Learner rows** are as before (full or cheap search, noise, reduced visits, side positions; cheap-search rows
+  have weight 0 and are not written). C61 = 0.
+- **Non-learner rows** (C61 ≠ 0): before the seat's own player chooses its move, the learners' search runs an
+  *observer* search at that position with the cheap-search settings (`cheapSearchVisits`, root noise removed, as
+  `getSearchLimitsThisMove` does for a cheap search). The observer search gives the root value vector of the ply (the
+  TD chain, value surprise and C20–24 are computed from it exactly as on a learner row). Target weight 1 before the
+  surprise weighting (policy surprise 0, value surprise as usual). **C26 = 0 and channel 0 of `policyTargetsNCMove`
+  is all zero**; channel 1 (C29 = 1) holds the move the seat actually played; C28 is as usual (0 if the next row is
+  a non-learner row); C53 is the observer's visits; C30–C32 come from the observer search (policy surprise 0).
+- Side positions are only generated on learner rows; their C61 is 0.
+- The net never sees C61: it has to infer a seat's style from the style features of Q4IO §9.

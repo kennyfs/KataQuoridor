@@ -63,6 +63,8 @@ Q4FinishedGameData::Q4FinishedGameData()
     nnRawStatsByTurn(),
     valueSurpriseByTurn(),
     wasCheapSearchByTurn(),
+    seatKindByTurn(),
+    seatInfo(),
     sidePositions(),
     changedNeuralNets(),
     comments(),
@@ -248,7 +250,8 @@ void Q4TrainingWriteBuffers::addRow(
   const bool seatEliminatedBeforeEnd[4],
   const std::vector<Q4Board>& boardHistoryFromTurnToEnd,
   const std::vector<int>& actionsPlayedFromTurnToEnd,
-  const std::vector<int>& actionSeatsFromTurnToEnd
+  const std::vector<int>& actionSeatsFromTurnToEnd,
+  int seatKind
 ) {
   testAssert(curRows < maxRows);
 
@@ -285,8 +288,13 @@ void Q4TrainingWriteBuffers::addRow(
   float* rowGlobal = globalTargetsNC.data + curRows * GLOBAL_TARGET_NUM_CHANNELS;
   std::fill_n(rowGlobal, GLOBAL_TARGET_NUM_CHANNELS, 0.0f);
 
-  // C0: Search policy target
-  if(policyTarget0 != nullptr) {
+  // C0: Search policy target. Rows of non-learner seats (observer rows) have none: zeros and weight 0.
+  if(seatKind != 0) {
+    testAssert(policyTarget0 == nullptr || policyTarget0->empty());
+    zeroPolicyTarget(POLICY_SIZE, rowPolicy + 0 * POLICY_SIZE);
+    rowGlobal[26] = 0.0f;
+  }
+  else if(policyTarget0 != nullptr) {
     fillPolicyTargetQ4(*policyTarget0, rowPolicy + 0 * POLICY_SIZE);
     rowGlobal[26] = 1.0f;
   }
@@ -360,8 +368,8 @@ void Q4TrainingWriteBuffers::addRow(
   rowGlobal[57] = (float)maxPlies;
   rowGlobal[58] = hitTurnLimit ? 1.0f : 0.0f;
   rowGlobal[59] = (!isSidePosition) ? 1.0f : 0.0f;
-  rowGlobal[60] = 1.0f;
-  rowGlobal[61] = 0.0f;
+  rowGlobal[60] = 2.0f;
+  rowGlobal[61] = (float)seatKind;
   rowGlobal[62] = 0.0f;
   rowGlobal[63] = 0.0f;
 
@@ -497,6 +505,7 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
   testAssert((int)data.policyTargetsByTurn.size() == numTurns);
   testAssert((int)data.valueTargetsByTurn.size() == numTurns + 1);
   testAssert((int)data.nnRawStatsByTurn.size() == numTurns);
+  testAssert((int)data.seatKindByTurn.size() == numTurns);
 
   // Final game properties
   int finalGamePlies = stateReplay.plies;
@@ -529,7 +538,9 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
     const Q4PlayState& st = statesBeforeMove[t];
     int64_t unreducedVisits = data.policyTargetsByTurn[t].unreducedNumVisits;
     const auto* policy0 = data.policyTargetsByTurn[t].policyTargets;
-    const auto* policyNext = (t + 1 < numTurns) ? data.policyTargetsByTurn[t + 1].policyTargets : nullptr;
+    const bool nextIsObserver = (t + 1 < numTurns) && data.seatKindByTurn[t + 1] != 0;
+    const auto* policyNext =
+      (t + 1 < numTurns && !nextIsObserver) ? data.policyTargetsByTurn[t + 1].policyTargets : nullptr;
     int actionPlayed = actionsPlayed[t];
     double polSurprise = data.policySurpriseByTurn[t];
     double polEntropy = data.policyEntropyByTurn[t];
@@ -580,7 +591,8 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
       seatEliminatedBeforeEnd,
       boardsFromTToEnd,
       actsFromTToEnd,
-      seatsFromTToEnd
+      seatsFromTToEnd,
+      data.seatKindByTurn[t]
     );
 
     if(writeBuffers->numRows() >= currentFileLimit) {
@@ -630,7 +642,8 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
       elimFlags,
       emptyBoards,
       emptyActs,
-      emptySeats
+      emptySeats,
+      0
     );
 
     if(writeBuffers->numRows() >= currentFileLimit) {
