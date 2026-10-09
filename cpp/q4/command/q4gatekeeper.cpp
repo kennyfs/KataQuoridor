@@ -154,6 +154,7 @@ int MainCmds::q4gatekeeper(const std::vector<std::string>& args) {
     auto net = [&](const std::string& name, const std::string& file) {
       return Q4Match::parsePlayerSpec(name, "search:" + file + "@" + Global::intToString(gateVisits));
     };
+    mc.tables.clear();   // base carries a placeholder table of the config probe above
     mc.players = {net("cand", testFile), net("base", accFile)};
     auto addPlayer = [&](const std::string& name, const std::string& spec) {
       mc.players.push_back(Q4Match::parsePlayerSpec(name, spec));
