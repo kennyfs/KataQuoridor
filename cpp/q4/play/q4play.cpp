@@ -528,7 +528,7 @@ Q4FinishedGameData* runGame(
       limits.doAlterVisits = true;
       limits.removeRootNoise = true;
       limits.isCheapSearch = true;
-      limits.targetWeight = 1.0f;
+      limits.targetWeight = (float)playSettings.population.observerRowWeight;
     }
 
     int action = Q4Board::NULL_ACTION;
@@ -637,6 +637,7 @@ Q4FinishedGameData* runGame(
           Q4History sideHist = hist;
           sideHist.play(sideAct);
           sideHist.getStyleFeatures(sidePos->style);
+          sidePos->styleTracker = sideHist.style;
           sidePositionsToSearch.push_back(sidePos);
         }
       }
@@ -651,9 +652,8 @@ Q4FinishedGameData* runGame(
     hist.play(action);
     state.playAssumeLegal(action);
     // The tree is reused, so the searches keep the old features until they are set for the new real position
-    hist.getStyleFeatures(turnStyle);
     for(Q4S::Search* search : allSearches)
-      search->setStyleFeatures(turnStyle);
+      search->setStyle(hist.style);
 
     maybeCheckForNewNNEval(state.plies);
   }
@@ -741,7 +741,7 @@ Q4FinishedGameData* runGame(
       }
 
       bot->setPosition(sp->state);
-      bot->setStyleFeatures(sp->style);
+      bot->setStyle(sp->styleTracker);
       bot->runWholeSearchAndGetMove();
 
       extractPolicyTarget(sp->policyTarget, bot, bot->rootNode, actionsBuf, playSelectionValuesBuf);
@@ -957,8 +957,8 @@ Q4FinishedGameData* Q4GameRunner::runGame(
   std::vector<Q4SnapshotRef> snapshots;
   if(snapshotSource != nullptr && playSettings.population.usesSnapshots())
     snapshots = snapshotSource->acquireAll();
-  if((int)snapshots.size() > playSettings.population.numSnapshots)
-    snapshots.resize(playSettings.population.numSnapshots);
+  if(snapshots.size() > playSettings.population.snapshotAges.size())
+    snapshots.resize(playSettings.population.snapshotAges.size());
   Q4Composition comp = sampleComposition(popRand, playSettings.population, (int)snapshots.size());
 
   std::unique_ptr<Q4GameSeats> seats = std::make_unique<Q4GameSeats>();
@@ -1002,6 +1002,7 @@ Q4FinishedGameData* Q4GameRunner::runGame(
       Q4S::Search::checkParams(params);
       otherSearches.push_back(std::make_unique<Q4S::Search>(params, eval, &logger, seed + ":seat" + Global::intToString(s)));
       player.search = otherSearches.back().get();
+      player.search->setOpponentModel(playSettings.opponentMode, (uint8_t)(1 << s));
       info.visits = params.maxVisits;
     }
     else {
@@ -1011,6 +1012,13 @@ Q4FinishedGameData* Q4GameRunner::runGame(
       info.net = "";
     }
   }
+
+  // Opponent-aware search (Plan §12.3): the learner seats are one agent sharing the tree, all of them own seats
+  uint8_t learnerMask = 0;
+  for(int s = 0; s < 4; s++)
+    if(comp.seats[s].kind == SEAT_LEARNER)
+      learnerMask |= (uint8_t)(1 << s);
+  bot->setOpponentModel(playSettings.opponentMode, learnerMask);
 
   Q4FinishedGameData* finishedGameData = Play::runGame(
     seed,

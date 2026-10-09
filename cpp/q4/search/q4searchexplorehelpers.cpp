@@ -302,6 +302,17 @@ void Search::selectBestChildToDescend(
   assert(nnOutput != NULL);
   const float* policyProbs = nnOutput->getPolicyProbsMaybeNoised();
 
+  // Opponent-aware search (Plan §12.3): at a node of a seat that is not own, the style policy is the prior
+  const bool isOpponentNode = opponentMode != OPPONENT_MAXN && !isOwnSeat(thread.seat);
+  if(isOpponentNode) {
+    assert(nnOutput->stylePolicyProbs != NULL);
+    policyProbs = nnOutput->stylePolicyProbs;
+    if(opponentMode == OPPONENT_EXPECT) {
+      selectChildByStylePolicyShare(node, nodeState, policyProbs, numChildrenFound, bestChildIdx, bestChildMoveAction);
+      return;
+    }
+  }
+
   for(int i = 0; i < childrenCapacity; i++) {
     const SearchChildPointer& childPointer = children[i];
     const SearchNode* child = childPointer.getIfAllocated();
@@ -399,6 +410,69 @@ void Search::selectBestChildToDescend(
       bestChildIdx = numChildrenFound;
       bestChildMoveAction = bestNewAction;
     }
+  }
+}
+
+// q4OpponentMode = expect at an opponent node: the mover is a pure opponent model. The child descended is the one whose
+// visit share is furthest below its prior, argmax P_i - N_i / (N + 1), where N_i counts the edge visits plus the virtual
+// losses in flight and N their sum over the children; no utility term. Visits therefore follow the style policy and
+// the backed-up value (unchanged) is the expectation under it. A child not yet created has N_i = 0.
+void Search::selectChildByStylePolicyShare(
+  const SearchNode& node, SearchNodeState nodeState, const float* policyProbs,
+  int& numChildrenFound, int& bestChildIdx, int& bestChildMoveAction
+) const {
+  ConstSearchNodeChildrenReference children = node.getChildren(nodeState);
+  int childrenCapacity = children.getCapacity();
+
+  int64_t childCounts[Q4Board::NUM_ACTIONS];
+  int childActions[Q4Board::NUM_ACTIONS];
+  bool hasChild[Q4Board::NUM_ACTIONS] = { };
+  int64_t totalCount = 0;
+  numChildrenFound = 0;
+  for(int i = 0; i < childrenCapacity; i++) {
+    const SearchChildPointer& childPointer = children[i];
+    const SearchNode* child = childPointer.getIfAllocated();
+    if(child == NULL)
+      break;
+    int action = childPointer.getActionRelaxed();
+    int64_t count = childPointer.getEdgeVisits() + child->virtualLosses.load(std::memory_order_acquire);
+    childCounts[numChildrenFound] = count;
+    childActions[numChildrenFound] = action;
+    hasChild[action] = true;
+    totalCount += count;
+    numChildrenFound++;
+  }
+
+  const double denom = (double)totalCount + 1.0;
+  double bestValue = POLICY_ILLEGAL_SELECTION_VALUE;
+  bestChildIdx = -1;
+  bestChildMoveAction = Q4Board::NULL_ACTION;
+  for(int i = 0; i < numChildrenFound; i++) {
+    float p = policyProbs[childActions[i]];
+    if(p < 0)
+      continue;
+    double value = (double)p - (double)childCounts[i] / denom;
+    if(value > bestValue) {
+      bestValue = value;
+      bestChildIdx = i;
+      bestChildMoveAction = childActions[i];
+    }
+  }
+  // The best new child: the largest prior among the actions without a child (N_i = 0)
+  int bestNewAction = Q4Board::NULL_ACTION;
+  float bestNewProb = -1.0f;
+  for(int action = 0; action < Q4Board::NUM_ACTIONS; action++) {
+    if(hasChild[action])
+      continue;
+    float p = policyProbs[action];
+    if(p > bestNewProb) {
+      bestNewProb = p;
+      bestNewAction = action;
+    }
+  }
+  if(bestNewAction != Q4Board::NULL_ACTION && bestNewProb >= 0 && (double)bestNewProb > bestValue) {
+    bestChildIdx = numChildrenFound;
+    bestChildMoveAction = bestNewAction;
   }
 }
 

@@ -12,6 +12,7 @@
 #include "../../core/rand.h"
 #include "../../dataio/numpywrite.h"
 #include "../q4board.h"
+#include "../q4style.h"
 #include "../q4history.h"
 #include "../q4playstate.h"
 #include "../q4rules.h"
@@ -65,6 +66,7 @@ struct Q4SidePosition {
   float targetWeightUnrounded;
   int numNeuralNetChangesSoFar;
   float style[76];   // style features of the position (Q4IO §9), for the metadata input
+  Q4StyleTracker styleTracker;   // the absolute statistics, for the search of the side position
 
   Q4SidePosition();
   Q4SidePosition(const Q4PlayState& s, int numNNChangesSoFar);

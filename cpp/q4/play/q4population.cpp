@@ -31,11 +31,19 @@ int Q4Composition::numLearners() const {
 Q4PopulationSettings Q4PopulationSettings::load(ConfigParser& cfg) {
   Q4PopulationSettings p;
   p.mixedProb = cfg.getDouble("q4PopulationMixedProb", 0.0, 1.0);
-  p.numSnapshots = cfg.getInt("q4PopulationNumSnapshots", 0, 1000);
+  for(const std::string& v : Global::split(cfg.getString("q4PopulationSnapshotAges"), ',')) {
+    if(Global::trim(v).empty())
+      continue;
+    int a = Global::stringToInt(Global::trim(v));
+    if(a < 1)
+      throw StringError("q4PopulationSnapshotAges: expected ages >= 1 (exports back from the current net), got " + v);
+    p.snapshotAges.push_back(a);
+  }
   p.snapshotVisits = cfg.getInt("q4PopulationSnapshotVisits", 1, 10000000);
   p.snapshotTemperatureEarly = cfg.getDouble("q4PopulationSnapshotChosenMoveTemperatureEarly", 0.0, 5.0);
   p.snapshotTemperature = cfg.getDouble("q4PopulationSnapshotChosenMoveTemperature", 0.0, 5.0);
   p.snapshotCacheSizePowerOfTwo = cfg.getInt("q4PopulationSnapshotCacheSizePowerOfTwo", 10, 30);
+  p.observerRowWeight = cfg.getDouble("q4PopulationObserverRowWeight", 0.0, 1.0);
   p.weakTemperatureMin = cfg.getDouble("q4PopulationWeakTemperatureMin", 0.0, 5.0);
   p.weakTemperatureMax = cfg.getDouble("q4PopulationWeakTemperatureMax", 0.0, 5.0);
   if(p.weakTemperatureMax < p.weakTemperatureMin)

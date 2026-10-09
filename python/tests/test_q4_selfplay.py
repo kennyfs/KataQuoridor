@@ -777,7 +777,7 @@ def test_p3_mixed_games_rows(tmp_path):
     out_dir = str(tmp_path / "p3")
     run_selfplay(katago, get_model_dir(), out_dir, "p3_seed",
                  "numGameThreads=2,maxVisits=24,maxPlies=100,logToStdout=false,q4PopulationMixedProb=1.0,"
-                 "q4EliminationProb=0.2", 40)
+                 "q4EliminationProb=0.2,q4PopulationObserverRowWeight=1.0", 40)
     records = read_records(out_dir)
     rows = read_rows(out_dir)
     assert len(records) == 40
@@ -841,6 +841,44 @@ def test_p3_mixed_games_rows(tmp_path):
     print(f"p3: {len(records)} games, {n_observer} observer rows, {n_learner} learner rows, kinds {sorted(kinds_seen)}")
 
 
+def count_rows_and_plies(out_dir):
+    """Main rows and plies by whether the mover is a learner (observer rows: C61 > 0 on a main row)."""
+    records = read_records(out_dir)
+    rows = read_rows(out_dir)
+    plies = {"learner": 0, "observer": 0}
+    for rec in records:
+        types = [p["type"] for p in rec["players"]]
+        states, actions, _ = replay_states(rec)
+        for ply in range(len(actions)):
+            plies["learner" if types[states[ply].to_move] == "selfplay" else "observer"] += 1
+    n = {"learner": 0, "observer": 0}
+    for row in rows:
+        gt = row["globalTargetsNC"]
+        if gt[59] == 0.0:
+            continue
+        n["learner" if gt[61] == 0 else "observer"] += 1
+    return n, plies
+
+
+def test_p5_observer_row_weight(tmp_path):
+    """P5 (round 8): observer rows are written with target weight q4PopulationObserverRowWeight, which then goes through
+    KataGo's surprise weighting and stochastic integerization like any turn: the default 0.25 writes about a quarter of
+    the observer rows of weight 1 (same seed), 0 writes none."""
+    katago = find_katago("eigen")
+    common = "numGameThreads=2,maxVisits=24,maxPlies=100,logToStdout=false,q4PopulationMixedProb=1.0"
+    res = {}
+    for w in ("1.0", "0.25", "0.0"):
+        out = str(tmp_path / f"p5_{w}")
+        run_selfplay(katago, get_model_dir(), out, "p5_seed", common + f",q4PopulationObserverRowWeight={w}", 60)
+        n, plies = count_rows_and_plies(out)
+        res[w] = (n, plies)
+        print(f"p5 weight {w}: main rows {n}, plies {plies}, observer rows per observer ply "
+              f"{n['observer'] / plies['observer']:.3f}, learner rows per learner ply {n['learner'] / plies['learner']:.3f}")
+    rate = lambda w: res[w][0]["observer"] / res[w][1]["observer"]
+    assert 0.15 < rate("0.25") / rate("1.0") < 0.35, (rate("0.25"), rate("1.0"))
+    assert res["0.0"][0]["observer"] == 0 and res["0.0"][0]["learner"] > 0, res["0.0"]
+
+
 def make_models_dir(tmp_path, names, base_time=1700000000):
     """A models dir of random b1c32_q4 nets, modified in the order given."""
     d = str(tmp_path / "models")
@@ -852,17 +890,19 @@ def make_models_dir(tmp_path, names, base_time=1700000000):
 
 
 def test_p4_snapshot_players_use_only_older_models(tmp_path):
-    """P4: with several models in models/, snapshot players are older models only (never the current net), at most
-    q4PopulationNumSnapshots of the most recent ones; with a single model there is no snapshot player."""
+    """P4: with several models in models/, snapshot players are older models only (never the current net), the ones
+    q4PopulationSnapshotAges exports back (an age beyond the oldest clamps to it; duplicates collapse); with a single
+    model there is no snapshot player."""
     katago = find_katago("eigen")
-    # 4 nets, the newest is the current one; snapshots: the 2 most recent others = m3, m2 (never m1)
-    models = make_models_dir(tmp_path, ["m1", "m2", "m3", "m4"])
+    # 6 nets, the newest (m6) is the current one; ages 2, 4, 32, 40 = m4, m2, m1 (clamped), m1 (collapsed)
+    models = make_models_dir(tmp_path, ["m1", "m2", "m3", "m4", "m5", "m6"])
     out_dir = str(tmp_path / "p4")
     log = run_selfplay(katago, models, out_dir, "p4_seed",
                        "numGameThreads=3,maxVisits=16,maxPlies=60,q4PopulationMixedProb=1.0,"
-                       "q4PopulationNumSnapshots=2,q4PopulationSnapshotVisits=8,logToStdout=true", 60,
-                       cfg_edits={"q4PopulationWeights": "weak:0, snapshot:1, greedy:0, randomPawn:0, basher:0, grudge:0"})
-    assert "Snapshots for population games (current m4): m3 m2" in log, log[-2000:]
+                       "q4PopulationSnapshotVisits=8,logToStdout=true", 60,
+                       cfg_edits={"q4PopulationWeights": "weak:0, snapshot:1, greedy:0, randomPawn:0, basher:0, grudge:0",
+                                  "q4PopulationSnapshotAges": "2, 4, 32, 40"})
+    assert "Snapshots for population games (current m6): m4 m2 m1" in log, log[-2000:]
     records = read_records(out_dir)
     nets = set()
     for rec in records:
@@ -872,9 +912,9 @@ def test_p4_snapshot_players_use_only_older_models(tmp_path):
                 assert p["visits"] == 8
             else:
                 assert p["type"] == "selfplay" or p["type"] == "weak" or p["type"] in KIND_OF_TYPE
-    assert nets == {"m2", "m3"}, nets
+    assert nets == {"m4", "m2", "m1"}, nets
     # the games are recorded under the current net only
-    assert [os.path.basename(d) for d in glob.glob(os.path.join(out_dir, "*"))] == ["m4"]
+    assert [os.path.basename(d) for d in glob.glob(os.path.join(out_dir, "*"))] == ["m6"]
 
     # a single model: cycle 1 has no snapshots, the kind is redrawn
     out1 = str(tmp_path / "p4_cycle1")

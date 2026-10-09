@@ -204,6 +204,17 @@ void testM4ConfigErrors() {
     cfg.overrideKey("repetitionDrawCount", "3");
     Q4Match::loadMatchConfig(cfg);
   }
+  // A search player may set its own q4OpponentMode (Plan §12.3): search:<model>@<visits>:<mode>
+  {
+    Q4Match::PlayerSpec ps = Q4Match::parsePlayerSpec("e", "search:dir/model.bin.gz@50:expect");
+    testAssert(ps.isSearch && ps.modelPath == "dir/model.bin.gz" && ps.visits == 50 && ps.opponentMode == "expect");
+    ps = Q4Match::parsePlayerSpec("m", "search:dir/model.bin.gz@50");
+    testAssert(ps.visits == 50 && ps.opponentMode.empty());
+    bool caught = false;
+    try { Q4Match::parsePlayerSpec("x", "search:dir/model.bin.gz@50:paranoid"); }
+    catch(const StringError&) { caught = true; }
+    testAssert(caught);
+  }
   cout << "M4 passed!" << endl;
 }
 

@@ -30,6 +30,7 @@ Q4PlaySettings::Q4PlaySettings()
     scaleDataWeight(1.0),
     noResolveTargetWeights(false),
     q4EliminationProb(0.03),
+    opponentMode(Q4S::OPPONENT_MAXN),
     forSelfPlay(false),
     recordTimePerMove(false),
     logSearchTreeOptions(Setup::defaultLogSearchTreeOptions())
@@ -96,6 +97,7 @@ Q4PlaySettings Q4PlaySettings::loadForSelfplay(ConfigParser& cfg) {
   playSettings.q4EliminationProb = cfg.contains("q4EliminationProb") ? cfg.getDouble("q4EliminationProb", 0.0, 1.0) : 0.03;
 
   playSettings.population = Q4PopulationSettings::load(cfg);
+  playSettings.opponentMode = Q4S::loadOpponentMode(cfg);
 
   playSettings.forSelfPlay = true;
   playSettings.recordTimePerMove = cfg.contains("recordTimePerMove") ? cfg.getBool("recordTimePerMove") : false;

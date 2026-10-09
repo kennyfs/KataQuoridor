@@ -29,18 +29,23 @@ int seatKindOfName(const std::string& name);  // -1 if unknown
 struct Q4PopulationSettings {
   double mixedProb = 0.0;           // q4PopulationMixedProb: probability that a game is not all-learner
   double kindWeights[NUM_SEAT_KINDS] = {0, 0, 0, 0, 0, 0, 0};  // q4PopulationWeights (learner weight is 0)
-  int numSnapshots = 0;             // q4PopulationNumSnapshots: most recent other models used as snapshots
+  // q4PopulationSnapshotAges: the snapshots are the models this many exports back from the current net (models dir
+  // mtime order; 1 = the previous export). An age beyond the oldest clamps to the oldest; duplicates collapse.
+  std::vector<int> snapshotAges;
   int snapshotVisits = 0;           // q4PopulationSnapshotVisits
   double snapshotTemperatureEarly = 0.0;  // q4PopulationSnapshotChosenMoveTemperatureEarly / ...Temperature
   double snapshotTemperature = 0.0;
   int snapshotCacheSizePowerOfTwo = 0;    // NN cache of the snapshot evaluators
   std::vector<int> weakVisits;      // q4PopulationWeakVisits
+  // q4PopulationObserverRowWeight: the target weight of an observer row (before KataGo's surprise weighting and
+  // stochastic integerization), so that a non-learner ply yields a row about as often as a learner ply does
+  double observerRowWeight = 0.0;
   double weakTemperatureMin = 0.0;  // q4PopulationWeakTemperatureMin / Max
   double weakTemperatureMax = 0.0;
 
   // All keys are required (no silent defaults).
   static Q4PopulationSettings load(ConfigParser& cfg);
-  bool usesSnapshots() const { return mixedProb > 0.0 && numSnapshots > 0 && kindWeights[SEAT_SNAPSHOT] > 0.0; }
+  bool usesSnapshots() const { return mixedProb > 0.0 && !snapshotAges.empty() && kindWeights[SEAT_SNAPSHOT] > 0.0; }
 };
 
 struct Q4SeatSpec {

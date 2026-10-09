@@ -177,18 +177,50 @@ void Search::setPosition(const Q4History& history) {
   rootSeat = rootState.board.toMove;
   rootAliveMask = rootState.board.alive;
   rootNumAlive = rootState.board.getNumAlive();
-  history.getStyleFeatures(styleFeatures);
+  for(int s = 0; s < 4; s++)
+    history.style.encode(s, styleBySeat[s]);
   hasStyleFeatures = true;
   rootStyleDirty = false;
 }
 
-void Search::setStyleFeatures(const float* features) {
+void Search::setStyle(const Q4StyleTracker& style) {
   // After tree reuse the root keeps the evaluation it got with the old features; the next search recomputes it with
   // the new ones. Deeper nodes keep theirs (styles change slowly, and re-evaluating the tree would defeat reuse).
-  if(!hasStyleFeatures || !std::equal(features, features + Q4StyleTracker::NUM_FEATURES, styleFeatures))
+  const int mover = rootState.board.toMove;
+  float rootFeatures[Q4StyleTracker::NUM_FEATURES];
+  style.encode(mover, rootFeatures);
+  if(!hasStyleFeatures || !std::equal(rootFeatures, rootFeatures + Q4StyleTracker::NUM_FEATURES, styleBySeat[mover]))
     rootStyleDirty = true;
-  std::copy(features, features + Q4StyleTracker::NUM_FEATURES, styleFeatures);
+  for(int s = 0; s < 4; s++)
+    style.encode(s, styleBySeat[s]);
   hasStyleFeatures = true;
+}
+
+void Search::setOpponentModel(OpponentMode mode, uint8_t mask) {
+  if(mode != opponentMode || mask != ownSeatMask)
+    clearSearch();
+  opponentMode = mode;
+  ownSeatMask = mask;
+}
+
+OpponentMode parseOpponentMode(const std::string& s) {
+  if(s == "maxn") return OPPONENT_MAXN;
+  if(s == "style") return OPPONENT_STYLE;
+  if(s == "expect") return OPPONENT_EXPECT;
+  throw StringError("q4OpponentMode: expected maxn, style or expect, got '" + s + "'");
+}
+
+const char* opponentModeName(OpponentMode mode) {
+  switch(mode) {
+    case OPPONENT_MAXN: return "maxn";
+    case OPPONENT_STYLE: return "style";
+    case OPPONENT_EXPECT: return "expect";
+  }
+  return "?";
+}
+
+OpponentMode loadOpponentMode(ConfigParser& cfg) {
+  return parseOpponentMode(cfg.getString("q4OpponentMode"));
 }
 
 void Search::setRootHintAction(int action) {

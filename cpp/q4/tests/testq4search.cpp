@@ -1147,18 +1147,19 @@ void testS2MetadataCacheAndFreeze(NNEvaluator* nnEvalV1, Logger& logger) {
     Q4S::Search search(params, nnEvalV2, &logger, "s2_freeze");
     search.setPosition(hist);
     testAssert(search.hasStyleFeatures);
+    const int rootMover = hist.currentBoard.toMove;
     for(int i = 0; i < Q4StyleTracker::NUM_FEATURES; i++)
-      testAssert(search.styleFeatures[i] == styleA[i]);
+      testAssert(search.styleBySeat[rootMover][i] == styleA[i]);
     search.runWholeSearch();
     testAssert(search.rootNode->getNNOutput()->nnHash == Q4NN::getCacheHash(state, styleA));
     int move = search.getChosenMoveAction();
     testAssert(search.makeMove(move));
     for(int i = 0; i < Q4StyleTracker::NUM_FEATURES; i++)
-      testAssert(search.styleFeatures[i] == styleA[i]);            // kept: the caller has not set the new ones yet
+      testAssert(search.styleBySeat[rootMover][i] == styleA[i]);   // kept: the caller has not set the new ones yet
     hist.play(move);
     float styleNext[Q4StyleTracker::NUM_FEATURES];
     hist.getStyleFeatures(styleNext);
-    search.setStyleFeatures(styleNext);
+    search.setStyle(hist.style);
     search.runWholeSearch();
     testAssert(search.rootNode->getNNOutput()->nnHash == Q4NN::getCacheHash(hist.getState(), styleNext));
     // a bare state carries no history: the v2 net refuses (a clear error, in the evaluation)
@@ -1167,6 +1168,277 @@ void testS2MetadataCacheAndFreeze(NNEvaluator* nnEvalV1, Logger& logger) {
   }
   delete nnEvalV2;
   cout << "S2 passed!" << endl;
+}
+
+// =========================================================================
+// Round 8 (Plan §12.2-§12.4): per-node metadata perspective and the opponent modes
+// =========================================================================
+
+// Every node of the tree with its state, in DFS order.
+struct TreeNodeAt {
+  const Q4S::SearchNode* node;
+  Q4PlayState state;
+};
+void collectTree(const Q4S::SearchNode* node, const Q4PlayState& state, std::vector<TreeNodeAt>& out) {
+  out.push_back({node, state});
+  Q4S::ConstSearchNodeChildrenReference children = node->getChildren();
+  for(int i = 0; i < children.getCapacity(); i++) {
+    const Q4S::SearchNode* child = children[i].getIfAllocated();
+    if(child == NULL)
+      break;
+    Q4PlayState next = state;
+    next.playAssumeLegal(children[i].getActionRelaxed());
+    collectTree(child, next, out);
+  }
+}
+
+// O1: a node where seat j moves is evaluated with the style encoded for j (the features of a training row of that
+// position), not the root seat's. Checked by the node's nnHash and by the NN cache: evaluating the node's state with
+// hist.style.encode(j) must hit the entry the search created.
+void testO1MetadataPerspective(Logger& logger) {
+  cout << "Running O1 metadata perspective at non-root nodes..." << endl;
+  NNEvaluator* nnEvalV2 = createTestEvaluator(getMetaTestModelPath(), logger, 44);
+  Q4History hist{Q4Rules()};
+  for(const char* a : {"f2", "e2h", "f10", "j6", "e2", "b5v", "f9", "j7"})
+    hist.play(Q4Notation::stringToAction(a));
+  float enc[4][Q4StyleTracker::NUM_FEATURES];
+  for(int s = 0; s < 4; s++)
+    hist.style.encode(s, enc[s]);
+  for(int s = 1; s < 4; s++)   // the four encodings differ, so a wrong perspective is visible
+    testAssert(!std::equal(enc[0], enc[0] + Q4StyleTracker::NUM_FEATURES, enc[s]));
+
+  SearchParams params = createTestSearchParams(300, 1);
+  Q4S::Search search(params, nnEvalV2, &logger, "o1_perspective");
+  search.setPosition(hist);
+  search.runWholeSearch();
+
+  std::vector<TreeNodeAt> nodes;
+  collectTree(search.rootNode, hist.getState(), nodes);
+  const int rootMover = hist.currentBoard.toMove;
+  int checkedBySeat[4] = {0, 0, 0, 0};
+  NNResultBuf buf;
+  for(const TreeNodeAt& n : nodes) {
+    const Q4S::NNOutput* out = n.node->getNNOutput();
+    if(out == NULL || n.state.isFinished)
+      continue;
+    int j = n.state.board.toMove;
+    testAssert(out->nnHash == Q4NN::getCacheHash(n.state, enc[j]));
+    if(j != rootMover && checkedBySeat[j] < 5) {
+      uint64_t hits = nnEvalV2->numCacheHits();
+      Q4NN::Eval e;
+      Q4NN::evaluate(*nnEvalV2, buf, n.state, 0, false, e, nullptr, 1.0f, enc[j]);
+      testAssert(nnEvalV2->numCacheHits() == hits + 1);
+    }
+    checkedBySeat[j]++;
+  }
+  for(int s = 0; s < 4; s++)
+    testAssert(checkedBySeat[s] > 0);
+  cout << "  nodes by mover: " << checkedBySeat[0] << " " << checkedBySeat[1] << " " << checkedBySeat[2] << " "
+       << checkedBySeat[3] << endl;
+  delete nnEvalV2;
+  cout << "O1 passed!" << endl;
+}
+
+// The PUCT choice at `node`, recomputed from the search's helpers with the given prior.
+int expectedPuctAction(const Q4S::Search& search, Q4S::SearchThread& thread, const Q4S::SearchNode& node, const float* probs, bool isRoot) {
+  Q4S::ConstSearchNodeChildrenReference children = node.getChildren();
+  double mass = 0, totalW = 0, maxW = 0;
+  bool hasChild[Q4Board::NUM_ACTIONS] = { };
+  for(int i = 0; i < children.getCapacity(); i++) {
+    const Q4S::SearchNode* c = children[i].getIfAllocated();
+    if(c == NULL) break;
+    int a = children[i].getActionRelaxed();
+    hasChild[a] = true;
+    mass += probs[a];
+    double w = c->stats.getChildWeight(children[i].getEdgeVisits());
+    totalW += w;
+    maxW = std::max(maxW, w);
+  }
+  double parentUtility, parentWeightPerVisit, stdevFactor;
+  double fpu = search.getFpuValueForChildrenAssumeVisited(node, node.nextSeat, isRoot, mass, parentUtility, parentWeightPerVisit, stdevFactor);
+  double scaling = search.getExploreScaling(totalW, stdevFactor);
+  double best = Q4S::Search::POLICY_ILLEGAL_SELECTION_VALUE;
+  int bestAction = Q4Board::NULL_ACTION;
+  for(int i = 0; i < children.getCapacity(); i++) {
+    const Q4S::SearchNode* c = children[i].getIfAllocated();
+    if(c == NULL) break;
+    int a = children[i].getActionRelaxed();
+    double v = search.getExploreSelectionValueOfChild(node, probs, c, a, scaling, totalW, children[i].getEdgeVisits(), fpu,
+                                                      parentUtility, parentWeightPerVisit, true, maxW, true, &thread);
+    if(v > best) { best = v; bestAction = a; }
+  }
+  int newA = Q4Board::NULL_ACTION;
+  float newP = -1;
+  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++)
+    if(!hasChild[a] && probs[a] > newP) { newP = probs[a]; newA = a; }
+  if(newA != Q4Board::NULL_ACTION) {
+    double v = search.getNewExploreSelectionValue(node, scaling, newP, fpu, parentWeightPerVisit, maxW, true, &thread);
+    if(v > best) { best = v; bestAction = newA; }
+  }
+  return bestAction;
+}
+
+// argmax P_i - N_i / (N + 1) over the legal actions (N_i = edge visits + virtual losses, 0 without a child).
+int expectedExpectAction(const Q4S::SearchNode& node, const float* probs) {
+  int64_t counts[Q4Board::NUM_ACTIONS] = { };
+  int64_t total = 0;
+  Q4S::ConstSearchNodeChildrenReference children = node.getChildren();
+  for(int i = 0; i < children.getCapacity(); i++) {
+    const Q4S::SearchNode* c = children[i].getIfAllocated();
+    if(c == NULL) break;
+    int64_t n = children[i].getEdgeVisits() + c->virtualLosses.load();
+    counts[children[i].getActionRelaxed()] = n;
+    total += n;
+  }
+  double best = -1e100;
+  int bestAction = Q4Board::NULL_ACTION;
+  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++) {
+    if(probs[a] < 0) continue;
+    double v = probs[a] - (double)counts[a] / (total + 1.0);
+    if(v > best) { best = v; bestAction = a; }
+  }
+  return bestAction;
+}
+
+Q4PlayState o2Position() {
+  Q4PlayState state{Q4Rules()};
+  for(const char* a : {"f2", "e2h", "f10", "j6", "e2", "b5v"})
+    state.playAssumeLegal(Q4Notation::stringToAction(a));
+  return state;
+}
+
+// The selection at `node` (state `st`) as the search makes it.
+int searchChoice(const Q4S::Search& search, const Q4S::SearchNode& node, const Q4PlayState& st, Q4S::SearchThread& thread) {
+  thread.state = st;
+  thread.seat = st.board.toMove;
+  int numFound, bestIdx, bestAction;
+  bool countEdge;
+  search.selectBestChildToDescend(thread, node, node.state.load(), numFound, bestIdx, bestAction, countEdge, &node == search.rootNode);
+  return bestAction;
+}
+
+// O2: the selection rule of each mode, at an own node (the root, and an opponent seat made own) and at opponent nodes.
+void testO2SelectionRules(NNEvaluator* nnEval, Logger& logger) {
+  cout << "Running O2 opponent-mode selection rules..." << endl;
+  const Q4PlayState start = o2Position();
+  const Q4S::OpponentMode modes[3] = {Q4S::OPPONENT_MAXN, Q4S::OPPONENT_STYLE, Q4S::OPPONENT_EXPECT};
+  for(Q4S::OpponentMode mode : modes) {
+    for(uint8_t mask : {(uint8_t)0, (uint8_t)0xF}) {
+      SearchParams params = createTestSearchParams(400, 1);
+      params.nnPolicyTemperature = 1.0;
+      Q4S::Search search(params, nnEval, &logger, "o2_rules");
+      search.setOpponentModel(mode, mask);
+      search.setPosition(start);
+      search.runWholeSearch();
+      Q4S::SearchThread thread(0, search);
+
+      std::vector<TreeNodeAt> nodes;
+      collectTree(search.rootNode, start, nodes);
+      int checkedOpp = 0, checkedOwn = 0, differsFromChannel0 = 0;
+      for(const TreeNodeAt& n : nodes) {
+        const Q4S::NNOutput* out = n.node->getNNOutput();
+        if(out == NULL || n.state.isFinished || n.node->stats.visits.load() < 4)
+          continue;
+        testAssert((out->stylePolicyProbs != NULL) == (mode != Q4S::OPPONENT_MAXN));
+        bool isRoot = n.node == search.rootNode;
+        bool opp = mode != Q4S::OPPONENT_MAXN && mask == 0 && n.state.board.toMove != start.board.toMove;
+        int got = searchChoice(search, *n.node, n.state, thread);
+        int own = expectedPuctAction(search, thread, *n.node, out->getPolicyProbsMaybeNoised(), isRoot);
+        int want = own;
+        if(opp && mode == Q4S::OPPONENT_STYLE)
+          want = expectedPuctAction(search, thread, *n.node, out->stylePolicyProbs, isRoot);
+        if(opp && mode == Q4S::OPPONENT_EXPECT)
+          want = expectedExpectAction(*n.node, out->stylePolicyProbs);
+        testAssert(got == want);
+        if(opp) { checkedOpp++; if(want != own) differsFromChannel0++; }
+        else checkedOwn++;
+      }
+      testAssert(checkedOwn > 0);
+      if(mode != Q4S::OPPONENT_MAXN && mask == 0) {
+        testAssert(checkedOpp > 0);
+        testAssert(differsFromChannel0 > 0);   // the test can tell the modes from maxn
+      }
+      cout << "  " << Q4S::opponentModeName(mode) << " mask " << (int)mask << ": own " << checkedOwn << " opponent " << checkedOpp
+           << " (choice differs from channel-0 PUCT at " << differsFromChannel0 << ")" << endl;
+    }
+  }
+  cout << "O2 passed!" << endl;
+}
+
+// O3: with expect, the visit shares at an opponent node follow the style prior.
+void testO3ExpectSharesFollowStylePrior(NNEvaluator* nnEval, Logger& logger) {
+  cout << "Running O3 expect visit shares..." << endl;
+  const Q4PlayState start = o2Position();
+  SearchParams params = createTestSearchParams(6000, 1);
+  params.nnPolicyTemperature = 1.0;
+  // Concentrate the root (an own node, PUCT) on few children so that one opponent node gets thousands of visits
+  params.cpuctExploration = 0.05;
+  params.rootDesiredPerChildVisitsCoeff = 0.0;
+  params.rootFpuReductionMax = 1.0;
+  Q4S::Search search(params, nnEval, &logger, "o3_expect");
+  search.setOpponentModel(Q4S::OPPONENT_EXPECT, 0);
+  search.setPosition(start);
+  search.runWholeSearch();
+  std::vector<TreeNodeAt> nodes;
+  collectTree(search.rootNode, start, nodes);
+  const TreeNodeAt* best = nullptr;
+  for(const TreeNodeAt& n : nodes)
+    if(n.node != search.rootNode && !n.state.isFinished && (best == nullptr || n.node->stats.visits.load() > best->node->stats.visits.load()))
+      best = &n;
+  testAssert(best != nullptr);
+  testAssert(best->state.board.toMove != start.board.toMove);
+  int64_t visits = best->node->stats.visits.load();
+  cout << "  most visited opponent node: " << visits << " visits" << endl;
+  testAssert(visits >= 2000);
+  const float* prior = best->node->getNNOutput()->stylePolicyProbs;
+  double counts[Q4Board::NUM_ACTIONS] = { };
+  double total = 0;
+  Q4S::ConstSearchNodeChildrenReference children = best->node->getChildren();
+  for(int i = 0; i < children.getCapacity(); i++) {
+    if(children[i].getIfAllocated() == NULL) break;
+    counts[children[i].getActionRelaxed()] = (double)children[i].getEdgeVisits();
+    total += (double)children[i].getEdgeVisits();
+  }
+  double maxDiff = 0;
+  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++)
+    if(prior[a] >= 0)
+      maxDiff = std::max(maxDiff, std::fabs(counts[a] / total - prior[a]));
+  cout << "  opponent node visits " << visits << ", max |share - style prior| = " << maxDiff << endl;
+  testAssert(maxDiff < 0.02);
+  cout << "O3 passed!" << endl;
+}
+
+// O4: maxn is the search as before: the mode / own-seat settings do not change a maxn search (T22-style), and the
+// NN outputs carry no style policy.
+void testO4MaxnUnchanged(NNEvaluator* nnEval, Logger& logger) {
+  cout << "Running O4 maxn unchanged..." << endl;
+  const Q4PlayState start = o2Position();
+  SearchParams params = createTestSearchParams(300, 1);
+  std::vector<Q4S::AnalysisData> d[2];
+  Q4S::ReportedSearchValues v[2];
+  for(int k = 0; k < 2; k++) {
+    nnEval->clearCache();   // both searches start from an empty NN cache (cached symmetries would differ otherwise)
+    Q4S::Search search(params, nnEval, &logger, "o4_maxn");
+    if(k == 1)
+      search.setOpponentModel(Q4S::OPPONENT_MAXN, 0x6);
+    search.setPosition(start);
+    search.runWholeSearch();
+    search.getAnalysisData(d[k]);
+    search.getRootValues(v[k]);
+    testAssert(search.rootNode->getNNOutput()->stylePolicyProbs == NULL);
+  }
+  testAssert(d[0].size() == d[1].size());
+  for(size_t i = 0; i < d[0].size(); i++) {
+    testAssert(d[0][i].move == d[1][i].move);
+    testAssert(d[0][i].numVisits == d[1][i].numVisits);
+    testAssert(d[0][i].utility == d[1][i].utility);
+  }
+  for(int k = 0; k < 5; k++)
+    testAssert(v[0].value[k] == v[1].value[k]);
+  bool threw = false;
+  try { Q4S::parseOpponentMode("paranoid"); } catch(const StringError&) { threw = true; }
+  testAssert(threw);
+  cout << "O4 passed!" << endl;
 }
 
 }  // namespace
@@ -1194,6 +1466,10 @@ void Tests::runQ4SearchTests() {
   testT29RootPlaySelectionNotOneHot(nnEval, logger);
   testT30ExploreSelectionValueInverse(nnEval, logger);
   testS2MetadataCacheAndFreeze(nnEval, logger);
+  testO1MetadataPerspective(logger);
+  testO2SelectionRules(nnEval, logger);
+  testO3ExpectSharesFollowStylePrior(nnEval, logger);
+  testO4MaxnUnchanged(nnEval, logger);
 
   delete nnEval;
   cout << "All Q4 Search tests PASSED!" << endl;

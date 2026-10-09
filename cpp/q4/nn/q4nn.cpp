@@ -581,7 +581,7 @@ void evaluate(
 
   // Policy probabilities over legal actions
   softmaxLegal(out.policyLogits[0], out.legalActions, out.numLegalActions, out.policyProbs[0], nnPolicyTemperature);
-  softmaxLegal(out.policyLogits[1], out.legalActions, out.numLegalActions, out.policyProbs[1], 1.0f);
+  softmaxLegal(out.policyLogits[1], out.legalActions, out.numLegalActions, out.policyProbs[1], nnPolicyTemperature);
 }
 
 void evaluate(

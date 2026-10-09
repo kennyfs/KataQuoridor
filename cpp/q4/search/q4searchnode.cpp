@@ -10,6 +10,7 @@ namespace Q4S {
 
 NNOutput::NNOutput()
   : noisedPolicyProbs(nullptr),
+    stylePolicyProbs(nullptr),
     shorttermWinlossError(0.0f),
     nnHash()
 {
@@ -19,6 +20,7 @@ NNOutput::NNOutput()
 
 NNOutput::NNOutput(const NNOutput& other)
   : noisedPolicyProbs(nullptr),
+    stylePolicyProbs(nullptr),
     shorttermWinlossError(other.shorttermWinlossError),
     nnHash(other.nnHash)
 {
@@ -28,11 +30,17 @@ NNOutput::NNOutput(const NNOutput& other)
     noisedPolicyProbs = new float[Q4Board::NUM_ACTIONS];
     std::copy(other.noisedPolicyProbs, other.noisedPolicyProbs + Q4Board::NUM_ACTIONS, noisedPolicyProbs);
   }
+  if(other.stylePolicyProbs != nullptr) {
+    stylePolicyProbs = new float[Q4Board::NUM_ACTIONS];
+    std::copy(other.stylePolicyProbs, other.stylePolicyProbs + Q4Board::NUM_ACTIONS, stylePolicyProbs);
+  }
 }
 
 NNOutput::~NNOutput() {
   if(noisedPolicyProbs != nullptr)
     delete[] noisedPolicyProbs;
+  if(stylePolicyProbs != nullptr)
+    delete[] stylePolicyProbs;
 }
 
 NodeStatsAtomic::NodeStatsAtomic()

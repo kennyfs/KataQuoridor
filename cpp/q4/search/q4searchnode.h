@@ -24,6 +24,7 @@ struct SearchThread;
 struct NNOutput {
   float policyProbs[Q4Board::NUM_ACTIONS]; // variant 0, illegal actions -1.0f
   float* noisedPolicyProbs;
+  float* stylePolicyProbs;                 // variant 1 (style policy), illegal -1.0f; only if the opponent mode needs it
   float valueAbs[5];                       // absolute seats 0..3 and draw 4 (masked)
   float shorttermWinlossError;
   Hash128 nnHash;

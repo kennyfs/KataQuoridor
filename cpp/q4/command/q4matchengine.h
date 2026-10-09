@@ -20,8 +20,8 @@ class NNEvaluator;
 // rotation and a shared random opening, by config-driven players (nets at given visits, or q4bots).
 namespace Q4Match {
 
-// A config player: "search:<model path>[@visits]" (a net with its own search) or a q4bots name ("random",
-// "randomPawn", "greedy", "basher", "grudge").
+// A config player: "search:<model path>[@visits[:mode]]" (a net with its own search; mode = its q4OpponentMode, Plan
+// §12.3, default the config's q4OpponentMode) or a q4bots name ("random", "randomPawn", "greedy", "basher", "grudge").
 struct PlayerSpec {
   std::string name;
   std::string rawSpec;
@@ -29,6 +29,7 @@ struct PlayerSpec {
   std::string botType;
   std::string modelPath;
   int visits = 200;
+  std::string opponentMode;   // "" = the config's q4OpponentMode
 };
 
 PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec);
@@ -96,7 +97,8 @@ struct GameResult {
 
 // Plays the games with `numGameThreads` threads, one NNEvaluator per distinct model path shared by all games. The
 // callback is called under a mutex, in completion order. `searchParams` is the base search configuration
-// (maxVisits is set per player); `setupFor` is what the evaluators are initialized for (Duel: SETUP_FOR_MATCH in
+// (maxVisits is set per player; q4OpponentMode is read from cfg when a table has a search player, own seat = the
+// player's seat); `setupFor` is what the evaluators are initialized for (Duel: SETUP_FOR_MATCH in
 // match, SETUP_FOR_OTHER in the gatekeeper).
 void runGames(
   const MatchConfig& mc,

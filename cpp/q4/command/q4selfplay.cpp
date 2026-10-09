@@ -196,7 +196,7 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     maxDataQueueSize, &logger, logGamesEvery, autoCleanupAllButLatestIfUnused
   );
 
-  // Snapshot nets of population games: the numSnapshots most recent other models, kept in a second manager (no
+  // Snapshot nets of population games: the models q4PopulationSnapshotAges exports back, kept in a second manager (no
   // data-writing loops, as KataGo keeps models whose games write no data), refreshed when the current net changes.
   Q4Play::Q4SelfPlayManager* snapshotManager = new Q4Play::Q4SelfPlayManager(
     1, &logger, 1, false
@@ -220,10 +220,13 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     std::sort(older.begin(), older.end(), [](const ListedModel* a, const ListedModel* b) {
       return a->time != b->time ? a->time > b->time : a->name > b->name;
     });
+    vector<const ListedModel*> chosen;
+    if(!older.empty()) {
+      for(int age : popSettings.snapshotAges)
+        chosen.push_back(older[std::min((size_t)age, older.size()) - 1]);
+    }
     vector<string> wanted;
-    for(const ListedModel* m : older) {
-      if((int)wanted.size() >= popSettings.numSnapshots)
-        break;
+    for(const ListedModel* m : chosen) {
       if(std::find(wanted.begin(), wanted.end(), m->name) != wanted.end())
         continue;
       if(!snapshotManager->hasModel(m->name)) {

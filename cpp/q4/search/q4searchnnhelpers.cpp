@@ -20,6 +20,8 @@ bool Search::initNodeNNOutput(
   bool isRoot, bool skipCache, bool isReInit
 ) {
   Q4NN::Eval eval;
+  // The style features encoded for the seat to move at this node (Plan §12.2): the net sees the board relative to it
+  const float* style = hasStyleFeatures ? styleBySeat[thread.state.board.toMove] : nullptr;
   if(isRoot && searchParams.rootNumSymmetriesToSample > 1) {
     Q4NN::averageMultipleSymmetries(
       *nnEvaluator,
@@ -29,7 +31,7 @@ bool Search::initNodeNNOutput(
       searchParams.rootNumSymmetriesToSample,
       eval,
       (float)searchParams.nnPolicyTemperature,
-      hasStyleFeatures ? styleFeatures : nullptr
+      style
     );
   }
   else {
@@ -43,7 +45,7 @@ bool Search::initNodeNNOutput(
       eval,
       &thread.rand,
       (float)searchParams.nnPolicyTemperature,
-      hasStyleFeatures ? styleFeatures : nullptr
+      style
     );
   }
 
@@ -55,12 +57,20 @@ bool Search::initNodeNNOutput(
     int a = eval.legalActions[i];
     out->policyProbs[a] = eval.policyProbs[0][a];
   }
+  if(needsStylePolicy()) {
+    out->stylePolicyProbs = new float[Q4Board::NUM_ACTIONS];
+    std::fill_n(out->stylePolicyProbs, (int)Q4Board::NUM_ACTIONS, -1.0f);
+    for(int i = 0; i < eval.numLegalActions; i++) {
+      int a = eval.legalActions[i];
+      out->stylePolicyProbs[a] = eval.policyProbs[1][a];
+    }
+  }
 
   for(int i = 0; i < 5; i++)
     out->valueAbs[i] = eval.valueAbsMasked[i];
 
   out->shorttermWinlossError = eval.shorttermWinlossError;
-  out->nnHash = Q4NN::getCacheHash(thread.state, (hasStyleFeatures && nnEvaluator->requiresSGFMetadata()) ? styleFeatures : nullptr);
+  out->nnHash = Q4NN::getCacheHash(thread.state, nnEvaluator->requiresSGFMetadata() ? style : nullptr);
 
   assert(out->noisedPolicyProbs == NULL);
   std::shared_ptr<NNOutput>* noisedResult = maybeAddPolicyNoiseAndTemp(thread, isRoot, out);

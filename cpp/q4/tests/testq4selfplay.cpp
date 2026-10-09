@@ -125,9 +125,11 @@ void addPopulationKeys(ConfigParser& cfg, const string& mixedProb) {
   cfg.overrideKey("q4PopulationMixedProb", mixedProb);
   cfg.overrideKey("q4PopulationWeights", "weak:1, snapshot:1, greedy:0.5, randomPawn:0.5, basher:0.5, grudge:0.5");
   cfg.overrideKey("q4PopulationWeakVisits", "1, 2, 4, 8, 16, 32");
+  cfg.overrideKey("q4PopulationObserverRowWeight", "0.25");
+  cfg.overrideKey("q4OpponentMode", "maxn");
   cfg.overrideKey("q4PopulationWeakTemperatureMin", "0.5");
   cfg.overrideKey("q4PopulationWeakTemperatureMax", "1.5");
-  cfg.overrideKey("q4PopulationNumSnapshots", "3");
+  cfg.overrideKey("q4PopulationSnapshotAges", "2, 8, 32");
   cfg.overrideKey("q4PopulationSnapshotVisits", "100");
   cfg.overrideKey("q4PopulationSnapshotChosenMoveTemperatureEarly", "0.6");
   cfg.overrideKey("q4PopulationSnapshotChosenMoveTemperature", "0.2");
@@ -140,7 +142,7 @@ void testP2CompositionSampler() {
   ConfigParser cfg;
   addPopulationKeys(cfg, "0.5");
   Q4PopulationSettings pop = Q4PopulationSettings::load(cfg);
-  testAssert(pop.mixedProb == 0.5 && pop.numSnapshots == 3 && pop.snapshotVisits == 100);
+  testAssert(pop.mixedProb == 0.5 && pop.snapshotAges == std::vector<int>({2, 8, 32}) && pop.snapshotVisits == 100);
   testAssert(pop.kindWeights[SEAT_WEAK] == 1.0 && pop.kindWeights[SEAT_GRUDGE] == 0.5);
 
   const int N = 10000;

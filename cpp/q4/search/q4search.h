@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../../core/config_parser.h"
 #include "../../core/global.h"
 #include "../../core/hash.h"
 #include "../../core/logger.h"
@@ -36,6 +37,17 @@
 namespace Q4S {
 
 struct Search;
+
+// q4OpponentMode (Plan §12.3)
+enum OpponentMode {
+  OPPONENT_MAXN = 0,    // every seat as an own seat
+  OPPONENT_STYLE = 1,   // opponent nodes: PUCT on the mover's utility with the style policy (channel 1) as prior
+  OPPONENT_EXPECT = 2   // opponent nodes: descend argmax P_i - N_i / (N + 1) on the style policy, no utility term
+};
+OpponentMode parseOpponentMode(const std::string& s);   // "maxn" | "style" | "expect", hard error otherwise
+const char* opponentModeName(OpponentMode mode);
+// Reads the required key q4OpponentMode.
+OpponentMode loadOpponentMode(ConfigParser& cfg);
 
 // Per-thread state
 struct SearchThread {
@@ -67,12 +79,18 @@ struct Search {
   int rootNumAlive;
   Q4PlayState rootState;
   int rootHintAction;
-  // The style features of the real game position (docs/q4/Q4IO.md §9), for the seat to move at the root: frozen at
-  // setPosition(Q4History) / setStyleFeatures and used by every evaluation in the tree (the metadata input of Q4 I/O v2
+  // The style statistics of the real game position (docs/q4/Q4IO.md §9, Plan §12.2), frozen at setPosition(Q4History) /
+  // setStyle as absolute per-seat statistics and kept here already encoded for each seat: an evaluation at a node where
+  // seat j moves gets styleBySeat[j], the features a training row of that position has (the metadata input of Q4 I/O v2
   // nets; v1 nets ignore it). makeMove keeps them; the caller sets the new position's after a real ply.
-  float styleFeatures[Q4StyleTracker::NUM_FEATURES] = {};
+  float styleBySeat[4][Q4StyleTracker::NUM_FEATURES] = {};
   bool hasStyleFeatures = false;
-  bool rootStyleDirty = false;   // the features changed since the root was evaluated: the next search re-evaluates it
+  bool rootStyleDirty = false;   // the root mover's features changed since the root was evaluated: re-evaluate it
+
+  // Opponent-aware search (Plan §12.3): own seats use PUCT with the search policy; the other seats as the mode says.
+  // The root seat is always own; ownSeatMask adds more (self-play: every learner seat). Q4-only, not in SearchParams.
+  OpponentMode opponentMode = OPPONENT_MAXN;
+  uint8_t ownSeatMask = 0;
 
   SearchParams searchParams;
   int64_t numSearchesBegun;
@@ -127,7 +145,11 @@ struct Search {
 
   void setPosition(const Q4PlayState& state);
   void setPosition(const Q4History& history);
-  void setStyleFeatures(const float* features);   // Q4StyleTracker::NUM_FEATURES floats, for the seat to move at the root
+  void setStyle(const Q4StyleTracker& style);     // the absolute statistics of the new real position
+  // Changing the mode clears the tree. ownSeatMask: bit s = seat s is own (besides the root seat).
+  void setOpponentModel(OpponentMode mode, uint8_t ownSeatMask);
+  bool isOwnSeat(int seat) const { return seat == rootState.board.toMove || ((ownSeatMask >> seat) & 1) != 0; }
+  bool needsStylePolicy() const { return opponentMode != OPPONENT_MAXN; }
   void setRootHintAction(int action);
   void setParams(const SearchParams& params);
   void setParamsNoClearing(const SearchParams& params);
@@ -235,6 +257,10 @@ struct Search {
     SearchThread& thread, const SearchNode& node, SearchNodeState nodeState,
     int& numChildrenFound, int& bestChildIdx, int& bestChildMoveAction, bool& countEdgeVisit,
     bool isRoot
+  ) const;
+  void selectChildByStylePolicyShare(
+    const SearchNode& node, SearchNodeState nodeState, const float* policyProbs,
+    int& numChildrenFound, int& bestChildIdx, int& bestChildMoveAction
   ) const;
 
   // Update helpers

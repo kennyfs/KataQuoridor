@@ -27,14 +27,21 @@ PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec) {
     size_t atPos = rest.rfind('@');
     if(atPos != std::string::npos) {
       ps.modelPath = rest.substr(0, atPos);
-      ps.visits = Global::stringToInt(rest.substr(atPos + 1));
+      std::string visitsAndMode = rest.substr(atPos + 1);
+      size_t colon = visitsAndMode.find(':');
+      if(colon != std::string::npos) {
+        ps.opponentMode = visitsAndMode.substr(colon + 1);
+        Q4S::parseOpponentMode(ps.opponentMode);   // throws on an unknown mode
+        visitsAndMode = visitsAndMode.substr(0, colon);
+      }
+      ps.visits = Global::stringToInt(visitsAndMode);
     }
     else {
       ps.modelPath = rest;
       ps.visits = 200;
     }
     if(ps.modelPath.empty() || ps.visits < 1)
-      throw StringError("Bad Q4 match player '" + name + "': expected search:<model path>[@visits], got " + spec);
+      throw StringError("Bad Q4 match player '" + name + "': expected search:<model path>[@visits[:maxn|style|expect]], got " + spec);
   }
   else {
     ps.botType = ps.rawSpec;
@@ -227,6 +234,7 @@ GameResult playGame(
   const MatchConfig& mc,
   const GameSpec& g,
   const SearchParams& baseParams,
+  Q4S::OpponentMode defaultOpponentMode,
   const std::map<std::string, std::unique_ptr<NNEvaluator>>& evaluators,
   Logger& logger
 ) {
@@ -254,6 +262,9 @@ GameResult playGame(
       players[s].search = std::make_unique<Q4S::Search>(
         params, evaluators.at(ps.modelPath).get(), &logger, "q4match_" + Global::uint64ToHexString(seatSeed)
       );
+      players[s].search->setOpponentModel(
+        ps.opponentMode.empty() ? defaultOpponentMode : Q4S::parseOpponentMode(ps.opponentMode), (uint8_t)(1 << s)
+      );
       players[s].search->setPosition(history);
     }
     else {
@@ -274,12 +285,10 @@ GameResult playGame(
       break;
     }
     history.play(act);
-    float style[Q4StyleTracker::NUM_FEATURES];
-    history.getStyleFeatures(style);
     for(int s = 0; s < 4; s++) {
       if(players[s].search != nullptr) {
         players[s].search->makeMove(act);
-        players[s].search->setStyleFeatures(style);   // the tree is reused: the features of the new real position
+        players[s].search->setStyle(history.style);   // the tree is reused: the features of the new real position
       }
     }
   }
@@ -328,7 +337,9 @@ void runGames(
     for(int s = 0; s < 4; s++)
       if(mc.players[g.seatPlayer[s]].isSearch)
         needed.insert(mc.players[g.seatPlayer[s]].modelPath);
+  Q4S::OpponentMode defaultOpponentMode = Q4S::OPPONENT_MAXN;
   if(!needed.empty()) {
+    defaultOpponentMode = Q4S::loadOpponentMode(cfg);
     Rand evalSeed(mc.seed + 777);
     for(const std::string& path : needed) {
       evaluators[path] = std::unique_ptr<NNEvaluator>(Setup::initializeNNEvaluator(
@@ -352,7 +363,7 @@ void runGames(
           if(error != nullptr)
             break;
         }
-        GameResult r = playGame(mc, games[i], searchParams, evaluators, logger);
+        GameResult r = playGame(mc, games[i], searchParams, defaultOpponentMode, evaluators, logger);
         std::lock_guard<std::mutex> lock(mutex);
         onGameDone(r);
       }
