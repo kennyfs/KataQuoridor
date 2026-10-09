@@ -126,18 +126,27 @@ def test_wrong_channel_counts_are_refused(eigen, q4_model, duel_model, tmp_path)
     assert "Q4 I/O version 101 expects 27 spatial and 28 global input channels, model has 21 and 19" in text, text[-1500:]
 
 
-def test_unsupported_q4_version_is_refused(eigen, q4_model, tmp_path):
+def patch_option_d(q4_model, path, new_value):
     with gzip.open(q4_model, "rb") as f:
         data = f.read()
     lines = data[:2000].split(b"\n")
     idx = [i for i, l in enumerate(lines[:30]) if l == b"101"]
     assert len(idx) == 1
     pos = len(b"\n".join(lines[:idx[0]])) + 1
-    path = str(tmp_path / "v102.bin.gz")
     with gzip.open(path, "wb") as f:
-        f.write(data[:pos] + b"102" + data[pos + 3:])
-    res = evalnn(eigen, path)
+        f.write(data[:pos] + new_value + data[pos + 3:])
+    return path
+
+
+def test_unsupported_q4_version_is_refused(eigen, q4_model, tmp_path):
+    res = evalnn(eigen, patch_option_d(q4_model, str(tmp_path / "v103.bin.gz"), b"103"))
     assert res.returncode != 0 and "Q4 model option D (quoridorIOVersion) unsupported" in res.stdout + res.stderr
+
+
+def test_q4_v2_without_a_metadata_encoder_is_refused(eigen, q4_model, tmp_path):
+    """I/O v2 = v1 + the metadata encoder: a v1 net relabeled 102 has none (Round 7)."""
+    res = evalnn(eigen, patch_option_d(q4_model, str(tmp_path / "v102.bin.gz"), b"102"))
+    assert res.returncode != 0 and "Q4 I/O version 102 needs a metadata encoder but the model has no one" in res.stdout + res.stderr
 
 
 def test_truncated_model_is_refused(eigen, q4_model, tmp_path):
