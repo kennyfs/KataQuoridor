@@ -157,6 +157,9 @@ struct Search {
     double scaleMaxToAtLeast = 0.0
   ) const;
   bool getPolicySurpriseAndEntropy(double& surpriseRet, double& searchEntropyRet, double& policyEntropyRet) const;
+  bool getPolicySurpriseAndEntropy(
+    double& surpriseRet, double& searchEntropyRet, double& policyEntropyRet, const SearchNode* node
+  ) const;
 
   mutable std::atomic<int64_t> totalSearchThreadCpuTimeNs{0};
   int64_t getSearchThreadCpuTimeNs() const { return totalSearchThreadCpuTimeNs.load(std::memory_order_relaxed); }

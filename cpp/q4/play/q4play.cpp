@@ -177,7 +177,13 @@ void extractPolicyTarget(
 ) {
   double scaleMaxToAtLeast = 10.0;
   testAssert(node != nullptr);
-  bool success = toMoveBot->getPlaySelectionValues(actionsBuf, playSelectionValuesBuf, nullptr, scaleMaxToAtLeast);
+  const bool allowDirectPolicyMoves = false;
+  double lcbBuf[Q4Board::NUM_ACTIONS];
+  double radiusBuf[Q4Board::NUM_ACTIONS];
+  bool success = toMoveBot->getPlaySelectionValues(
+    *node, actionsBuf, playSelectionValuesBuf, nullptr, scaleMaxToAtLeast, allowDirectPolicyMoves, false, false,
+    lcbBuf, radiusBuf
+  );
   testAssert(success);
   testAssert(actionsBuf.size() == playSelectionValuesBuf.size());
 
@@ -540,30 +546,11 @@ Q4FinishedGameData* runGame(
 
     if(rootNNOutput != nullptr) {
       for(int c = 0; c < 5; c++) rawNN[c] = rootNNOutput->valueAbs[c];
-
-      const float* policyProbs = rootNNOutput->getPolicyProbsMaybeNoised();
-      double sumTarget = 0.0;
-      for(double val : playSelectionValuesBuf) sumTarget += val;
-
-      if(sumTarget > 0.0) {
-        for(size_t ai = 0; ai < actionsBuf.size(); ai++) {
-          int a = actionsBuf[ai];
-          double target = playSelectionValuesBuf[ai] / sumTarget;
-          double pol = (policyProbs != nullptr && policyProbs[a] > 1e-30f) ? (double)policyProbs[a] : 1e-30;
-          if(target > 1e-30) {
-            searchEntropy -= target * std::log(target);
-            policySurprise += target * (std::log(target) - std::log(pol));
-          }
-        }
-      }
-
-      std::vector<int> legalActions;
-      state.getLegalActions(legalActions);
-      for(int a : legalActions) {
-        double pol = (policyProbs != nullptr && policyProbs[a] > 1e-30f) ? (double)policyProbs[a] : 1e-30;
-        policyEntropy -= pol * std::log(pol);
-      }
     }
+    // As KataGo's extractSearchTargetsThisTurn
+    bool surpriseSuccess = bot->getPolicySurpriseAndEntropy(policySurprise, searchEntropy, policyEntropy);
+    testAssert(surpriseSuccess);
+    (void)surpriseSuccess;
     rawNNValuesByTurn.push_back(rawNN);
 
     Q4NNRawStats nnRaw;

@@ -439,11 +439,17 @@ void Search::getAnalysisData(std::vector<AnalysisData>& buf) const {
     buf[i].order = (int)i;
 }
 
-// Safe to call concurrently with search. As KataGo: the search distribution is the (reduced) play selection values.
 bool Search::getPolicySurpriseAndEntropy(double& surpriseRet, double& searchEntropyRet, double& policyEntropyRet) const {
-  if(rootNode == NULL)
+  return getPolicySurpriseAndEntropy(surpriseRet, searchEntropyRet, policyEntropyRet, rootNode);
+}
+
+// Safe to call concurrently with search. As KataGo: the search distribution is the (reduced) play selection values.
+bool Search::getPolicySurpriseAndEntropy(
+  double& surpriseRet, double& searchEntropyRet, double& policyEntropyRet, const SearchNode* node
+) const {
+  if(node == NULL)
     return false;
-  const NNOutput* nnOutput = rootNode->getNNOutput();
+  const NNOutput* nnOutput = node->getNNOutput();
   if(nnOutput == NULL)
     return false;
 
@@ -454,12 +460,17 @@ bool Search::getPolicySurpriseAndEntropy(double& surpriseRet, double& searchEntr
   double lcbBuf[Q4Board::NUM_ACTIONS];
   double radiusBuf[Q4Board::NUM_ACTIONS];
   bool suc = getPlaySelectionValues(
-    *rootNode, actions, playSelectionValues, NULL, 1.0, allowDirectPolicyMoves, alwaysComputeLcb, false, lcbBuf, radiusBuf
+    *node, actions, playSelectionValues, NULL, 1.0, allowDirectPolicyMoves, alwaysComputeLcb, false, lcbBuf, radiusBuf
   );
   if(!suc)
     return false;
 
-  const float* policyProbs = nnOutput->getPolicyProbsMaybeNoised();
+  // Copy: the node's policy may be replaced while the search runs.
+  float policyProbs[Q4Board::NUM_ACTIONS];
+  {
+    const float* policyProbsFromNN = nnOutput->getPolicyProbsMaybeNoised();
+    std::copy(policyProbsFromNN, policyProbsFromNN + Q4Board::NUM_ACTIONS, policyProbs);
+  }
 
   double sumPlaySelectionValues = 0.0;
   for(size_t i = 0; i < playSelectionValues.size(); i++)
