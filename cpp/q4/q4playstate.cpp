@@ -63,6 +63,7 @@ void Q4PlayState::playAssumeLegal(int action) {
 
   bool wasWall = !Q4Board::isPawnAction(action);
   board.applyAction(action);
+  board.skipSeatsWithoutLegalAction();
   plies++;
 
   if(wasWall) {
@@ -79,6 +80,7 @@ void Q4PlayState::eliminate(int seat) {
     return;
 
   board.eliminateSeat(seat);
+  board.skipSeatsWithoutLegalAction();
   repetitionHashes.clear();
   recordRepetition();
   checkTerminal();

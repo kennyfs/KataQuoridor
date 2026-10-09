@@ -146,6 +146,11 @@ struct Q4Board {
   // Terminal state checks
   bool isFinished() const;
   int getWinner() const;  // 0..3 if won, -1 if no winner
+  // True if the seat to move has at least one legal action (pawn move or wall).
+  bool toMoveHasLegalAction() const;
+  // A seat with no legal action is skipped (docs/q4/Q4Rules.md): the turn passes to the next alive seat that has one.
+  // Not a ply and not an action. Terminates: the alive pawn closest to the center can always step along its path.
+  void skipSeatsWithoutLegalAction();
 
   void recomputeDistancesToCenter();
   void recomputeCachedPaths();

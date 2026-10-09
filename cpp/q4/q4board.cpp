@@ -700,3 +700,28 @@ bool Q4Board::checkInvariants() const {
   }
   return true;
 }
+
+bool Q4Board::toMoveHasLegalAction() const {
+  int seat = toMove;
+  if(seat < 0 || !isAlive(seat))
+    return false;
+  int moves[NUM_ACTIONS];
+  if(getPawnMoves(seat, moves) > 0)
+    return true;
+  if(wallsLeft[seat] <= 0)
+    return false;
+  for(int a = 121; a < NUM_ACTIONS; a++)
+    if(isLegalAction(a, seat))
+      return true;
+  return false;
+}
+
+void Q4Board::skipSeatsWithoutLegalAction() {
+  if(isFinished())
+    return;
+  for(int i = 0; i < NUM_SEATS && !toMoveHasLegalAction(); i++) {
+    hash ^= ZOBRIST_TO_MOVE[toMove];
+    toMove = getNextAlive(toMove);
+    hash ^= ZOBRIST_TO_MOVE[toMove];
+  }
+}

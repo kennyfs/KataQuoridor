@@ -22,6 +22,7 @@ uint64_t perft(const Q4Board& board, int depth) {
   for(int act : actions) {
     Q4Board nextBoard = board;
     nextBoard.applyAction(act);
+    nextBoard.skipSeatsWithoutLegalAction();
     total += perft(nextBoard, depth - 1);
   }
   return total;

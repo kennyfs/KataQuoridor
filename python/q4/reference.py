@@ -382,6 +382,7 @@ def play(pos: Pos, move: Tuple[str, Tuple[int, int]]) -> Pos:
         return p
 
     p.to_move = next_alive_seat(seat, p.alive)
+    _skip_seats_without_legal_action(p)
     p._record_position()
     return p
 
@@ -412,9 +413,19 @@ def eliminate(pos: Pos, seat: int) -> Pos:
     # If eliminated seat was to move, advance turn
     if p.to_move == seat:
         p.to_move = next_alive_seat(seat, p.alive)
+    _skip_seats_without_legal_action(p)
 
     p._record_position()
     return p
+
+
+def _skip_seats_without_legal_action(p: Pos) -> None:
+    """A seat to move with no legal action (boxed in by pawns and walls, no legal wall) is skipped: the turn passes
+    to the next alive seat that has one. Not a ply. Always terminates (the alive pawn closest to the center can step)."""
+    for _ in range(NUM_SEATS):
+        if pawn_moves(p) or (p.walls_left[p.to_move] > 0 and legal_moves(p)):
+            return
+        p.to_move = next_alive_seat(p.to_move, p.alive)
 
 
 def perft(pos: Pos, depth: int) -> int:

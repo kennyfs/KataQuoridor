@@ -146,6 +146,10 @@ If two pawns consecutively occupy cells $C_1$ and $C_2$ in the same orthogonal d
    - If the game reaches `maxPlies` plies without a winner, the game immediately ends in a **Draw**.
    - If a pawn reaches the goal on the `maxPlies`-th ply, that move wins the game (not a draw).
    - In a draw, all seats alive at that moment share the draw; any previously eliminated seats are counted as losses.
+   - **No legal action (KataQuoridor extension):** a seat to move with no legal action (its pawn boxed in by pawns
+     and walls, and no wall left or no legal wall) is skipped: the turn passes to the next alive seat that has a legal
+     action. This is not a ply and not an action. It always ends: the alive pawn closest to the center can always step
+     along its walls-only shortest path (the next cell is closer than every other pawn, so it is empty).
 3. **Repetition Draw (`repetitionDrawCount` = N, default 0 = off):**
    - When enabled ($N \ge 2$, typically $N = 3$): the game immediately ends in a draw if the exact same position occurs for the $N$-th time.
    - A position consists of:
