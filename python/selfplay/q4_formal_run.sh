@@ -27,7 +27,7 @@ export KATAGO_BIN="${KATAGO_BIN:-$GITROOTDIR/cpp/build-cuda/katago}"
 
 # Self-play: q4_selfplay.cfg as committed (numGameThreads / NN batch settings from the R8 benchmark). A cycle's self-play
 # takes about 30 minutes at the R8 throughput.
-export NUM_GAMES_PER_CYCLE="${NUM_GAMES_PER_CYCLE:-2000}"
+export NUM_GAMES_PER_CYCLE="${NUM_GAMES_PER_CYCLE:-2500}"
 export SELFPLAY_EXTRA_ARGS="${SELFPLAY_EXTRA_ARGS:-}"
 
 # Training (Plan §15): Aurora from scratch with KataGo's warmup, LR scale x8 -> x4 -> x2 by training samples

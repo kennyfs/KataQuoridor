@@ -211,11 +211,18 @@ int MainCmds::q4selfplay(const vector<string>& args) {
     for(const ListedModel& m : models)
       if(m.name == currentName)
         current = &m;
+    // One entry per model: an export dir may hold both model.bin and model.bin.gz, which would count as two exports
     vector<const ListedModel*> older;
     if(current != nullptr) {
-      for(const ListedModel& m : models)
-        if(m.name != currentName && m.time < current->time)
+      for(const ListedModel& m : models) {
+        if(m.name == currentName || !(m.time < current->time))
+          continue;
+        bool seen = false;
+        for(const ListedModel* o : older)
+          seen = seen || o->name == m.name;
+        if(!seen)
           older.push_back(&m);
+      }
     }
     std::sort(older.begin(), older.end(), [](const ListedModel* a, const ListedModel* b) {
       return a->time != b->time ? a->time > b->time : a->name > b->name;

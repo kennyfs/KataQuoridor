@@ -885,6 +885,8 @@ def make_models_dir(tmp_path, names, base_time=1700000000):
     for i, name in enumerate(names):
         model = make_random_model("b1c32_q4", seed=100 + i, scale_heads=True)
         path = export_model(model, "b1c32_q4", d, name)
+        for f in os.listdir(os.path.join(d, name)):   # model.bin and model.bin.gz: one export, not two
+            os.utime(os.path.join(d, name, f), (base_time + 100 * i, base_time + 100 * i))
         os.utime(path, (base_time + 100 * i, base_time + 100 * i))
     return d
 

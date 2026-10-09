@@ -68,10 +68,22 @@ Q4SelfPlayManager::Q4SelfPlayManager(
     totalNumRowsProcessed(0)
 {}
 
+// Per-evaluator NN totals (the GPU batch-size benchmark of R8 Part C: learners vs snapshot evaluators)
+static void logEvaluatorTotals(Logger* logger, const std::string& name, const NNEvaluator* nnEval) {
+  if(logger == nullptr || nnEval == nullptr)
+    return;
+  logger->write(
+    "NN evaluator totals " + name + ": " + Global::uint64ToString(nnEval->numRowsProcessed()) + " rows " +
+    Global::uint64ToString(nnEval->numBatchesProcessed()) + " batches, average batch " +
+    Global::doubleToString(nnEval->averageProcessedBatchSize())
+  );
+}
+
 Q4SelfPlayManager::~Q4SelfPlayManager() {
   std::unique_lock<std::mutex> lock(managerMutex);
   for(size_t i = 0; i < modelDatas.size(); i++) {
     testAssert(modelDatas[i]->acquireCount == 0);
+    logEvaluatorTotals(logger, modelDatas[i]->modelName, modelDatas[i]->nnEval);
     modelDatas[i]->finishedGameQueue.setReadOnly();
     totalNumRowsProcessed += modelDatas[i]->nnEval->numRowsProcessed();
     if(!modelDatas[i]->hasDataWriteLoop) {
@@ -187,6 +199,7 @@ void Q4SelfPlayManager::unloadUnusedModelsNotIn(const std::vector<std::string>& 
     if(!wanted && foundData->acquireCount <= 0) {
       if(logger != nullptr)
         logger->write("Unloading snapshot network: " + foundData->modelName);
+      logEvaluatorTotals(logger, foundData->modelName, foundData->nnEval);
       foundData->finishedGameQueue.setReadOnly();
       totalNumRowsProcessed += foundData->nnEval->numRowsProcessed();
       if(!foundData->hasDataWriteLoop) {

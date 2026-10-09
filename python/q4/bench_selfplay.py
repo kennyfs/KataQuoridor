@@ -98,6 +98,31 @@ def _parse_log_stats_line(log_text):
     return games, rows_written
 
 
+def _parse_evaluator_totals(log_text):
+    """Per-evaluator totals logged by Q4SelfPlayManager at shutdown: {model: (rows, batches, average batch)}."""
+    out = {}
+    for m in re.finditer(r"NN evaluator totals (\S+): (\d+) rows (\d+) batches, average batch ([\d.]+)", log_text):
+        out[m.group(1)] = (int(m.group(2)), int(m.group(3)), float(m.group(4)))
+    return out
+
+
+def _rows_by_seat_kind(output_dir):
+    """Main rows of the written npz files by C61 (seat kind of the mover), side rows (C59 = 0) apart."""
+    import glob
+    import numpy as np
+    kinds = ["learner", "weak", "snapshot", "greedy", "randomPawn", "basher", "grudge"]
+    counts = {}
+    for path in glob.glob(os.path.join(output_dir, "**", "*.npz"), recursive=True):
+        gt = np.load(path)["globalTargetsNC"]
+        side = gt[:, 59] == 0
+        counts["side"] = counts.get("side", 0) + int(side.sum())
+        for k, name in enumerate(kinds):
+            n = int(((gt[:, 61] == k) & ~side).sum())
+            if n:
+                counts[name] = counts.get(name, 0) + n
+    return counts
+
+
 def main():
     p = argparse.ArgumentParser(description="Benchmark self-play throughput")
     p.add_argument("--katago", required=True)
@@ -199,7 +224,15 @@ def main():
         if nn_rows_per_s > 0 and avg_busy_cores > 0 else 0.0
     )
 
+    evaluator_totals = _parse_evaluator_totals(log_text)
+    rows_by_kind = _rows_by_seat_kind(output_dir)
+    total_wall = float(args.warmup + args.seconds)
+
     result = {
+        "evaluator_totals": {k: {"rows": r, "batches": b, "avg_batch": a, "rows_per_s": round(r / total_wall, 1)}
+                             for k, (r, b, a) in evaluator_totals.items()},
+        "rows_written_by_seat_kind_per_hour": {k: round(v * 3600.0 / total_wall) for k, v in rows_by_kind.items()},
+        "games_per_hour": round(games_finished * 3600.0 / total_wall),
         "katago": args.katago,
         "models_dir": args.models_dir,
         "config": args.config,
