@@ -82,7 +82,7 @@ def get_q4_io_version(config: ModelConfig) -> int:
     assert io_version in Q4_NUM_BIN_INPUT_FEATURES, f"unknown q4_io_version {io_version}"
     has_meta = config.get("metadata_encoder") is not None
     assert has_meta == (io_version >= 2), (
-        f"Q4 I/O v{io_version} {'needs' if io_version >= 2 else 'has no'} a metadata encoder in the config"
+        f"Q4 I/O v{io_version} {'needs a' if io_version >= 2 else 'has no'} metadata encoder in the config"
         f" ('-meta' presets are I/O v2), the config {'has' if has_meta else 'has none'}")
     return io_version
 
