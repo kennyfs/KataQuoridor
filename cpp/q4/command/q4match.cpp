@@ -108,6 +108,7 @@ int MainCmds::q4match(const std::vector<std::string>& args) {
       botSpecs.push_back("random");
     mc.seed = masterSeed;
     mc.maxPlies = maxPlies;
+    mc.repetitionDrawCount = cfg.getInt("repetitionDrawCount", 0, 100);
     mc.openingPliesMin = mc.openingPliesMax = 0;
     Q4Match::TableSpec table;
     table.name = "cli";
@@ -166,9 +167,14 @@ int MainCmds::q4match(const std::vector<std::string>& args) {
     return 0;
   }
 
-  Q4Match::fillDefaultSearchKeys(cfg);
   Logger logger;
-  SearchParams searchParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_GTP);
+  // As Duel's match: SETUP_FOR_MATCH. The config carries every search value; a table of bots needs none.
+  bool anySearchPlayer = false;
+  for(const Q4Match::PlayerSpec& p : mc.players)
+    anySearchPlayer = anySearchPlayer || p.isSearch;
+  SearchParams searchParams;
+  if(anySearchPlayer)
+    searchParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_MATCH);
 
   std::ofstream outStream;
   if(!outputFile.empty()) {
@@ -185,7 +191,7 @@ int MainCmds::q4match(const std::vector<std::string>& args) {
   }
   size_t played = 0;
   const size_t total = games.size();
-  Q4Match::runGames(mc, games, cfg, searchParams, logger, [&](const Q4Match::GameResult& r) {
+  Q4Match::runGames(mc, games, cfg, searchParams, logger, Setup::SETUP_FOR_MATCH, [&](const Q4Match::GameResult& r) {
     TableTally& tt = tallies[mc.tables[r.spec.table].name];
     tt.games++;
     tt.totalPlies += r.plies;

@@ -107,6 +107,7 @@ void testM3PairedOpenings() {
   cfg.overrideKey("table_two_openings", "6");
   cfg.overrideKey("numGameThreads", "3");
   cfg.overrideKey("maxPlies", "200");
+  cfg.overrideKey("repetitionDrawCount", "3");
   cfg.overrideKey("openingPliesMin", "5");
   cfg.overrideKey("openingPliesMax", "9");
   cfg.overrideKey("seed", "77");
@@ -124,11 +125,14 @@ void testM3PairedOpenings() {
   map<int, set<vector<int>>> openingsByIndex;   // opening index -> distinct opening ply lists seen
   map<vector<int>, set<int>> indexesByOpening;
   int numGames = 0;
-  Q4Match::runGames(mc, games, cfg, params, logger, [&](const Q4Match::GameResult& r) {
+  Q4Match::runGames(mc, games, cfg, params, logger, Setup::SETUP_FOR_MATCH, [&](const Q4Match::GameResult& r) {
     numGames++;
     const Q4Record& rec = r.record;
     testAssert(rec.matchOpening == r.spec.opening && rec.matchRotation == r.spec.rotation);
     testAssert(rec.matchTable == mc.tables[r.spec.table].name);
+    // The games use the self-play rules and the record says so.
+    testAssert(rec.rules.repetitionDrawCount == 3 && rec.rules.maxPlies == 200);
+    testAssert(Q4Record::fromJsonLine(rec.toJsonLine()).rules.repetitionDrawCount == 3);
     testAssert(rec.matchOpeningPlies >= 1 && rec.matchOpeningPlies <= 9);
     vector<int> opening;
     for(int i = 0; i < rec.matchOpeningPlies; i++)
@@ -176,13 +180,30 @@ void testM4ConfigErrors() {
     }
     testAssert(caught);
   };
+  const pair<string, string> rep("repetitionDrawCount", "3");
   const pair<string, string> players("players", "a,g"), pa("player_a", "greedy"), pg("player_g", "grudge"), tables("tables", "t");
-  expectError({players, pa, pg, tables, {"table_t", "a,a,a"}});                  // 3 slots
-  expectError({players, pa, pg, tables, {"table_t", "a,a,a,x"}});                // unknown player
-  expectError({players, pa, pg, tables, {"table_t", "a,g,g,g"}});                // grudge without a target
-  expectError({players, pa, pg, tables, {"table_t", "a>1,a,a,a"}});              // a target on a non-grudge bot
-  expectError({players, pa, {"player_g", "nobot"}, tables, {"table_t", "a,a,a,a"}});  // unknown bot
-  expectError({players, pa, pg, tables, {"table_t", "a,g>9,g>0,g>0"}});          // target out of range
+  expectError({rep, players, pa, pg, tables, {"table_t", "a,a,a"}});                  // 3 slots
+  expectError({rep, players, pa, pg, tables, {"table_t", "a,a,a,x"}});                // unknown player
+  expectError({rep, players, pa, pg, tables, {"table_t", "a,g,g,g"}});                // grudge without a target
+  expectError({rep, players, pa, pg, tables, {"table_t", "a>1,a,a,a"}});              // a target on a non-grudge bot
+  expectError({rep, players, pa, {"player_g", "nobot"}, tables, {"table_t", "a,a,a,a"}});  // unknown bot
+  expectError({rep, players, pa, pg, tables, {"table_t", "a,g>9,g>0,g>0"}});          // target out of range
+  // The repetition rule of the games is a required key (no silent default).
+  {
+    ConfigParser cfg;
+    for(const auto& kv : vector<pair<string, string>>{players, pa, pg, tables, {"table_t", "a,a,a,a"}, {"table_t_openings", "1"}})
+      cfg.overrideKey(kv.first, kv.second);
+    bool caught = false;
+    try {
+      Q4Match::loadMatchConfig(cfg);
+    }
+    catch(const StringError&) {
+      caught = true;
+    }
+    testAssert(caught);
+    cfg.overrideKey("repetitionDrawCount", "3");
+    Q4Match::loadMatchConfig(cfg);
+  }
   cout << "M4 passed!" << endl;
 }
 

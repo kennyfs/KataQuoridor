@@ -118,8 +118,8 @@ int MainCmds::q4gatekeeper(const std::vector<std::string>& args) {
     matchCfg.overrideKey("table_t_openings", "1");
     base = Q4Match::loadMatchConfig(matchCfg);
   }
-  Q4Match::fillDefaultSearchKeys(cfg);
-  SearchParams searchParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_GTP);
+  // As Duel's gatekeeper: SETUP_FOR_OTHER, the same as self-play.
+  SearchParams searchParams = Setup::loadSingleParams(cfg, Setup::SETUP_FOR_OTHER);
 
   if(!std::atomic_is_lock_free(&shouldStop))
     throw StringError("shouldStop is not lock free, signal-quitting will not work");
@@ -194,7 +194,7 @@ int MainCmds::q4gatekeeper(const std::vector<std::string>& args) {
     int ababGames = 0;
     std::map<int, double> benchCandPoints, benchBasePoints;   // opening -> summed points of the tested net
     std::map<int, int> benchCandGames, benchBaseGames;
-    Q4Match::runGames(mc, games, cfg, searchParams, logger, [&](const Q4Match::GameResult& r) {
+    Q4Match::runGames(mc, games, cfg, searchParams, logger, Setup::SETUP_FOR_OTHER, [&](const Q4Match::GameResult& r) {
       gamesOut << Q4Match::resultToJsonLine(mc, r) << "\n";
       const std::string& tname = mc.tables[r.spec.table].name;
       if(tname == "abab") {

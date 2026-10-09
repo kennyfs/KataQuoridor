@@ -75,6 +75,7 @@ struct MatchConfig {
   std::vector<TableSpec> tables;
   int numGameThreads = 1;
   int maxPlies = 400;
+  int repetitionDrawCount = 0;  // required key; the games use the self-play rules (3)
   int openingPliesMin = 4;
   int openingPliesMax = 8;
   double openingWallProb = 0.25;
@@ -82,11 +83,8 @@ struct MatchConfig {
 };
 
 // Reads players = a,b,c / player_<name> = spec / tables = t1,t2 / table_<t> = slot,slot,slot,slot (or table_<t>_*
-// keys), numGameThreads, maxPlies, openingPlies{Min,Max}, openingWallProb. Hard errors on anything unknown.
+// keys), numGameThreads, maxPlies, repetitionDrawCount, openingPlies{Min,Max}, openingWallProb. Hard errors on anything unknown.
 MatchConfig loadMatchConfig(ConfigParser& cfg);
-
-// Sets the search parameters the config leaves out (the q4search_test.cfg values, Q4's removed features off).
-void fillDefaultSearchKeys(ConfigParser& cfg);
 
 struct GameResult {
   GameSpec spec;
@@ -98,13 +96,15 @@ struct GameResult {
 
 // Plays the games with `numGameThreads` threads, one NNEvaluator per distinct model path shared by all games. The
 // callback is called under a mutex, in completion order. `searchParams` is the base search configuration
-// (maxVisits is set per player).
+// (maxVisits is set per player); `setupFor` is what the evaluators are initialized for (Duel: SETUP_FOR_MATCH in
+// match, SETUP_FOR_OTHER in the gatekeeper).
 void runGames(
   const MatchConfig& mc,
   const std::vector<GameSpec>& games,
   ConfigParser& cfg,
   const SearchParams& searchParams,
   Logger& logger,
+  Setup::setup_for_t setupFor,
   const std::function<void(const GameResult&)>& onGameDone
 );
 

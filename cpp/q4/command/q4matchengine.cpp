@@ -17,60 +17,6 @@
 
 namespace Q4Match {
 
-// Defaults for the search parameters a config does not set (the q4search_test.cfg values).
-void fillDefaultSearchKeys(ConfigParser& cfg) {
-  if(!cfg.contains("maxVisits")) cfg.overrideKey("maxVisits", "800");
-  if(!cfg.contains("numSearchThreads")) cfg.overrideKey("numSearchThreads", "1");
-  if(!cfg.contains("winLossUtilityFactor")) cfg.overrideKey("winLossUtilityFactor", "1.0");
-  if(!cfg.contains("cpuctExploration")) cfg.overrideKey("cpuctExploration", "1.1");
-  if(!cfg.contains("cpuctExplorationLog")) cfg.overrideKey("cpuctExplorationLog", "0.0");
-  if(!cfg.contains("fpuReductionMax")) cfg.overrideKey("fpuReductionMax", "0.2");
-  if(!cfg.contains("rootFpuReductionMax")) cfg.overrideKey("rootFpuReductionMax", "0.0");
-  if(!cfg.contains("fpuParentWeightByVisitedPolicy")) cfg.overrideKey("fpuParentWeightByVisitedPolicy", "true");
-  if(!cfg.contains("fpuParentWeightByVisitedPolicyPow")) cfg.overrideKey("fpuParentWeightByVisitedPolicyPow", "2.0");
-  if(!cfg.contains("valueWeightExponent")) cfg.overrideKey("valueWeightExponent", "0.5");
-  if(!cfg.contains("useUncertainty")) cfg.overrideKey("useUncertainty", "true");
-  if(!cfg.contains("uncertaintyExponent")) cfg.overrideKey("uncertaintyExponent", "1.0");
-  if(!cfg.contains("uncertaintyCoeff")) cfg.overrideKey("uncertaintyCoeff", "0.25");
-  if(!cfg.contains("useLcbForSelection")) cfg.overrideKey("useLcbForSelection", "true");
-  if(!cfg.contains("lcbStdevs")) cfg.overrideKey("lcbStdevs", "5.0");
-  if(!cfg.contains("minVisitPropForLCB")) cfg.overrideKey("minVisitPropForLCB", "0.15");
-  if(!cfg.contains("useNonBuggyLcb")) cfg.overrideKey("useNonBuggyLcb", "true");
-  if(!cfg.contains("rootNoiseEnabled")) cfg.overrideKey("rootNoiseEnabled", "false");
-  if(!cfg.contains("rootDirichletNoiseTotalConcentration")) cfg.overrideKey("rootDirichletNoiseTotalConcentration", "10.83");
-  if(!cfg.contains("rootDirichletNoiseWeight")) cfg.overrideKey("rootDirichletNoiseWeight", "0.25");
-  if(!cfg.contains("rootDesiredPerChildVisitsCoeff")) cfg.overrideKey("rootDesiredPerChildVisitsCoeff", "2");
-  if(!cfg.contains("rootPolicyTemperatureEarly")) cfg.overrideKey("rootPolicyTemperatureEarly", "1.25");
-  if(!cfg.contains("rootPolicyTemperature")) cfg.overrideKey("rootPolicyTemperature", "1.1");
-  if(!cfg.contains("rootNumSymmetriesToSample")) cfg.overrideKey("rootNumSymmetriesToSample", "8");
-  if(!cfg.contains("chosenMoveTemperatureEarly")) cfg.overrideKey("chosenMoveTemperatureEarly", "0.75");
-  if(!cfg.contains("chosenMoveTemperatureHalflife")) cfg.overrideKey("chosenMoveTemperatureHalflife", "38");
-  if(!cfg.contains("chosenMoveTemperature")) cfg.overrideKey("chosenMoveTemperature", "0.15");
-  if(!cfg.contains("chosenMoveSubtract")) cfg.overrideKey("chosenMoveSubtract", "0");
-  if(!cfg.contains("chosenMovePrune")) cfg.overrideKey("chosenMovePrune", "1");
-  if(!cfg.contains("staticScoreUtilityFactor")) cfg.overrideKey("staticScoreUtilityFactor", "0.0");
-  if(!cfg.contains("dynamicScoreUtilityFactor")) cfg.overrideKey("dynamicScoreUtilityFactor", "0.0");
-  if(!cfg.contains("policyOptimism")) cfg.overrideKey("policyOptimism", "0.0");
-  if(!cfg.contains("rootPolicyOptimism")) cfg.overrideKey("rootPolicyOptimism", "0.0");
-  if(!cfg.contains("useGraphSearch")) cfg.overrideKey("useGraphSearch", "false");
-  if(!cfg.contains("useEvalCache")) cfg.overrideKey("useEvalCache", "false");
-  if(!cfg.contains("subtreeValueBiasFactor")) cfg.overrideKey("subtreeValueBiasFactor", "0.0");
-  if(!cfg.contains("avoidRepeatedPatternUtility")) cfg.overrideKey("avoidRepeatedPatternUtility", "0.0");
-  if(!cfg.contains("antiMirror")) cfg.overrideKey("antiMirror", "false");
-  if(!cfg.contains("playoutDoublingAdvantage")) cfg.overrideKey("playoutDoublingAdvantage", "0.0");
-  if(!cfg.contains("visitCapContempt")) cfg.overrideKey("visitCapContempt", "0");
-  if(!cfg.contains("rootSymmetryPruning")) cfg.overrideKey("rootSymmetryPruning", "false");
-  if(!cfg.contains("conservativePass")) cfg.overrideKey("conservativePass", "false");
-  if(!cfg.contains("enablePassingHacks")) cfg.overrideKey("enablePassingHacks", "false");
-  if(!cfg.contains("enableMorePassingHacks")) cfg.overrideKey("enableMorePassingHacks", "false");
-  if(!cfg.contains("fillDameBeforePass")) cfg.overrideKey("fillDameBeforePass", "false");
-  if(!cfg.contains("rootEndingBonusPoints")) cfg.overrideKey("rootEndingBonusPoints", "0.0");
-  if(!cfg.contains("rootPruneUselessMoves")) cfg.overrideKey("rootPruneUselessMoves", "false");
-  if(!cfg.contains("ignorePreRootHistory")) cfg.overrideKey("ignorePreRootHistory", "false");
-  if(!cfg.contains("ignoreAllHistory")) cfg.overrideKey("ignoreAllHistory", "false");
-
-}
-
 PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec) {
   PlayerSpec ps;
   ps.name = name;
@@ -255,6 +201,7 @@ MatchConfig loadMatchConfig(ConfigParser& cfg) {
 
   mc.numGameThreads = cfg.contains("numGameThreads") ? cfg.getInt("numGameThreads", 1, 4096) : 1;
   mc.maxPlies = cfg.contains("maxPlies") ? cfg.getInt("maxPlies", 1, 100000) : 400;
+  mc.repetitionDrawCount = cfg.getInt("repetitionDrawCount", 0, 100);
   mc.openingPliesMin = cfg.contains("openingPliesMin") ? cfg.getInt("openingPliesMin", 0, 100) : 4;
   mc.openingPliesMax = cfg.contains("openingPliesMax") ? cfg.getInt("openingPliesMax", 0, 100) : 8;
   if(mc.openingPliesMax < mc.openingPliesMin)
@@ -287,6 +234,7 @@ GameResult playGame(
   res.spec = g;
   Q4Rules rules;
   rules.maxPlies = mc.maxPlies;
+  rules.repetitionDrawCount = mc.repetitionDrawCount;  // the self-play rules (Duel's gatekeeper: "same rules as selfplay")
 
   Q4History history(rules);
   std::vector<int> opening = makeOpening(rules, mc.seed, g.opening, openingLength(mc, g.opening), mc.openingWallProb);
@@ -366,6 +314,7 @@ void runGames(
   ConfigParser& cfg,
   const SearchParams& searchParams,
   Logger& logger,
+  Setup::setup_for_t setupFor,
   const std::function<void(const GameResult&)>& onGameDone
 ) {
   std::map<std::string, std::unique_ptr<NNEvaluator>> evaluators;
@@ -375,14 +324,11 @@ void runGames(
       if(mc.players[g.seatPlayer[s]].isSearch)
         needed.insert(mc.players[g.seatPlayer[s]].modelPath);
   if(!needed.empty()) {
-    if(!cfg.contains("nnCacheSizePowerOfTwo")) cfg.overrideKey("nnCacheSizePowerOfTwo", "18");
-    if(!cfg.contains("nnMutexPoolSizePowerOfTwo")) cfg.overrideKey("nnMutexPoolSizePowerOfTwo", "14");
-    if(!cfg.contains("nnMaxBatchSize")) cfg.overrideKey("nnMaxBatchSize", "16");
     Rand evalSeed(mc.seed + 777);
     for(const std::string& path : needed) {
       evaluators[path] = std::unique_ptr<NNEvaluator>(Setup::initializeNNEvaluator(
         path, path, "", cfg, logger, evalSeed, mc.numGameThreads, Q4NNConst::POS_LEN, Q4NNConst::POS_LEN,
-        Setup::MaxBatchSizeRequest::requireFromConfig(), true, false, Setup::SETUP_FOR_GTP
+        Setup::MaxBatchSizeRequest::requireFromConfig(), true, false, setupFor
       ));
     }
   }
