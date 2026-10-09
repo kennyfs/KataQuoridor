@@ -27,6 +27,7 @@ NNResultBuf::NNResultBuf()
     // If no symmetry is specified, it will use default or random based on config.
     symmetry(NNInputs::SYMMETRY_NOTSPECIFIED),
     quoridorSymmetry(0),
+    isQ4Row(false),
     policyOptimism(0.0)
 {}
 
@@ -895,52 +896,72 @@ void NNEvaluator::serve(
 
         unique_lock<std::mutex> resultLock(resultBuf->resultMutex);
         testAssert(resultBuf->hasResult == false);
-        resultBuf->result = std::make_shared<NNOutput>();
 
-        float* policyProbs = resultBuf->result->policyProbs;
-        constexpr int rawPolicySize = QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
-        for(int i = 0; i < rawPolicySize; i++) {
-          policyProbs[i] = (float)rand.nextGaussian();
-        }
-
-        resultBuf->result->nnXLen = nnXLen;
-        resultBuf->result->nnYLen = nnYLen;
-        if(resultBuf->includeOwnerMap) {
-          float* whiteOwnerMap = new float[nnXLen*nnYLen];
-          for(int i = 0; i<nnXLen*nnYLen; i++)
-            whiteOwnerMap[i] = 0.0;
-          for(int y = 0; y<boardYSize; y++) {
-            for(int x = 0; x<boardXSize; x++) {
-              int pos = NNPos::xyToPos(x,y,nnXLen);
-              whiteOwnerMap[pos] = (float)rand.nextGaussian() * 0.20f;
-            }
-          }
-          resultBuf->result->whiteOwnerMap = whiteOwnerMap;
+        if(resultBuf->isQ4Row) {
+          // Random Q4 output, the Q4 analog of the Duel / KataGo random net below
+          resultBuf->result = std::make_shared<NNOutput>();
+          resultBuf->result->nnXLen = nnXLen;
+          resultBuf->result->nnYLen = nnYLen;
+          resultBuf->result->whiteOwnerMap = NULL;
+          auto raw = std::make_shared<Q4RawNNOutput>();
+          for(float& v : raw->policyLogits) v = (float)rand.nextGaussian();          // as KataGo: policy logits N(0, 1)
+          for(float& v : raw->valueLogits) v = (float)(rand.nextGaussian() * 0.20);  // as KataGo: value logits N(0, 0.2)
+          for(float& v : raw->miscValues) v = 0.0f;
+          raw->miscValues[5] = -20.0f;  // short-term value error ~ 0, as KataGo's random net sets shorttermWinlossError = 0
+          for(float& v : raw->trajectoryLogits) v = 0.0f;
+          resultBuf->result->q4Raw = raw;
+          resultBuf->hasResult = true;
+          resultBuf->clientWaitingForResult.notify_all();
+          resultLock.unlock();
         }
         else {
-          resultBuf->result->whiteOwnerMap = NULL;
-        }
+          resultBuf->result = std::make_shared<NNOutput>();
 
-        // These aren't really probabilities. Win/Loss/NoResult will get softmaxed later
-        double whiteWinProb = 0.0 + rand.nextGaussian() * 0.20;
-        double whiteLossProb = 0.0 + rand.nextGaussian() * 0.20;
-        double whiteScoreMean = 0.0 + rand.nextGaussian() * 0.20;
-        double whiteScoreMeanSq = 0.0 + rand.nextGaussian() * 0.20;
-        double whiteNoResultProb = 0.0 + rand.nextGaussian() * 0.20;
-        double varTimeLeft = 0.5 * boardXSize * boardYSize;
-        resultBuf->result->whiteWinProb = (float)whiteWinProb;
-        resultBuf->result->whiteLossProb = (float)whiteLossProb;
-        resultBuf->result->whiteNoResultProb = (float)whiteNoResultProb;
-        resultBuf->result->whiteScoreMean = (float)whiteScoreMean;
-        resultBuf->result->whiteScoreMeanSq = (float)whiteScoreMeanSq;
-        resultBuf->result->whiteLead = (float)whiteScoreMean;
-        resultBuf->result->varTimeLeft = (float)varTimeLeft;
-        resultBuf->result->shorttermWinlossError = 0.0f;
-        resultBuf->result->shorttermScoreError = 0.0f;
-        resultBuf->result->policyOptimismUsed = (float)resultBuf->policyOptimism;
-        resultBuf->hasResult = true;
-        resultBuf->clientWaitingForResult.notify_all();
-        resultLock.unlock();
+          float* policyProbs = resultBuf->result->policyProbs;
+          constexpr int rawPolicySize = QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN;
+          for(int i = 0; i < rawPolicySize; i++) {
+            policyProbs[i] = (float)rand.nextGaussian();
+          }
+
+          resultBuf->result->nnXLen = nnXLen;
+          resultBuf->result->nnYLen = nnYLen;
+          if(resultBuf->includeOwnerMap) {
+            float* whiteOwnerMap = new float[nnXLen*nnYLen];
+            for(int i = 0; i<nnXLen*nnYLen; i++)
+              whiteOwnerMap[i] = 0.0;
+            for(int y = 0; y<boardYSize; y++) {
+              for(int x = 0; x<boardXSize; x++) {
+                int pos = NNPos::xyToPos(x,y,nnXLen);
+                whiteOwnerMap[pos] = (float)rand.nextGaussian() * 0.20f;
+              }
+            }
+            resultBuf->result->whiteOwnerMap = whiteOwnerMap;
+          }
+          else {
+            resultBuf->result->whiteOwnerMap = NULL;
+          }
+
+          // These aren't really probabilities. Win/Loss/NoResult will get softmaxed later
+          double whiteWinProb = 0.0 + rand.nextGaussian() * 0.20;
+          double whiteLossProb = 0.0 + rand.nextGaussian() * 0.20;
+          double whiteScoreMean = 0.0 + rand.nextGaussian() * 0.20;
+          double whiteScoreMeanSq = 0.0 + rand.nextGaussian() * 0.20;
+          double whiteNoResultProb = 0.0 + rand.nextGaussian() * 0.20;
+          double varTimeLeft = 0.5 * boardXSize * boardYSize;
+          resultBuf->result->whiteWinProb = (float)whiteWinProb;
+          resultBuf->result->whiteLossProb = (float)whiteLossProb;
+          resultBuf->result->whiteNoResultProb = (float)whiteNoResultProb;
+          resultBuf->result->whiteScoreMean = (float)whiteScoreMean;
+          resultBuf->result->whiteScoreMeanSq = (float)whiteScoreMeanSq;
+          resultBuf->result->whiteLead = (float)whiteScoreMean;
+          resultBuf->result->varTimeLeft = (float)varTimeLeft;
+          resultBuf->result->shorttermWinlossError = 0.0f;
+          resultBuf->result->shorttermScoreError = 0.0f;
+          resultBuf->result->policyOptimismUsed = (float)resultBuf->policyOptimism;
+          resultBuf->hasResult = true;
+          resultBuf->clientWaitingForResult.notify_all();
+          resultLock.unlock();
+        }
       }
     }
     else {
@@ -1227,6 +1248,8 @@ void NNEvaluator::evaluate(
   }
 
   buf.symmetry = nnInputParams.symmetry;
+  buf.quoridorSymmetry = 0;
+  buf.isQ4Row = false;
   buf.policyOptimism = nnInputParams.policyOptimism;
 
   unique_lock<std::mutex> lock(bufferMutex);
@@ -1625,7 +1648,7 @@ void NNEvaluator::evaluateQ4Raw(
   testAssert(!isKilled);
   buf.hasResult = false;
 
-  if(!Q4NNConst::isQ4IOVersion(inputsVersion))
+  if(!debugSkipNeuralNet && !Q4NNConst::isQ4IOVersion(inputsVersion))
     throw StringError(
       "KataQuoridor: model " + modelName + " is not a Q4 (four-player) network (option D " + Global::intToString(inputsVersion) +
       ", expected a value >= " + Global::intToString(Q4NNConst::Q4_IO_VERSION_BASE) + ") and cannot be evaluated on the Q4 path");
@@ -1664,6 +1687,7 @@ void NNEvaluator::evaluateQ4Raw(
   // The row has its symmetry applied by the caller; the backend always evaluates symmetry 0.
   buf.symmetry = 0;
   buf.quoridorSymmetry = symmetry;
+  buf.isQ4Row = true;
   buf.policyOptimism = 0.0;
 
   unique_lock<std::mutex> lock(bufferMutex);

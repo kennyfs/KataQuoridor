@@ -61,6 +61,7 @@ struct NNResultBuf {
                 // backend (see QuoridorNN::applyInputSymmetry - the backend always sees identity).
   int quoridorSymmetry; // The real, resolved symmetry (0 or 1) used to mirror the input row,
                          // preserved for QuoridorNN::mapPolicyToSearch after `symmetry` is zeroed.
+  bool isQ4Row; // set by evaluateQ4Raw (true) and by the Duel evaluate path (false); read by the random-net server branch
   double policyOptimism; // The policy optimism to use for this eval
 
   NNResultBuf();
