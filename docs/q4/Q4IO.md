@@ -207,6 +207,8 @@ The key covers everything the inputs read:
 
 ## 8. Training rows (Round 4)
 
+(Game records, which carry the `gameHash` of the rows, are SGF lines: [Q4Sgf.md](Q4Sgf.md).)
+
 One row per recorded turn, from the perspective of the seat to move. "Relative seat k" means seat
 `(toMove + k) mod 4`.
 - npz keys are the same as Duel's, so `shuffle.py`'s key check passes: `binaryInputNCHWPacked`, `globalInputNC`,
