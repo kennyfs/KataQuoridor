@@ -65,6 +65,7 @@ SELFPLAY_EXTRA_ARGS="${SELFPLAY_EXTRA_ARGS:-}" # e.g. -override-config "numGameT
 USEGATING="${USEGATING:-0}" # 1 = gatekeeper (off by default, Plan §9)
 GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs longer than this many seconds; 0 disables.
 GATEKEEPER_EXTRA_ARGS="${GATEKEEPER_EXTRA_ARGS:-}" # e.g. -override-config "gateBenchStrong=search:/path/model.bin.gz@100"
+POST_EXPORT_HOOK="${POST_EXPORT_HOOK:-}" # A command run after every export as: $POST_EXPORT_HOOK CYCLE (q4_formal_run.sh: evaluation, summary). Its failure is logged, not fatal.
 START_AT="${START_AT:-selfplay}" # First cycle only: gatekeeper (with USEGATING=1), selfplay, shuffle, train or export.
 
 SELFPLAY_CONFIG="${SELFPLAY_CONFIG:-$GITROOTDIR/cpp/configs/q4/training/q4_selfplay.cfg}"
@@ -138,6 +139,11 @@ do
     (
         time ./export_model_for_selfplay.sh "$NAMEPREFIX" "$BASEDIR" "$USEGATING" | tee -a "$BASEDIR"/logs/outexport.txt
     )
+
+    if [[ -n "$POST_EXPORT_HOOK" ]]; then
+        $POST_EXPORT_HOOK "$CYCLE" 2>&1 | tee -a "$BASEDIR"/logs/posthook.txt \
+            || echo "$(date '+%F %T') post-export hook failed (status $?), continuing" | tee -a "$BASEDIR"/logs/posthook.txt
+    fi
 
 done
 
