@@ -2606,10 +2606,19 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
     if(quoridorIOVersion == 0)
       throw StringError(name + ": model option D (quoridorIOVersion) is 0: this is a Go network, not a KataQuoridor network");
     const bool isQ4 = Q4NNConst::isQ4IOVersion(quoridorIOVersion);
-    if(isQ4 && quoridorIOVersion != Q4NNConst::Q4_IO_VERSION_1)
+    if(isQ4 && quoridorIOVersion != Q4NNConst::Q4_IO_VERSION_1 && quoridorIOVersion != Q4NNConst::Q4_IO_VERSION_2)
       throw StringError(
         name + ": Q4 model option D (quoridorIOVersion) unsupported, you may need a newer KataQuoridor version, value was: " +
         Global::intToString(quoridorIOVersion));
+    // Q4 I/O v2 = v1 + the metadata encoder (docs/q4/Q4IO.md §10): a v1 net has none, a v2 net must have KataGo's.
+    if(isQ4 && Q4NNConst::q4IOVersionHasMetadata(quoridorIOVersion) != (metaEncoderVersion > 0))
+      throw StringError(
+        name + Global::strprintf(
+                 ": Q4 I/O version %d %s a metadata encoder but the model %s one (meta encoder version %d)",
+                 quoridorIOVersion,
+                 Q4NNConst::q4IOVersionHasMetadata(quoridorIOVersion) ? "needs" : "has no",
+                 metaEncoderVersion > 0 ? "has" : "has no",
+                 metaEncoderVersion));
     if(isQ4 && (numInputChannels != Q4NNConst::NUM_SPATIAL_CHANNELS || numInputGlobalChannels != Q4NNConst::NUM_GLOBAL_FEATURES))
       throw StringError(
         name + Global::strprintf(

@@ -560,14 +560,18 @@ void nnBench(const ModelOptions& o) {
   const int numClientThreads = o.numThreads;
   NNEvaluator* nnEval = makeEvaluator(o, o.batchSize, 1);
   const bool nhwc = nnEval->getInputsUseNHWC();
-  std::vector<std::vector<float>> spatials, globals;
+  std::vector<std::vector<float>> spatials, globals, metas;
   std::vector<Hash128> keys;
+  const bool needsMeta = nnEval->requiresSGFMetadata();
   for(const Q4History& h : positions) {
     std::vector<float> sp(Q4NN::NUM_SPATIAL_CHANNELS * Q4NN::POS_AREA), gl(Q4NN::NUM_GLOBAL_FEATURES);
     Q4NN::fillRow(h.currentBoard, h, nhwc, sp.data(), gl.data());
     spatials.push_back(sp);
     globals.push_back(gl);
-    keys.push_back(Q4NN::getCacheHash(h.currentBoard, h, 0));
+    std::vector<float> meta(Q4NN::NUM_METADATA_INPUTS, 0.0f);
+    h.getStyleFeatures(meta.data());
+    metas.push_back(meta);
+    keys.push_back(Q4NN::getCacheHash(h.currentBoard, h, 0, needsMeta ? meta.data() : nullptr));
   }
   std::atomic<bool> stop(false);
   std::atomic<uint64_t> total(0);
@@ -576,7 +580,7 @@ void nnBench(const ModelOptions& o) {
     size_t i = (size_t)idx * 37;
     while(!stop.load()) {
       i = (i + 1) % positions.size();
-      nnEval->evaluateQ4Raw(spatials[i].data(), globals[i].data(), keys[i], buf, true);
+      nnEval->evaluateQ4Raw(spatials[i].data(), globals[i].data(), needsMeta ? metas[i].data() : nullptr, keys[i], buf, true);
       total.fetch_add(1);
     }
   };

@@ -9,8 +9,14 @@ namespace Q4NNConst {
   // Model option D: 100 + Q4 I/O version.
   static constexpr int Q4_IO_VERSION_BASE = 100;
   static constexpr int Q4_IO_VERSION_1 = 101;
-  static constexpr int Q4_IO_VERSION_LATEST = Q4_IO_VERSION_1;
+  static constexpr int Q4_IO_VERSION_2 = 102;  // v1 + the metadata input (style features, Q4IO §10)
+  static constexpr int Q4_IO_VERSION_LATEST = Q4_IO_VERSION_2;
   inline bool isQ4IOVersion(int ioVersion) { return ioVersion >= Q4_IO_VERSION_BASE; }
+  inline bool q4IOVersionHasMetadata(int ioVersion) { return ioVersion >= Q4_IO_VERSION_2; }
+
+  // Metadata input of I/O v2: KataGo's metadata row (192 floats), the 76 style features at slots 0..75, the rest 0.
+  static constexpr int NUM_METADATA_INPUTS = 192;
+  static constexpr int NUM_STYLE_FEATURES = 76;
 
   static constexpr int POS_LEN = 11;
   static constexpr int POS_AREA = POS_LEN * POS_LEN;  // 121

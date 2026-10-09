@@ -1,6 +1,6 @@
-# KataQuoridor Four-at-a-Table (Q4) Neural Network I/O Specification (Q4 I/O v1)
+# KataQuoridor Four-at-a-Table (Q4) Neural Network I/O Specification (Q4 I/O v1 and v2)
 
-Canonical specification of Q4 I/O v1 (Plan §6–§7). The code that implements it:
+Canonical specification of Q4 I/O v1 (Plan §6–§7; §1–§8) and of v2 = v1 + the metadata input (Round 7; §9–§10). The code that implements it:
 
 | What | Where |
 |---|---|
@@ -18,7 +18,7 @@ Q4 nets run on the full 11 × 11 board in true board space (no canonical rotatio
 seat to move, and are evaluated and trained under all 8 symmetries of the square.
 
 - **Model option D** (the header slot Duel uses for `quoridorIOVersion`) is `100 + q4_io_version`, i.e. **101** for
-  Q4 I/O v1. Values `>= 100` mean "four-player family". `isQ4IOVersion(v)` (`q4nnconstants.h`) is the one test the
+  Q4 I/O v1 and **102** for v2 (§10). Values `>= 100` mean "four-player family". `isQ4IOVersion(v)` (`q4nnconstants.h`) is the one test the
   shared C++ code uses.
 - The Duel loader rejects option D `> 3` (including every Q4 net) and the Q4 loader rejects option D `< 100`
   (Duel and Go nets), both with a message naming the expected and the found value.
@@ -203,7 +203,7 @@ The key covers everything the inputs read:
 - The symmetry is **not** in the key because the evaluator un-symmetrizes the raw output before caching it, so
   any symmetry produces a symmetry-0 result that serves subsequent queries under any symmetry.
 - `initialWalls` is not in the key: the inputs only read the current wall supply, which is in `board.hash`.
-- From round 6 the style features join the key.
+- From Round 7 the style features join the key of Q4 I/O v2 nets (§10).
 
 ## 8. Training rows (Round 4)
 
@@ -211,7 +211,7 @@ One row per recorded turn, from the perspective of the seat to move. "Relative s
 `(toMove + k) mod 4`.
 - npz keys are the same as Duel's, so `shuffle.py`'s key check passes: `binaryInputNCHWPacked`, `globalInputNC`,
   `policyTargetsNCMove`, `globalTargetsNC`, `scoreDistrN`, `valueTargetsNCHW`, `spatialDistNCHW`.
-- No `metadataInputNC` and no `qValueTargetsNCMove`.
+- Plus `metadataInputNC` float32 `[N, 192]` (Round 7, §10); no `qValueTargetsNCMove`.
 - Every spatial tensor is in **symmetry-0 orientation**. The loader (round 5) applies a random symmetry to inputs and
   targets together.
 
@@ -334,3 +334,47 @@ symmetry handling.
 `Q4History` maintains the tracker: `play` observes the move, `eliminate` zeroes the seat, `undo` restores the tracker
 (a copy of the tracker is kept per event, as boards are). `Q4PlayState` does not: inside a search the features are
 frozen at the root (Plan §12.2).
+
+---
+
+## 10. Q4 I/O v2 = v1 + the metadata input (Round 7)
+
+KataGo's metadata encoder (`MetadataEncoder` in `python/katago/train/model_pytorch.py`, `SGFMetadataEncoderDesc` in the
+C++ model descriptor, the Eigen / CUDA / OpenCL / TensorRT backends) is reused unchanged: a 192-number input row goes
+through two linear layers with the trunk's activation and a bias-free linear layer to the trunk width, scaled by 0.5, and is
+added to the trunk input (`input_meta`). Q4 feeds it the style features of §9.
+
+| | I/O v1 | I/O v2 |
+|---|---|---|
+| model option D | **101** | **102** |
+| config | `q4_io_version: 1`, no `metadata_encoder` | `q4_io_version: 2`, `metadata_encoder: {meta_encoder_version: 1, internal_num_channels: trunk width}` |
+| presets | `b1c32_q4`, `b2c64_q4`, `tf2_b4c192_q4` | `b1c32_q4-meta`, `b2c64_q4-meta`, `tf2_b4c192_q4-meta` (KataGo's `-meta` naming) |
+| spatial / global / outputs | §3, §4, §5 | the same |
+
+A v1 net must have no metadata encoder and a v2 net must have one (hard errors in the config check and in the C++
+model loader). v1 nets load and evaluate exactly as before.
+
+**Metadata row (192 floats).** Slots `0..75` = the 76 style features of §9.3 for the seat to move (relative seat
+order); all other slots 0. KataGo's `feature_mask` zeroes slot 86, which therefore stays unused.
+
+**Evaluation (C++).** `Q4NN::evaluate(..., style)` fills the row for v2 nets (a hard error if the features are not given;
+v1 nets ignore them). The **NN cache key includes the style features** (a hash of the 76 floats, as KataGo hashes
+`SGFMetadata` into the key) for v2 nets only, so a key never depends on them for v1 nets and a hit needs the same
+position *and* the same features. The metadata is not affected by the board symmetry (§9.3), so the raw-output
+un-symmetrizing of §6 is unchanged. `NNEvaluator::evaluateQ4Raw` takes the row (`nullptr` for nets without metadata).
+
+**Search.** `Search::setPosition(Q4History)` takes the features of the seat to move at the root from the history and
+freezes them: every evaluation in the tree uses that one vector (Plan §12.2; deeper nodes whose mover is another
+seat see the root's relative seat order, which Round 8's opponent-aware search will revisit). `makeMove` (tree reuse)
+keeps the old vector; the caller sets the new real position's with `setStyleFeatures` (self-play: after every real
+ply, for all the searches of the game), which also makes the next search re-evaluate the root with the new features. Nodes
+below the root keep the evaluation they got with the older features: styles change slowly, and re-evaluating the tree
+would defeat the reuse. `setPosition(Q4PlayState)` carries no history, so a v2 net refuses to evaluate until the features
+are set.
+
+**Training rows.** npz key `metadataInputNC`, float32 `[N, 192]`: the metadata row of the row's real position (for a
+side position, of the position after the side action; the features come from the real history at that point). Every
+row has it, whatever the net (it is data, written by the same self-play); the shuffle needs `-include-meta`
+(`q4_synchronous_loop.sh` passes it). The loader hands it to the model as `input_meta` when the model has a metadata
+encoder: **a v2 net refuses data without the key (hard error), a v1 net ignores it.** The metadata is invariant under the
+8 symmetries, so the augmentation leaves it alone.

@@ -42,6 +42,9 @@ def test_python_and_cpp_constants_agree():
     c = cpp_constants()
     assert c["Q4_IO_VERSION_BASE"] == modelconfigs.Q4_IO_VERSION_BASE
     assert c["Q4_IO_VERSION_1"] == modelconfigs.Q4_IO_VERSION_BASE + 1
+    assert c["Q4_IO_VERSION_2"] == modelconfigs.Q4_IO_VERSION_BASE + 2
+    assert c["NUM_METADATA_INPUTS"] == 192 == modelconfigs.get_num_meta_encoder_input_features(1)
+    assert c["NUM_STYLE_FEATURES"] == modelconfigs.Q4_NUM_STYLE_FEATURES == 76
     assert c["NUM_SPATIAL_CHANNELS"] == modelconfigs.Q4_NUM_BIN_INPUT_FEATURES[1]
     assert c["NUM_GLOBAL_FEATURES"] == modelconfigs.Q4_NUM_GLOBAL_INPUT_FEATURES[1]
     assert c["NUM_VALUE_LOGITS"] == modelconfigs.Q4_NUM_VALUE_LOGITS

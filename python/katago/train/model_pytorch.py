@@ -3366,7 +3366,7 @@ class MetadataEncoder(torch.nn.Module):
         super(MetadataEncoder, self).__init__()
 
         self.config = config
-        self.activation = config["activation"]
+        self.activation = "relu" if "activation" not in config else config["activation"]  # as Model: relu by default
         self.meta_encoder_version = 1 if "meta_encoder_version" not in config["metadata_encoder"] else config["metadata_encoder"]["meta_encoder_version"]
 
         self.c_input = modelconfigs.get_num_meta_encoder_input_features(self.meta_encoder_version)

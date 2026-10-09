@@ -16,6 +16,7 @@
 #include "../search/q4analysisdata.h"
 #include "../search/q4reportedsearchvalues.h"
 #include "../search/q4searchnode.h"
+#include "../q4style.h"
 
 #include <algorithm>
 #include <cmath>
@@ -50,6 +51,28 @@ string getTestModelPath() {
        << "Tried running: " << cmd << "\n"
        << "Please check that KATAGO_TEST_PYTHON (default: python3) points to a valid Python interpreter with PyTorch installed." << endl;
   throw StringError("Could not find or generate b1c32_q4 model for search tests");
+}
+
+// The Q4 I/O v2 test net (b1c32_q4-meta, scaled heads): generated on the fly like the v1 net, in the scratch dir (cpp/tests/models
+// is a models dir that self-play tests poll for the latest net).
+string getMetaTestModelPath() {
+  vector<string> candidates = {
+    "cpp/tests/scratch/q4models/b1c32_q4_meta/model.bin.gz",
+    "tests/scratch/q4models/b1c32_q4_meta/model.bin.gz",
+    "../tests/scratch/q4models/b1c32_q4_meta/model.bin.gz"
+  };
+  for(const string& p : candidates) {
+    if(FileUtils::exists(p)) return p;
+  }
+  const char* pyEnv = getenv("KATAGO_TEST_PYTHON");
+  string pythonCmd = (pyEnv != nullptr && strlen(pyEnv) > 0) ? string(pyEnv) : "python3";
+  string cmd = pythonCmd + " python/q4/make_random_model.py b1c32_q4-meta cpp/tests/scratch/q4models --model-name b1c32_q4_meta --scale-heads";
+  int ret = system(cmd.c_str());
+  (void)ret;
+  for(const string& p : candidates) {
+    if(FileUtils::exists(p)) return p;
+  }
+  throw StringError("Could not find or generate b1c32_q4_meta model for search tests (tried: " + cmd + ")");
 }
 
 NNEvaluator* createTestEvaluator(const string& modelPath, Logger& logger, uint64_t seed = 42) {
@@ -1045,6 +1068,107 @@ void testT30ExploreSelectionValueInverse(NNEvaluator* nnEval, Logger& logger) {
   cout << "T30 passed!" << endl;
 }
 
+// =========================================================================
+// S2: the metadata input of Q4 I/O v2 (docs/q4/Q4IO.md §10): the NN cache key includes it, v1 nets ignore it, the
+// search freezes the features of the real position.
+// =========================================================================
+void testS2MetadataCacheAndFreeze(NNEvaluator* nnEvalV1, Logger& logger) {
+  cout << "Running S2 metadata (cache key, v1 ignores, frozen features)..." << endl;
+  NNEvaluator* nnEvalV2 = createTestEvaluator(getMetaTestModelPath(), logger, 43);
+  testAssert(nnEvalV2->requiresSGFMetadata() && !nnEvalV1->requiresSGFMetadata());
+
+  Q4History hist{Q4Rules()};
+  for(const char* a : {"f2", "e2h", "f10", "j6", "e2"})
+    hist.play(Q4Notation::stringToAction(a));
+  float styleA[Q4StyleTracker::NUM_FEATURES], styleB[Q4StyleTracker::NUM_FEATURES];
+  hist.getStyleFeatures(styleA);
+  std::copy(styleA, styleA + Q4StyleTracker::NUM_FEATURES, styleB);
+  styleB[7] += 0.125f;   // the same position with one style feature different
+  float nonzero = 0;
+  for(float x : styleA) nonzero += std::fabs(x);
+  testAssert(nonzero > 1.0f);
+
+  // 1. Keys: equal for equal features, different for any feature that differs; none for nets without metadata
+  const Q4PlayState& state = hist.getState();
+  testAssert(Q4NN::getCacheHash(state, styleA) == Q4NN::getCacheHash(state, styleA));
+  testAssert(Q4NN::getCacheHash(state, styleA) != Q4NN::getCacheHash(state, styleB));
+  testAssert(Q4NN::getCacheHash(state, styleA) != Q4NN::getCacheHash(state));
+  for(int i = 0; i < Q4StyleTracker::NUM_FEATURES; i++) {
+    float tmp[Q4StyleTracker::NUM_FEATURES];
+    std::copy(styleA, styleA + Q4StyleTracker::NUM_FEATURES, tmp);
+    tmp[i] += 0.5f;
+    testAssert(Q4NN::getCacheHash(state, tmp) != Q4NN::getCacheHash(state, styleA));
+  }
+
+  // 2. The v2 net: a hit only when the features are the same
+  NNResultBuf buf;
+  Q4NN::Eval e1, e2, e3, e4;
+  uint64_t hits0 = nnEvalV2->numCacheHits();
+  Q4NN::evaluate(*nnEvalV2, buf, state, 0, false, e1, nullptr, 1.0f, styleA);
+  testAssert(nnEvalV2->numCacheHits() == hits0);                     // first time: a miss
+  Q4NN::evaluate(*nnEvalV2, buf, state, 3, false, e2, nullptr, 1.0f, styleA);
+  testAssert(nnEvalV2->numCacheHits() == hits0 + 1);                 // same features (any symmetry): a hit
+  Q4NN::evaluate(*nnEvalV2, buf, state, 0, false, e3, nullptr, 1.0f, styleB);
+  testAssert(nnEvalV2->numCacheHits() == hits0 + 1);                 // only the metadata differs: a miss
+  Q4NN::evaluate(*nnEvalV2, buf, hist, 0, false, e4);                // the history overload takes the features itself
+  testAssert(nnEvalV2->numCacheHits() == hits0 + 2);
+  double diff = 0.0;
+  for(int a : {0, 1, 2, 3, 4})
+    diff += std::fabs(e1.valueAbs[a] - e3.valueAbs[a]);
+  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++)
+    diff += std::fabs(e1.policyLogits[0][a] - e3.policyLogits[0][a]);
+  testAssert(diff > 1e-3);                                           // the metadata changes the output
+  for(int a = 0; a < Q4Board::NUM_ACTIONS; a++)
+    testAssert(std::fabs(e1.policyLogits[0][a] - e4.policyLogits[0][a]) < 1e-5);
+
+  // 3. A v2 net refuses to evaluate without features (no silent zeros)
+  {
+    bool threw = false;
+    try { Q4NN::evaluate(*nnEvalV2, buf, state, 0, false, e1); }
+    catch(const StringError&) { threw = true; }
+    testAssert(threw);
+  }
+
+  // 4. A v1 net ignores the features and does not key on them
+  {
+    Q4NN::Eval v1a, v1b;
+    uint64_t h1 = nnEvalV1->numCacheHits();
+    Q4NN::evaluate(*nnEvalV1, buf, state, 0, false, v1a, nullptr, 1.0f, styleA);
+    Q4NN::evaluate(*nnEvalV1, buf, state, 0, false, v1b, nullptr, 1.0f, styleB);
+    testAssert(nnEvalV1->numCacheHits() == h1 + 1);
+    for(int a = 0; a < Q4Board::NUM_ACTIONS; a++)
+      testAssert(v1a.policyLogits[0][a] == v1b.policyLogits[0][a]);
+  }
+
+  // 5. Search: setPosition(history) freezes the features; makeMove keeps them until the caller sets the new ones;
+  // every evaluation (the root's cache key included) uses them.
+  {
+    SearchParams params = createTestSearchParams(20, 1);
+    Q4S::Search search(params, nnEvalV2, &logger, "s2_freeze");
+    search.setPosition(hist);
+    testAssert(search.hasStyleFeatures);
+    for(int i = 0; i < Q4StyleTracker::NUM_FEATURES; i++)
+      testAssert(search.styleFeatures[i] == styleA[i]);
+    search.runWholeSearch();
+    testAssert(search.rootNode->getNNOutput()->nnHash == Q4NN::getCacheHash(state, styleA));
+    int move = search.getChosenMoveAction();
+    testAssert(search.makeMove(move));
+    for(int i = 0; i < Q4StyleTracker::NUM_FEATURES; i++)
+      testAssert(search.styleFeatures[i] == styleA[i]);            // kept: the caller has not set the new ones yet
+    hist.play(move);
+    float styleNext[Q4StyleTracker::NUM_FEATURES];
+    hist.getStyleFeatures(styleNext);
+    search.setStyleFeatures(styleNext);
+    search.runWholeSearch();
+    testAssert(search.rootNode->getNNOutput()->nnHash == Q4NN::getCacheHash(hist.getState(), styleNext));
+    // a bare state carries no history: the v2 net refuses (a clear error, in the evaluation)
+    search.setPosition(hist.getState());
+    testAssert(!search.hasStyleFeatures);
+  }
+  delete nnEvalV2;
+  cout << "S2 passed!" << endl;
+}
+
 }  // namespace
 
 void Tests::runQ4SearchTests() {
@@ -1069,6 +1193,7 @@ void Tests::runQ4SearchTests() {
   testT28A4KataGoBehavior(nnEval, logger);
   testT29RootPlaySelectionNotOneHot(nnEval, logger);
   testT30ExploreSelectionValueInverse(nnEval, logger);
+  testS2MetadataCacheAndFreeze(nnEval, logger);
 
   delete nnEval;
   cout << "All Q4 Search tests PASSED!" << endl;

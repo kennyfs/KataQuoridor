@@ -234,7 +234,7 @@ void initializeGameUsingPolicy(
       break;
 
     Q4NN::Eval eval;
-    Q4NN::evaluate(*bot->nnEvaluator, buf, state, 0, false, eval, &gameRand);
+    Q4NN::evaluate(*bot->nnEvaluator, buf, hist, 0, false, eval, &gameRand);
 
     std::vector<double> relProbs;
     relProbs.reserve(legalActions.size());
@@ -455,7 +455,7 @@ Q4FinishedGameData* runGame(
     }
   }
   for(Q4S::Search* search : allSearches)
-    search->setPosition(state);
+    search->setPosition(hist);
 
   // Elimination setup (prompt B4): with prob q4EliminationProb, at ply in [1, min(maxPlies, 200)]
   bool willEliminate = gameRand.nextBool(playSettings.q4EliminationProb);
@@ -502,7 +502,7 @@ Q4FinishedGameData* runGame(
         state.eliminate(sElim);
         for(Q4S::Search* search : allSearches) {
           search->clearSearch();
-          search->setPosition(state);
+          search->setPosition(hist);
         }
         eliminationDone = true;
         gameData->comments.push_back("elim=" + std::to_string(sElim + 1));
@@ -512,6 +512,9 @@ Q4FinishedGameData* runGame(
     }
 
     int toMove = state.board.toMove;
+    float turnStyle[Q4StyleTracker::NUM_FEATURES];
+    hist.getStyleFeatures(turnStyle);
+    gameData->styleByTurn.insert(gameData->styleByTurn.end(), turnStyle, turnStyle + Q4StyleTracker::NUM_FEATURES);
     // Who plays this ply. A non-learner seat's ply is observed by the learners' search (cheap-search settings, no
     // root noise) so that the ply has its root value vector; the seat's own player then picks the move.
     const int seatKind = (seats != nullptr) ? seats->players[toMove].kind : (int)SEAT_LEARNER;
@@ -630,7 +633,11 @@ Q4FinishedGameData* runGame(
         Q4PlayState sideState = state;
         sideState.playAssumeLegal(sideAct);
         if(!sideState.isFinished) {
-          sidePositionsToSearch.push_back(new Q4SidePosition(sideState, (int)gameData->changedNeuralNets.size()));
+          Q4SidePosition* sidePos = new Q4SidePosition(sideState, (int)gameData->changedNeuralNets.size());
+          Q4History sideHist = hist;
+          sideHist.play(sideAct);
+          sideHist.getStyleFeatures(sidePos->style);
+          sidePositionsToSearch.push_back(sidePos);
         }
       }
     }
@@ -643,6 +650,10 @@ Q4FinishedGameData* runGame(
       search->makeMove(action);
     hist.play(action);
     state.playAssumeLegal(action);
+    // The tree is reused, so the searches keep the old features until they are set for the new real position
+    hist.getStyleFeatures(turnStyle);
+    for(Q4S::Search* search : allSearches)
+      search->setStyleFeatures(turnStyle);
 
     maybeCheckForNewNNEval(state.plies);
   }
@@ -730,6 +741,7 @@ Q4FinishedGameData* runGame(
       }
 
       bot->setPosition(sp->state);
+      bot->setStyleFeatures(sp->style);
       bot->runWholeSearchAndGetMove();
 
       extractPolicyTarget(sp->policyTarget, bot, bot->rootNode, actionsBuf, playSelectionValuesBuf);
@@ -856,7 +868,9 @@ void maybeForkGame(
     }
     else {
       Q4NN::Eval eval;
-      Q4NN::evaluate(*bot->nnEvaluator, buf, copyState, 0, false, eval, &gameRand);
+      Q4History candHist = forkHist;
+      candHist.play(candAction);
+      Q4NN::evaluate(*bot->nnEvaluator, buf, candHist, 0, false, eval, &gameRand);
       double valAbs[5];
       for(int k = 0; k < 5; k++) valAbs[k] = (double)eval.valueAbsMasked[k];
       score = Q4S::Search::computeSeatUtility(pla, valAbs, copyState.board.getNumAlive(), true, 1.0);

@@ -79,7 +79,8 @@ def read_npz_training_data(
 ):
     if modelconfigs.is_quoridor4(model_config):
         yield from read_npz_training_data_q4(
-            npz_files, batch_size, world_size, rank, pos_len, device, randomize_symmetries, model_config, prefetch_depth)
+            npz_files, batch_size, world_size, rank, pos_len, device, randomize_symmetries, model_config, prefetch_depth,
+            include_meta=include_meta)
         return
 
     rand = np.random.default_rng(seed=list(os.urandom(12)))
@@ -616,8 +617,11 @@ def apply_symmetry_q4_batch(batch: dict, sym: int) -> dict:
     return out
 
 
-def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: int = 0, model_config=None):
-    """Loads this rank's whole batches of a Q4 npz as numpy arrays (decoded inputs, float targets), symmetry 0."""
+def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: int = 0, model_config=None,
+                     include_meta: bool = False):
+    """Loads this rank's whole batches of a Q4 npz as numpy arrays (decoded inputs, float targets), symmetry 0.
+    include_meta (Q4 I/O v2 nets): also loads `metadataInputNC` [N, 192], a hard error if the file lacks it; I/O v1
+    nets (include_meta False) ignore the key."""
     with np.load(npz_file) as npz:
         num_samples = npz["globalInputNC"].shape[0]
         num_whole_steps = num_samples // (batch_size * world_size)
@@ -641,6 +645,14 @@ def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: i
         globalTargetsNC = select_rank_rows(npz["globalTargetsNC"]).astype(np.float32)
         scoreDistrN = select_rank_rows(npz["scoreDistrN"]).astype(np.float32)
         valueTargetsNCHW = select_rank_rows(npz["valueTargetsNCHW"]).astype(np.float32)
+        metadataInputNC = None
+        if include_meta:
+            if "metadataInputNC" not in npz:
+                raise KeyError(
+                    f"{npz_file} lacks metadataInputNC: a Q4 I/O v2 net (metadata encoder) cannot train on data without "
+                    f"the style features (docs/q4/Q4IO.md §10); shuffle with -include-meta")
+            metadataInputNC = select_rank_rows(npz["metadataInputNC"]).astype(np.float32)
+            assert metadataInputNC.shape[1:] == (192,), f"{npz_file}: metadataInputNC shape {metadataInputNC.shape}"
 
     binaryInputNCHW = decode_q4_binary_input(binaryInputNCHWPacked, spatialDistNCHW, npz_file)
     if model_config is not None:
@@ -655,7 +667,7 @@ def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: i
     globalTargetsNC = np.ascontiguousarray(globalTargetsNC[:, :Q4_NUM_GLOBAL_TARGETS])
     assert policyTargetsNCMove.shape[1:] == (3, 3 * Q4_POS_AREA), f"{npz_file}: policyTargetsNCMove shape {policyTargetsNCMove.shape}"
     assert valueTargetsNCHW.shape[1:] == (12, Q4_POS_LEN, Q4_POS_LEN), f"{npz_file}: valueTargetsNCHW shape {valueTargetsNCHW.shape}"
-    return dict(
+    rows = dict(
         binaryInputNCHW=binaryInputNCHW,
         globalInputNC=globalInputNC,
         policyTargetsNCMove=policyTargetsNCMove,
@@ -663,6 +675,9 @@ def load_q4_npz_rows(npz_file, batch_size: int = 1, world_size: int = 1, rank: i
         scoreDistrN=scoreDistrN,
         valueTargetsNCHW=valueTargetsNCHW,
     )
+    if metadataInputNC is not None:
+        rows["metadataInputNC"] = metadataInputNC   # style features: invariant under the board symmetries
+    return rows
 
 
 def read_npz_training_data_q4(
@@ -675,12 +690,13 @@ def read_npz_training_data_q4(
     randomize_symmetries: bool,
     model_config: modelconfigs.ModelConfig,
     prefetch_depth: int = 1,
+    include_meta: bool = False,
 ):
     assert pos_len == Q4_POS_LEN, f"Q4 trains on the {Q4_POS_LEN} x {Q4_POS_LEN} board, got pos_len {pos_len}"
     rand = np.random.default_rng(seed=list(os.urandom(12)))
 
     def load_npz_file(npz_file):
-        return (npz_file, load_q4_npz_rows(npz_file, batch_size, world_size, rank, model_config))
+        return (npz_file, load_q4_npz_rows(npz_file, batch_size, world_size, rank, model_config, include_meta))
 
     if not npz_files:
         return

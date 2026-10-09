@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 #include <stdexcept>
 
@@ -453,7 +454,7 @@ void decodeTrajectory(const float* raw, int sym, float* out) {
   }
 }
 
-Hash128 getCacheHash(const Q4PlayState& state) {
+Hash128 getCacheHash(const Q4PlayState& state, const float* style) {
   auto mix = [](uint64_t tag, uint64_t v) {
     uint64_t a = Hash::splitMix64(tag ^ v);
     return Hash128(a, Hash::nasam(a ^ tag));
@@ -475,10 +476,19 @@ Hash128 getCacheHash(const Q4PlayState& state) {
     }
     h ^= mix(0x5265704861ULL, rep);
   }
+  if(style != nullptr) {
+    uint64_t m = 0x5374796c65ULL;
+    for(int i = 0; i < NUM_STYLE_FEATURES; i++) {
+      uint32_t bits;
+      std::memcpy(&bits, &style[i], sizeof(bits));
+      m = Hash::splitMix64(m ^ ((uint64_t)bits << 8) ^ (uint64_t)i);
+    }
+    h ^= mix(0x4d65746164ULL, m);
+  }
   return h;
 }
 
-Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int /*sym*/) {
+Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int /*sym*/, const float* style) {
   Q4PlayState s = history.state;
   s.board = board;
   s.rules = history.rules;
@@ -487,7 +497,7 @@ Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int /*sym*/
   s.winnerSeat = history.winnerSeat;
   s.isDraw = history.isDraw;
   s.repetitionHashes = history.repetitionHashes;
-  return getCacheHash(s);
+  return getCacheHash(s, style);
 }
 
 void evaluate(
@@ -498,9 +508,16 @@ void evaluate(
   bool skipCache,
   Eval& out,
   Rand* rand,
-  float nnPolicyTemperature
+  float nnPolicyTemperature,
+  const float* style
 ) {
-  const Hash128 key = getCacheHash(state);
+  const bool needsMeta = nnEval.requiresSGFMetadata();
+  if(needsMeta && style == nullptr)
+    throw StringError(
+      "Q4NN::evaluate: " + nnEval.getModelName() + " is a Q4 I/O v2 network and needs the style features of the position"
+      " (evaluate a Q4History, or pass them)");
+  const float* styleUsed = needsMeta ? style : nullptr;   // v1 nets ignore them (and the key does not depend on them)
+  const Hash128 key = getCacheHash(state, styleUsed);
   const bool nhwc = nnEval.getInputsUseNHWC();
 
   bool hit = false;
@@ -531,7 +548,12 @@ void evaluate(
     static thread_local float globalBuf[NUM_GLOBAL_FEATURES];
     fillRow(state, nhwc, spatialBuf, globalBuf, nullptr, out.legalActions, &out.numLegalActions);
     applyInputSymmetry(spatialBuf, symSpatialBuf, symToUse, nhwc);
-    nnEval.evaluateQ4Raw(symSpatialBuf, globalBuf, key, buf, skipCache, symToUse);
+    static thread_local float metaBuf[NUM_METADATA_INPUTS];
+    if(needsMeta) {
+      std::fill(metaBuf, metaBuf + NUM_METADATA_INPUTS, 0.0f);
+      std::copy(styleUsed, styleUsed + NUM_STYLE_FEATURES, metaBuf);
+    }
+    nnEval.evaluateQ4Raw(symSpatialBuf, globalBuf, needsMeta ? metaBuf : nullptr, key, buf, skipCache, symToUse);
   }
 
   const Q4RawNNOutput* raw = buf.result->q4Raw.get();
@@ -580,7 +602,9 @@ void evaluate(
   s.winnerSeat = history.winnerSeat;
   s.isDraw = history.isDraw;
   s.repetitionHashes = history.repetitionHashes;
-  evaluate(nnEval, buf, s, sym, skipCache, out, rand, nnPolicyTemperature);
+  float style[NUM_STYLE_FEATURES];
+  history.getStyleFeatures(style);
+  evaluate(nnEval, buf, s, sym, skipCache, out, rand, nnPolicyTemperature, style);
 }
 
 void averageMultipleSymmetries(
@@ -590,7 +614,8 @@ void averageMultipleSymmetries(
   Rand& rand,
   int numSymmetries,
   Eval& out,
-  float nnPolicyTemperature
+  float nnPolicyTemperature,
+  const float* style
 ) {
   int numToSample = std::max(1, std::min(numSymmetries, 8));
   std::array<int, 8> symIndices = {0, 1, 2, 3, 4, 5, 6, 7};
@@ -613,7 +638,7 @@ void averageMultipleSymmetries(
 
   for(int i = 0; i < numToSample; i++) {
     Eval single;
-    evaluate(nnEval, buf, state, symIndices[i], /*skipCache=*/true, single, &rand, nnPolicyTemperature);
+    evaluate(nnEval, buf, state, symIndices[i], /*skipCache=*/true, single, &rand, nnPolicyTemperature, style);
     if(i == 0) {
       out.numLegalActions = single.numLegalActions;
       std::copy(single.legalActions, single.legalActions + single.numLegalActions, out.legalActions);
@@ -670,7 +695,9 @@ void averageMultipleSymmetries(
   Eval& out,
   float nnPolicyTemperature
 ) {
-  averageMultipleSymmetries(nnEval, buf, history.state, rand, numSymmetries, out, nnPolicyTemperature);
+  float style[NUM_STYLE_FEATURES];
+  history.getStyleFeatures(style);
+  averageMultipleSymmetries(nnEval, buf, history.state, rand, numSymmetries, out, nnPolicyTemperature, style);
 }
 
 const char* seatName(int seat) {

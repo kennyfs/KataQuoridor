@@ -569,27 +569,34 @@ def test_c4_shuffle_compatibility(tmp_path):
         "-num-processes", "1",
         "-min-rows", "1",
         "-keep-target-rows", "all",
-        "-approx-rows-per-out-file", "20"
+        "-approx-rows-per-out-file", "20",
+        "-include-meta"
     ]
     subprocess.check_call(shuffle_cmd)
 
     # Collect multiset of (gameHash, ply) from original files
     orig_rows = []
+    orig_meta = {}
     for f in glob.glob(os.path.join(tdata_dir, "*.npz")):
         d = np.load(f)
-        for gt in d["globalTargetsNC"]:
+        assert d["metadataInputNC"].shape == (d["globalTargetsNC"].shape[0], 192)
+        for gt, meta in zip(d["globalTargetsNC"], d["metadataInputNC"]):
             gh = decode_game_hash(gt)
             ply = int(gt[50])
             orig_rows.append((gh, ply))
+            if gt[59] == 1.0:      # main rows (a game has one per ply; side positions can share a ply)
+                orig_meta[(gh, ply)] = meta
 
     # Collect multiset of (gameHash, ply) from shuffled files
     shuf_rows = []
     for f in glob.glob(os.path.join(out_shuf, "*.npz")):
         d = np.load(f)
-        for gt in d["globalTargetsNC"]:
+        for gt, meta in zip(d["globalTargetsNC"], d["metadataInputNC"]):
             gh = decode_game_hash(gt)
             ply = int(gt[50])
             shuf_rows.append((gh, ply))
+            if gt[59] == 1.0:
+                assert np.array_equal(orig_meta[(gh, ply)], meta), "metadataInputNC changed by the shuffle"
 
     assert len(orig_rows) > 0
     assert len(orig_rows) == len(shuf_rows)

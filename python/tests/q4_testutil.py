@@ -84,12 +84,26 @@ def run_evalnn(katago, model_path, queries, config_lines=None, env=None):
     return results
 
 
-def torch_raw_outputs(model, spatial, glob_):
-    """The model's raw outputs for numpy inputs [n,27,11,11], [n,28]: policy [n,6,11,11] (channel = variant*3 +
-    plane), value logits [n,5], misc [n,6], trajectory logits [n,11,11], as float64 arrays."""
+def style_metadata_of_dump(data):
+    """The metadata row [192] of a Q4 I/O v2 net for the position of a `q4tool dumpinputs` line: the style features
+    (python/q4/style.py, computed from the events) of the seat to move at slots 0..75, zeros elsewhere."""
+    from q4.style import record_features
+    events = [{"elim": ev["elim"] + 1} if "elim" in ev else {"a": ev["action"]} for ev in data.get("events", [])]
+    rules = data.get("rules", {})
+    persp, feats = record_features({"rules": rules, "events": events})
+    meta = np.zeros(192, dtype=np.float32)
+    meta[:76] = feats[-1]
+    return meta
+
+
+def torch_raw_outputs(model, spatial, glob_, meta=None):
+    """The model's raw outputs for numpy inputs [n,27,11,11], [n,28] (and [n,192] metadata for a Q4 I/O v2 net):
+    policy [n,6,11,11] (channel = variant*3 + plane), value logits [n,5], misc [n,6], trajectory logits [n,11,11], as
+    float64 arrays."""
     with torch.no_grad():
         out = model(torch.from_numpy(np.ascontiguousarray(spatial, dtype=np.float32)),
-                    torch.from_numpy(np.ascontiguousarray(glob_, dtype=np.float32)))
+                    torch.from_numpy(np.ascontiguousarray(glob_, dtype=np.float32)),
+                    None if meta is None else torch.from_numpy(np.ascontiguousarray(meta, dtype=np.float32)))
     policy, value, misc, traj = out[0][0], out[0][1], out[0][2], out[0][3]
     return (policy.reshape(policy.shape[0], 6, 11, 11).double().numpy(), value.double().numpy(),
             misc.double().numpy(), traj[:, 0].double().numpy())

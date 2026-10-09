@@ -31,7 +31,7 @@ from katago.train.model_pytorch import Model
 from q4.features import extract_features, apply_cell, apply_anchor
 from q4.reference import Pos, eliminate, play, str_to_action
 from tests.q4_testutil import find_katago
-from tests.test_q4_selfplay import decode_game_hash, record_game_hash, action_to_policy_slot
+from tests.test_q4_selfplay import decode_game_hash, record_game_hash, action_to_policy_slot, get_model_dir
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +43,7 @@ def selfplay_dir(tmp_path_factory):
     out_dir = str(tmp_path_factory.mktemp("q4train") / "selfplay")
     subprocess.check_call([
         katago, "q4selfplay",
-        "-models-dir", os.path.join(REPO_DIR, "cpp", "tests", "models"),
+        "-models-dir", get_model_dir(),
         "-output-dir", out_dir,
         "-config", os.path.join(REPO_DIR, "cpp", "configs", "q4", "training", "q4_selfplay.cfg"),
         "-max-games-total", "8",

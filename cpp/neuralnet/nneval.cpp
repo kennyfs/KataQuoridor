@@ -514,7 +514,8 @@ void NNEvaluator::fillRowBufs(
     // warmup and the benchmark, which run neutral all-zero rows: the content does not matter for them.
     buf.rowSpatialBuf.assign((size_t)Q4NNConst::NUM_SPATIAL_CHANNELS * Q4NNConst::POS_AREA, 0.0f);
     buf.rowGlobalBuf.assign(Q4NNConst::NUM_GLOBAL_FEATURES, 0.0f);
-    buf.hasRowMeta = false;
+    buf.rowMetaBuf.assign((size_t)numInputMetaChannels, 0.0f);
+    buf.hasRowMeta = numInputMetaChannels > 0;
     return;
   }
   const int modelXLen = QuoridorNN::MODEL_LEN;
@@ -1615,6 +1616,7 @@ void NNEvaluator::evaluate(
 void NNEvaluator::evaluateQ4Raw(
   const float* rowSpatial,
   const float* rowGlobal,
+  const float* rowMeta,
   Hash128 nnHash,
   NNResultBuf& buf,
   bool skipCache,
@@ -1627,6 +1629,15 @@ void NNEvaluator::evaluateQ4Raw(
     throw StringError(
       "KataQuoridor: model " + modelName + " is not a Q4 (four-player) network (option D " + Global::intToString(inputsVersion) +
       ", expected a value >= " + Global::intToString(Q4NNConst::Q4_IO_VERSION_BASE) + ") and cannot be evaluated on the Q4 path");
+  if(numInputMetaChannels > 0 && rowMeta == NULL)
+    throw StringError(
+      "KataQuoridor: model " + modelName + " is a Q4 I/O v2 network (metadata input); the style features were not provided");
+  if(numInputMetaChannels == 0 && rowMeta != NULL)
+    throw StringError("KataQuoridor: model " + modelName + " has no metadata input but metadata was provided");
+  if(numInputMetaChannels > 0 && numInputMetaChannels != Q4NNConst::NUM_METADATA_INPUTS)
+    throw StringError(
+      "KataQuoridor: model " + modelName + " has " + Global::intToString(numInputMetaChannels) + " metadata inputs, expected " +
+      Global::intToString(Q4NNConst::NUM_METADATA_INPUTS));
   if(nnXLen != Q4NNConst::POS_LEN || nnYLen != Q4NNConst::POS_LEN)
     throw StringError(
       "NNEvaluator for a Q4 model must be created with nnXLen = nnYLen = " + Global::intToString(Q4NNConst::POS_LEN) +
@@ -1643,7 +1654,13 @@ void NNEvaluator::evaluateQ4Raw(
 
   buf.rowSpatialBuf.assign(rowSpatial, rowSpatial + (size_t)Q4NNConst::NUM_SPATIAL_CHANNELS * Q4NNConst::POS_AREA);
   buf.rowGlobalBuf.assign(rowGlobal, rowGlobal + Q4NNConst::NUM_GLOBAL_FEATURES);
-  buf.hasRowMeta = false;
+  if(numInputMetaChannels > 0) {
+    buf.rowMetaBuf.assign(rowMeta, rowMeta + numInputMetaChannels);
+    buf.hasRowMeta = true;
+  }
+  else {
+    buf.hasRowMeta = false;
+  }
   // The row has its symmetry applied by the caller; the backend always evaluates symmetry 0.
   buf.symmetry = 0;
   buf.quoridorSymmetry = symmetry;

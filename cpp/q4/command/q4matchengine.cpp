@@ -274,9 +274,14 @@ GameResult playGame(
       break;
     }
     history.play(act);
-    for(int s = 0; s < 4; s++)
-      if(players[s].search != nullptr)
+    float style[Q4StyleTracker::NUM_FEATURES];
+    history.getStyleFeatures(style);
+    for(int s = 0; s < 4; s++) {
+      if(players[s].search != nullptr) {
         players[s].search->makeMove(act);
+        players[s].search->setStyleFeatures(style);   // the tree is reused: the features of the new real position
+      }
+    }
   }
 
   res.plies = history.plies;

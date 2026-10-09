@@ -103,8 +103,10 @@ namespace Q4NN {
   void decodeTrajectory(const float* rawTrajectory, int sym, float* outTrajectory);
 
   // 128-bit key of the NN evaluation without symmetry (docs/q4/Q4IO.md §7, Plan §7 item 1).
-  Hash128 getCacheHash(const Q4PlayState& state);
-  Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int sym = 0);
+  // Plus, for Q4 I/O v2 nets, the style features (NUM_STYLE_FEATURES floats; the metadata row is these followed by
+  // zeros): as KataGo hashes the SGFMetadata into the key. style = nullptr for nets without metadata.
+  Hash128 getCacheHash(const Q4PlayState& state, const float* style = nullptr);
+  Hash128 getCacheHash(const Q4Board& board, const Q4History& history, int sym = 0, const float* style = nullptr);
 
   // Everything one evaluation returns, in game space.
   struct Eval {
@@ -125,6 +127,8 @@ namespace Q4NN {
 
   // Fill the rows (with symmetry sym), run them through the evaluator's Q4 raw path and decode.
   // Performs cache lookup before filling input rows.
+  // `style` (NUM_STYLE_FEATURES floats, the features of the seat to move) is required for Q4 I/O v2 nets, which see them
+  // as metadata, and ignored by v1 nets; the Q4History overloads take it from the history.
   void evaluate(
     NNEvaluator& nnEval,
     NNResultBuf& buf,
@@ -133,7 +137,8 @@ namespace Q4NN {
     bool skipCache,
     Eval& out,
     Rand* rand = nullptr,
-    float nnPolicyTemperature = 1.0f
+    float nnPolicyTemperature = 1.0f,
+    const float* style = nullptr
   );
 
   void evaluate(
@@ -155,7 +160,8 @@ namespace Q4NN {
     Rand& rand,
     int numSymmetries,
     Eval& out,
-    float nnPolicyTemperature = 1.0f
+    float nnPolicyTemperature = 1.0f,
+    const float* style = nullptr
   );
 
   void averageMultipleSymmetries(

@@ -642,7 +642,7 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
     Q4S::Search::checkParams(params);
 
     // Sample distinct positions
-    std::vector<Q4PlayState> positions;
+    std::vector<Q4History> positions;
     Rand rand(seed);
     Q4Rules rules;
     while((int)positions.size() < numPositions) {
@@ -655,7 +655,7 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
         hist.play(acts[rand.nextUInt((uint32_t)acts.size())]);
       }
       if(!hist.isFinished) {
-        positions.push_back(hist.state);
+        positions.push_back(hist);
       }
     }
 

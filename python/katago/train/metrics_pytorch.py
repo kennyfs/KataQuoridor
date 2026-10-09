@@ -1473,8 +1473,8 @@ class Metrics:
         include_model_norms=True,
     ):
         io_version = modelconfigs.get_q4_io_version(raw_model.config)
-        assert io_version == modelconfigs.Q4_TRAINING_IO_VERSION, (
-            f"only Q4 I/O v{modelconfigs.Q4_TRAINING_IO_VERSION} models can be trained, got v{io_version}")
+        assert io_version in modelconfigs.Q4_TRAINING_IO_VERSIONS, (
+            f"only Q4 I/O v{modelconfigs.Q4_TRAINING_IO_VERSIONS} models can be trained, got v{io_version}")
         (
             policy_logits,      # [N, 2, 3, 11, 11]: search policy, style policy
             value_logits,       # [N, 5]

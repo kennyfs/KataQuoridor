@@ -167,6 +167,8 @@ void Search::setPosition(const Q4PlayState& state) {
   rootSeat = rootState.board.toMove;
   rootAliveMask = rootState.board.alive;
   rootNumAlive = rootState.board.getNumAlive();
+  rootStyleDirty = false;
+  hasStyleFeatures = false;   // a bare state carries no history: a v2 net refuses to evaluate until they are set
 }
 
 void Search::setPosition(const Q4History& history) {
@@ -175,6 +177,18 @@ void Search::setPosition(const Q4History& history) {
   rootSeat = rootState.board.toMove;
   rootAliveMask = rootState.board.alive;
   rootNumAlive = rootState.board.getNumAlive();
+  history.getStyleFeatures(styleFeatures);
+  hasStyleFeatures = true;
+  rootStyleDirty = false;
+}
+
+void Search::setStyleFeatures(const float* features) {
+  // After tree reuse the root keeps the evaluation it got with the old features; the next search recomputes it with
+  // the new ones. Deeper nodes keep theirs (styles change slowly, and re-evaluating the tree would defeat reuse).
+  if(!hasStyleFeatures || !std::equal(features, features + Q4StyleTracker::NUM_FEATURES, styleFeatures))
+    rootStyleDirty = true;
+  std::copy(features, features + Q4StyleTracker::NUM_FEATURES, styleFeatures);
+  hasStyleFeatures = true;
 }
 
 void Search::setRootHintAction(int action) {

@@ -65,10 +65,13 @@ QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17, 3: 19}
 
 # Q4 I/O versions (docs/q4/Q4IO.md; constants mirrored in cpp/q4/nn/q4nnconstants.h, checked by test_q4_model.py).
 # The model file's option D is Q4_IO_VERSION_BASE + the Q4 I/O version.
-Q4_TRAINING_IO_VERSION = 1
+# I/O v1 = docs/q4/Q4IO.md §1-§8; I/O v2 = v1 + the metadata input (KataGo's metadata encoder fed with the style
+# features, Q4IO §9-§10): the "-meta" presets. Training data carries `metadataInputNC` for both.
+Q4_TRAINING_IO_VERSIONS = (1, 2)
 Q4_IO_VERSION_BASE = 100
-Q4_NUM_BIN_INPUT_FEATURES = {1: 27}
-Q4_NUM_GLOBAL_INPUT_FEATURES = {1: 28}
+Q4_NUM_BIN_INPUT_FEATURES = {1: 27, 2: 27}
+Q4_NUM_GLOBAL_INPUT_FEATURES = {1: 28, 2: 28}
+Q4_NUM_STYLE_FEATURES = 76
 Q4_NUM_VALUE_LOGITS = 5
 Q4_NUM_MISC = 6
 Q4_NUM_OWNERSHIP_CHANNELS = 1
@@ -77,6 +80,10 @@ def get_q4_io_version(config: ModelConfig) -> int:
     assert is_quoridor4(config)
     io_version = config.get("q4_io_version", 1)
     assert io_version in Q4_NUM_BIN_INPUT_FEATURES, f"unknown q4_io_version {io_version}"
+    has_meta = config.get("metadata_encoder") is not None
+    assert has_meta == (io_version >= 2), (
+        f"Q4 I/O v{io_version} {'needs' if io_version >= 2 else 'has no'} a metadata encoder in the config"
+        f" ('-meta' presets are I/O v2), the config {'has' if has_meta else 'has none'}")
     return io_version
 
 def get_quoridor_io_version(config: ModelConfig) -> int:
@@ -2325,4 +2332,6 @@ for name, base_config in list(config_of_name.items()):
         "meta_encoder_version": 1,
         "internal_num_channels": config["trunk_num_channels"],
     }
+    if is_quoridor4(config):
+        config["q4_io_version"] = 2
     config_of_name[name+"-meta"] = config

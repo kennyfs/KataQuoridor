@@ -27,7 +27,8 @@ Q4SidePosition::Q4SidePosition()
     nnRawStats(),
     targetWeight(0.0f),
     targetWeightUnrounded(0.0f),
-    numNeuralNetChangesSoFar(0)
+    numNeuralNetChangesSoFar(0),
+    style()
 {}
 
 Q4SidePosition::Q4SidePosition(const Q4PlayState& s, int numNNChangesSoFar)
@@ -42,7 +43,8 @@ Q4SidePosition::Q4SidePosition(const Q4PlayState& s, int numNNChangesSoFar)
     nnRawStats(),
     targetWeight(0.0f),
     targetWeightUnrounded(0.0f),
-    numNeuralNetChangesSoFar(numNNChangesSoFar)
+    numNeuralNetChangesSoFar(numNNChangesSoFar),
+    style()
 {}
 
 Q4FinishedGameData::Q4FinishedGameData()
@@ -63,6 +65,7 @@ Q4FinishedGameData::Q4FinishedGameData()
     nnRawStatsByTurn(),
     valueSurpriseByTurn(),
     wasCheapSearchByTurn(),
+    styleByTurn(),
     seatKindByTurn(),
     seatInfo(),
     sidePositions(),
@@ -187,7 +190,8 @@ Q4TrainingWriteBuffers::Q4TrainingWriteBuffers(int maxRws)
     policyTargetsNCMove({maxRws, POLICY_NUM_CHANNELS, POLICY_SIZE}),
     globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
     scoreDistrN({maxRws, SCORE_DISTR_LEN}),
-    valueTargetsNCHW({maxRws, VALUE_TARGET_CHANNELS, POS_LEN, POS_LEN})
+    valueTargetsNCHW({maxRws, VALUE_TARGET_CHANNELS, POS_LEN, POS_LEN}),
+    metadataInputNC({maxRws, NUM_METADATA_CHANNELS})
 {}
 
 void Q4TrainingWriteBuffers::clear() {
@@ -217,6 +221,9 @@ void Q4TrainingWriteBuffers::writeToZipFile(const std::string& fileName) {
 
   numBytes = valueTargetsNCHW.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("valueTargetsNCHW", valueTargetsNCHW.dataIncludingHeader, numBytes);
+
+  numBytes = metadataInputNC.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("metadataInputNC", metadataInputNC.dataIncludingHeader, numBytes);
 
   zipFile.close();
 }
@@ -251,9 +258,16 @@ void Q4TrainingWriteBuffers::addRow(
   const std::vector<Q4Board>& boardHistoryFromTurnToEnd,
   const std::vector<int>& actionsPlayedFromTurnToEnd,
   const std::vector<int>& actionSeatsFromTurnToEnd,
-  int seatKind
+  int seatKind,
+  const float* styleFeatures
 ) {
   testAssert(curRows < maxRows);
+  testAssert(styleFeatures != nullptr);
+
+  // Metadata input [192]: the style features of the position (seat to move), then zeros
+  float* rowMeta = metadataInputNC.data + curRows * NUM_METADATA_CHANNELS;
+  std::fill_n(rowMeta, NUM_METADATA_CHANNELS, 0.0f);
+  std::copy(styleFeatures, styleFeatures + NUM_STYLE_FEATURES, rowMeta);
 
   float rowSpatialScratch[NUM_BINARY_CHANNELS * POS_AREA];
   float rowGlobalScratch[NUM_GLOBAL_CHANNELS];
@@ -506,6 +520,7 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
   testAssert((int)data.valueTargetsByTurn.size() == numTurns + 1);
   testAssert((int)data.nnRawStatsByTurn.size() == numTurns);
   testAssert((int)data.seatKindByTurn.size() == numTurns);
+  testAssert((int)data.styleByTurn.size() == numTurns * Q4TrainingWriteBuffers::NUM_STYLE_FEATURES);
 
   // Final game properties
   int finalGamePlies = stateReplay.plies;
@@ -592,7 +607,8 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
       boardsFromTToEnd,
       actsFromTToEnd,
       seatsFromTToEnd,
-      data.seatKindByTurn[t]
+      data.seatKindByTurn[t],
+      &data.styleByTurn[(size_t)t * Q4TrainingWriteBuffers::NUM_STYLE_FEATURES]
     );
 
     if(writeBuffers->numRows() >= currentFileLimit) {
@@ -643,7 +659,8 @@ void Q4TrainingDataWriter::writeGame(const Q4FinishedGameData& data) {
       emptyBoards,
       emptyActs,
       emptySeats,
-      0
+      0,
+      sp->style
     );
 
     if(writeBuffers->numRows() >= currentFileLimit) {

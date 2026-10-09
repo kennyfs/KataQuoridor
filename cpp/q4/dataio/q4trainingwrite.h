@@ -64,6 +64,7 @@ struct Q4SidePosition {
   float targetWeight;
   float targetWeightUnrounded;
   int numNeuralNetChangesSoFar;
+  float style[76];   // style features of the position (Q4IO §9), for the metadata input
 
   Q4SidePosition();
   Q4SidePosition(const Q4PlayState& s, int numNNChangesSoFar);
@@ -107,6 +108,7 @@ struct Q4FinishedGameData {
   std::vector<Q4NNRawStats> nnRawStatsByTurn;
   std::vector<double> valueSurpriseByTurn;
   std::vector<bool> wasCheapSearchByTurn;
+  std::vector<float> styleByTurn; // 76 style features (Q4IO §9) of the position before each turn, flattened
   std::vector<int> seatKindByTurn; // Q4SeatKind of the seat that moved; != 0 rows are observer rows (no search policy)
   Q4SeatInfo seatInfo[4];
 
@@ -134,6 +136,8 @@ class Q4TrainingWriteBuffers {
   static constexpr int PACKED_BOARD_AREA = 16;
   static constexpr int NUM_DIST_CHANNELS = 5;
   static constexpr int NUM_GLOBAL_CHANNELS = 28;
+  static constexpr int NUM_METADATA_CHANNELS = 192;
+  static constexpr int NUM_STYLE_FEATURES = 76;
   static constexpr int POLICY_NUM_CHANNELS = 3;
   static constexpr int POLICY_SIZE = 363;
   static constexpr int GLOBAL_TARGET_NUM_CHANNELS = 64;
@@ -152,6 +156,7 @@ class Q4TrainingWriteBuffers {
   NumpyBuffer<float> globalTargetsNC;
   NumpyBuffer<int8_t> scoreDistrN;
   NumpyBuffer<int8_t> valueTargetsNCHW;
+  NumpyBuffer<float> metadataInputNC;   // [N, 192]: the style features at 0..75, the rest 0 (Q4 I/O v2)
 
   Q4TrainingWriteBuffers(int maxRws);
   ~Q4TrainingWriteBuffers() = default;
@@ -194,7 +199,8 @@ class Q4TrainingWriteBuffers {
     const std::vector<Q4Board>& boardHistoryFromTurnToEnd,
     const std::vector<int>& actionsPlayedFromTurnToEnd,
     const std::vector<int>& actionSeatsFromTurnToEnd,
-    int seatKind
+    int seatKind,
+    const float* styleFeatures
   );
 
   static int actionToPolicySlot(int action);

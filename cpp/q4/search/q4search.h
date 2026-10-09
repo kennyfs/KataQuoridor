@@ -27,6 +27,7 @@
 #include "../q4history.h"
 #include "../q4playstate.h"
 #include "../q4rules.h"
+#include "../q4style.h"
 #include "q4analysisdata.h"
 #include "q4reportedsearchvalues.h"
 #include "q4searchnode.h"
@@ -66,6 +67,12 @@ struct Search {
   int rootNumAlive;
   Q4PlayState rootState;
   int rootHintAction;
+  // The style features of the real game position (docs/q4/Q4IO.md §9), for the seat to move at the root: frozen at
+  // setPosition(Q4History) / setStyleFeatures and used by every evaluation in the tree (the metadata input of Q4 I/O v2
+  // nets; v1 nets ignore it). makeMove keeps them; the caller sets the new position's after a real ply.
+  float styleFeatures[Q4StyleTracker::NUM_FEATURES] = {};
+  bool hasStyleFeatures = false;
+  bool rootStyleDirty = false;   // the features changed since the root was evaluated: the next search re-evaluates it
 
   SearchParams searchParams;
   int64_t numSearchesBegun;
@@ -120,6 +127,7 @@ struct Search {
 
   void setPosition(const Q4PlayState& state);
   void setPosition(const Q4History& history);
+  void setStyleFeatures(const float* features);   // Q4StyleTracker::NUM_FEATURES floats, for the seat to move at the root
   void setRootHintAction(int action);
   void setParams(const SearchParams& params);
   void setParamsNoClearing(const SearchParams& params);

@@ -36,12 +36,13 @@ import numpy as np
 import pytest
 
 from q4_testutil import (dump_positions, export_model, find_katago, make_random_model, run_evalnn,
-                         torch_raw_outputs)
+                         style_metadata_of_dump, torch_raw_outputs)
 from q4.features import (decode_shortterm_value_error, decode_trajectory, extract_features,
                          map_policy_to_game, unapply_raw_policy, unapply_raw_trajectory)
 from q4.reference import action_to_index, legal_moves
 
-CONFIGS = ["b1c32_q4", "b2c64_q4", "tf2_b4c192_q4"]
+# The "-meta" nets are Q4 I/O v2 (S2, Round 7): the metadata input is the style features of the position.
+CONFIGS = ["b1c32_q4", "b2c64_q4", "tf2_b4c192_q4", "b1c32_q4-meta", "b2c64_q4-meta", "tf2_b4c192_q4-meta"]
 PARITY_CHECKPOINT = os.environ.get("Q4_PARITY_CHECKPOINT")
 PARITY_MODEL = os.environ.get("Q4_PARITY_MODEL")
 if PARITY_CHECKPOINT:
@@ -104,14 +105,21 @@ def net(request, workdir):
 def reference(net, positions):
     """PyTorch raw outputs and their python decoding for every (position, symmetry)."""
     name, model, _ = net
-    spatial, glob_, rows = [], [], []
+    spatial, glob_, meta, rows = [], [], [], []
+    has_meta = model.get_has_metadata_encoder()
     for i, (data, pos) in enumerate(positions):
+        row_meta = style_metadata_of_dump(data) if has_meta else None
         for sym in range(NUM_SYMS):
             sp, gl = extract_features(pos, sym)
             spatial.append(sp)
             glob_.append(gl)
+            meta.append(row_meta)
             rows.append((i, sym))
-    policy, value, misc, traj = torch_raw_outputs(model, np.stack(spatial), np.stack(glob_))
+    if has_meta:
+        # non-zero style inputs (the positions are random games with walls): the test would be trivial otherwise
+        assert np.abs(np.stack(meta)[:, :76]).max() > 0.1 and (np.abs(np.stack(meta)[:, :76]) > 0).any(axis=1).mean() > 0.9
+    policy, value, misc, traj = torch_raw_outputs(
+        model, np.stack(spatial), np.stack(glob_), np.stack(meta) if has_meta else None)
     return dict(rows=rows, policy=policy, value=value, misc=misc, traj=traj)
 
 

@@ -28,7 +28,8 @@ bool Search::initNodeNNOutput(
       thread.rand,
       searchParams.rootNumSymmetriesToSample,
       eval,
-      (float)searchParams.nnPolicyTemperature
+      (float)searchParams.nnPolicyTemperature,
+      hasStyleFeatures ? styleFeatures : nullptr
     );
   }
   else {
@@ -41,7 +42,8 @@ bool Search::initNodeNNOutput(
       skipCache,
       eval,
       &thread.rand,
-      (float)searchParams.nnPolicyTemperature
+      (float)searchParams.nnPolicyTemperature,
+      hasStyleFeatures ? styleFeatures : nullptr
     );
   }
 
@@ -58,7 +60,7 @@ bool Search::initNodeNNOutput(
     out->valueAbs[i] = eval.valueAbsMasked[i];
 
   out->shorttermWinlossError = eval.shorttermWinlossError;
-  out->nnHash = Q4NN::getCacheHash(thread.state);
+  out->nnHash = Q4NN::getCacheHash(thread.state, (hasStyleFeatures && nnEvaluator->requiresSGFMetadata()) ? styleFeatures : nullptr);
 
   assert(out->noisedPolicyProbs == NULL);
   std::shared_ptr<NNOutput>* noisedResult = maybeAddPolicyNoiseAndTemp(thread, isRoot, out);
@@ -94,7 +96,8 @@ bool Search::maybeRecomputeExistingNNOutput(
       NNOutput* nnOutput = node.getNNOutput();
       testAssert(nnOutput != NULL);
 
-      if(searchParams.rootNumSymmetriesToSample > 1) {
+      if(searchParams.rootNumSymmetriesToSample > 1 || rootStyleDirty) {
+        rootStyleDirty = false;
         const bool skipCache = false;
         initNodeNNOutput(thread, node, isRoot, skipCache, true);
         recomputeHappened = true;

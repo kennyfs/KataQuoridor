@@ -213,10 +213,12 @@ class NNEvaluator {
   // Raw evaluation entry point for Q4 (four-player) models only (docs/q4/Q4IO.md §6): the caller (Q4NN) fills the
   // spatial (27 x 11 x 11, in the backend's layout) and global (28) rows with the symmetry already applied and
   // passes the cache key. Batching, the cache and the server threads are shared with the Duel path; the result is
-  // buf.result->q4Raw. Throws if the loaded model is not a Q4 model.
+  // buf.result->q4Raw. Throws if the loaded model is not a Q4 model. rowMeta (Q4NNConst::NUM_METADATA_INPUTS floats)
+  // is the metadata row of Q4 I/O v2 models: required for them, and must be null for models without metadata.
   void evaluateQ4Raw(
     const float* rowSpatial,
     const float* rowGlobal,
+    const float* rowMeta,
     Hash128 nnHash,
     NNResultBuf& buf,
     bool skipCache,
