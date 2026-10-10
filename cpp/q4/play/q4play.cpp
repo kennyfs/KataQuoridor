@@ -954,6 +954,7 @@ Q4FinishedGameData* Q4GameRunner::runGame(
   std::unique_ptr<Q4S::Search> bot = std::make_unique<Q4S::Search>(
     botSpec.baseParams, botSpec.nnEval, &logger, seed + ":search"
   );
+  bot->setLeadWeightEps(playSettings.leadWeightEps);
 
   if(afterInitialization != nullptr) {
     afterInitialization(botSpec, bot.get());
@@ -1011,6 +1012,7 @@ Q4FinishedGameData* Q4GameRunner::runGame(
       otherSearches.push_back(std::make_unique<Q4S::Search>(params, eval, &logger, seed + ":seat" + Global::intToString(s)));
       player.search = otherSearches.back().get();
       player.search->setOpponentModel(playSettings.opponentMode, (uint8_t)(1 << s));
+      player.search->setLeadWeightEps(playSettings.leadWeightEps);
       info.visits = params.maxVisits;
     }
     else {

@@ -164,6 +164,7 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
     Q4S::Search::checkParams(searchParams);
     search = std::make_unique<Q4S::Search>(searchParams, nnEval, &logger, "q4qtp_" + std::to_string(seed));
     search->setOpponentModel(Q4S::loadOpponentMode(cfg), 0);   // own seat: the seat to move
+    search->setLeadWeightEps(Q4S::loadLeadWeightEps(cfg));
     search->setPosition(history);
   }
   else if(botType != "nnpolicy") {

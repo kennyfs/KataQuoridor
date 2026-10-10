@@ -58,6 +58,9 @@ struct Q4PlaySettings {
   // q4OpponentMode (Plan §12.3) of every search of a self-play game
   Q4S::OpponentMode opponentMode;
 
+  // q4LeadWeightEps (docs/q4/Q4Lead.md §2) of every search of a self-play game
+  double leadWeightEps;
+
   // Enable full data recording and minor tweaks applying only for self-play training.
   bool forSelfPlay;
 

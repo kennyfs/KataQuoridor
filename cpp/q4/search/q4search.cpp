@@ -164,9 +164,12 @@ double Search::computeSeatUtility(
   return winLossUtilityFactor * (2.0 * value[seat] + (2.0 / (double)nAlive) * value[4] - 1.0);
 }
 
-// docs/q4/Q4Lead.md: lead_i = sum over the other alive seats j of w_j (D_j - D_i), w_j = p_j / sum of the p_k (k alive, k != i),
-// uniform over the other alive seats if that sum is below 1e-6. A dead seat has no lead; with no other alive seat the lead is 0.
-void Search::computeSeatLeads(const double value[5], const double dist[4], uint8_t aliveMask, double leadOut[4]) {
+// docs/q4/Q4Lead.md §2: lead_i = sum over the other alive seats j of w_j (D_j - D_i), with w_j = (p_j + eps) / sum of
+// (p_k + eps) over the alive k != i. eps = 0: w_j = p_j / sum p_k, uniform over the other alive seats if that sum is below
+// 1e-6 (the old weights, bit for bit). A dead seat has no lead; with no other alive seat the lead is 0.
+void Search::computeSeatLeads(
+  const double value[5], const double dist[4], uint8_t aliveMask, double leadWeightEps, double leadOut[4]
+) {
   for(int i = 0; i < 4; i++) {
     leadOut[i] = 0.0;
     if(((aliveMask >> i) & 1) == 0)
@@ -182,11 +185,23 @@ void Search::computeSeatLeads(const double value[5], const double dist[4], uint8
     if(numOthers == 0)
       continue;
     double lead = 0.0;
-    for(int j = 0; j < 4; j++) {
-      if(j == i || ((aliveMask >> j) & 1) == 0)
-        continue;
-      double weight = (pSum < 1e-6) ? 1.0 / (double)numOthers : value[j] / pSum;
-      lead += weight * (dist[j] - dist[i]);
+    if(leadWeightEps == 0.0) {
+      for(int j = 0; j < 4; j++) {
+        if(j == i || ((aliveMask >> j) & 1) == 0)
+          continue;
+        double weight = (pSum < 1e-6) ? 1.0 / (double)numOthers : value[j] / pSum;
+        lead += weight * (dist[j] - dist[i]);
+      }
+    }
+    else {
+      // The smoothed sum is at least numOthers * eps > 0, so there is no uniform fallback
+      double smoothedSum = pSum + (double)numOthers * leadWeightEps;
+      for(int j = 0; j < 4; j++) {
+        if(j == i || ((aliveMask >> j) & 1) == 0)
+          continue;
+        double weight = (value[j] + leadWeightEps) / smoothedSum;
+        lead += weight * (dist[j] - dist[i]);
+      }
     }
     leadOut[i] = lead;
   }
@@ -218,7 +233,7 @@ void Search::computeNNOutputLeafUtilities(const NNOutput& nnOutput, double utili
     value[k] = (double)nnOutput.valueAbs[k];
   for(int s = 0; s < 4; s++)
     dist[s] = (double)nnOutput.finalDistAbs[s];
-  computeSeatLeads(value, dist, nnOutput.aliveMask, leadOut);
+  computeSeatLeads(value, dist, nnOutput.aliveMask, leadWeightEps, leadOut);
   computeLeafUtilities(value, leadOut, nnOutput.aliveMask, utilityOut);
 }
 
@@ -299,6 +314,12 @@ void Search::setOpponentModel(OpponentMode mode, uint8_t mask) {
   ownSeatMask = mask;
 }
 
+void Search::setLeadWeightEps(double eps) {
+  if(eps != leadWeightEps)
+    clearSearch();
+  leadWeightEps = eps;
+}
+
 OpponentMode parseOpponentMode(const std::string& s) {
   if(s == "maxn") return OPPONENT_MAXN;
   if(s == "style") return OPPONENT_STYLE;
@@ -317,6 +338,10 @@ const char* opponentModeName(OpponentMode mode) {
 
 OpponentMode loadOpponentMode(ConfigParser& cfg) {
   return parseOpponentMode(cfg.getString("q4OpponentMode"));
+}
+
+double loadLeadWeightEps(ConfigParser& cfg) {
+  return cfg.getDouble("q4LeadWeightEps", 0.0, 1.0);
 }
 
 void Search::setRootHintAction(int action) {

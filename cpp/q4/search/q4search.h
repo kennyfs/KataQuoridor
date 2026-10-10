@@ -48,6 +48,8 @@ OpponentMode parseOpponentMode(const std::string& s);   // "maxn" | "style" | "e
 const char* opponentModeName(OpponentMode mode);
 // Reads the required key q4OpponentMode.
 OpponentMode loadOpponentMode(ConfigParser& cfg);
+// Reads the required key q4LeadWeightEps (docs/q4/Q4Lead.md §2), in [0, 1]; 0 is the old discontinuous weights.
+double loadLeadWeightEps(ConfigParser& cfg);
 
 // Per-thread state
 struct SearchThread {
@@ -91,6 +93,8 @@ struct Search {
   // The root seat is always own; ownSeatMask adds more (self-play: every learner seat). Q4-only, not in SearchParams.
   OpponentMode opponentMode = OPPONENT_MAXN;
   uint8_t ownSeatMask = 0;
+  // q4LeadWeightEps (docs/q4/Q4Lead.md §2): the smoothing of the lead's weights. Q4-only, not in SearchParams.
+  double leadWeightEps = 0.0;
 
   SearchParams searchParams;
   // Duel's recentScoreCenter, per absolute seat: the centre of the dynamic lead term (docs/q4/Q4Lead.md), set at the
@@ -151,6 +155,8 @@ struct Search {
   void setStyle(const Q4StyleTracker& style);     // the absolute statistics of the new real position
   // Changing the mode clears the tree. ownSeatMask: bit s = seat s is own (besides the root seat).
   void setOpponentModel(OpponentMode mode, uint8_t ownSeatMask);
+  // Changing the smoothing clears the tree (the stored leads and utilities depend on it).
+  void setLeadWeightEps(double eps);
   bool isOwnSeat(int seat) const { return seat == rootState.board.toMove || ((ownSeatMask >> seat) & 1) != 0; }
   bool needsStylePolicy() const { return opponentMode != OPPONENT_MAXN; }
   void setRootHintAction(int action);
@@ -208,7 +214,10 @@ struct Search {
   );
   // The lead of each alive seat from one evaluation (docs/q4/Q4Lead.md): value = win probabilities (absolute seats,
   // [4] = draw), dist = predicted walls-only distances to the centre in cells (absolute seats). leadOut of a dead seat is 0.
-  static void computeSeatLeads(const double value[5], const double dist[4], uint8_t aliveMask, double leadOut[4]);
+  // leadWeightEps: the weights are (p_j + eps) / sum (p_k + eps); 0 gives the plain p_j / sum p_k (uniform below 1e-6).
+  static void computeSeatLeads(
+    const double value[5], const double dist[4], uint8_t aliveMask, double leadWeightEps, double leadOut[4]
+  );
   // The utility of each seat at one evaluation: the win/loss part plus the static and dynamic score terms (Duel's
   // getScoreUtility, with the lead for the score). A dead seat (not in aliveMask) gets no score term.
   void computeLeafUtilities(const double value[5], const double lead[4], uint8_t aliveMask, double utilityOut[4]) const;

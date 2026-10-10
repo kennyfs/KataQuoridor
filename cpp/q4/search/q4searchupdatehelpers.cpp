@@ -21,7 +21,7 @@ void Search::addLeafValue(
 ) {
   (void)isTerminal;
   double lead[4];
-  computeSeatLeads(value, dist, aliveMask, lead);
+  computeSeatLeads(value, dist, aliveMask, leadWeightEps, lead);
   double utility[4];
   double utilitySq[4];
   computeLeafUtilities(value, lead, aliveMask, utility);

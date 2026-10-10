@@ -253,6 +253,7 @@ GameResult playGame(
   const GameSpec& g,
   const SearchParams& baseParams,
   Q4S::OpponentMode defaultOpponentMode,
+  double leadWeightEps,
   const std::map<std::string, std::unique_ptr<NNEvaluator>>& evaluators,
   Logger& logger
 ) {
@@ -287,6 +288,7 @@ GameResult playGame(
       players[s].search->setOpponentModel(
         ps.opponentMode.empty() ? defaultOpponentMode : Q4S::parseOpponentMode(ps.opponentMode), (uint8_t)(1 << s)
       );
+      players[s].search->setLeadWeightEps(leadWeightEps);
       players[s].search->setPosition(history);
     }
     else {
@@ -377,8 +379,10 @@ void runGames(
       if(mc.players[g.seatPlayer[s]].isSearch)
         needed.insert(mc.players[g.seatPlayer[s]].modelPath);
   Q4S::OpponentMode defaultOpponentMode = Q4S::OPPONENT_MAXN;
+  double leadWeightEps = 0.0;
   if(!needed.empty()) {
     defaultOpponentMode = Q4S::loadOpponentMode(cfg);
+    leadWeightEps = Q4S::loadLeadWeightEps(cfg);
     Rand evalSeed(mc.seed + 777);
     for(const std::string& path : needed) {
       evaluators[path] = std::unique_ptr<NNEvaluator>(Setup::initializeNNEvaluator(
@@ -402,7 +406,7 @@ void runGames(
           if(error != nullptr)
             break;
         }
-        GameResult r = playGame(mc, games[i], searchParams, defaultOpponentMode, evaluators, logger);
+        GameResult r = playGame(mc, games[i], searchParams, defaultOpponentMode, leadWeightEps, evaluators, logger);
         std::lock_guard<std::mutex> lock(mutex);
         onGameDone(r);
       }
