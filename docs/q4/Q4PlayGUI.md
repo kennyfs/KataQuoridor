@@ -3,8 +3,15 @@
 A local web app to play Four-at-a-Table (Q4) and, above all, to analyse Q4 positions with a Q4 net. You move for any
 seat, the net (or a bot) moves for the others, and the engine shows what it thinks of the position. Code:
 `python/q4_play_gui/` (`serve.py`, `game.py`, `engine.py`, `evaluation.py`, `index.html`, `js/core.js`, `js/board.js`,
-`js/app.js`, `style.css`, `tests/`). It is a rewrite for four seats of the Duel GUI ([../PlayGUI.md](../PlayGUI.md)); the
-Duel GUI and viewer are unchanged.
+`js/app.js`, `style.css`, `tests/`). It is a rewrite for four seats of the Duel GUI ([../PlayGUI.md](../PlayGUI.md)), and
+the page looks and behaves like the Duel page (same layout, palette, board drawing, evaluation card, candidate table,
+move list, shortcut line, dialogs); the Duel GUI and viewer are unchanged. Differences that Q4 needs: four seat cards
+(player setting, eliminate), a five-way evaluation bar, rotation by 90°.
+
+**Layout.** Header: New game, Undo, Redo, ▶ Analysis (+ *max* visits), AI (*move*, *until human*), turn / seat at the
+bottom, PV, Evaluation, SGF, Load. Left: the board, the four seat cards, a status line, the move box. Right: Evaluation
+(five-way bar, text, chart over the game), Analysis (candidate table), Moves, Search settings (folded), the shortcut
+line. Under 981 px the columns stack; at phone width the seat cards stack too.
 
 The engine is `katago q4qtp` (`cpp/q4/command/q4qtp.cpp`). The rules come only from the engine (`play`, `legal_moves`,
 `eliminate`, `undo`, `winner`, `q4-position`); the GUI draws what the engine answers.
@@ -34,14 +41,15 @@ tab controls this game" until the first one has been quiet for 15 s; a reload of
 
 ## Seats
 
-Four seats, S W N E (Q4Rules §2: S = player 1 starting at f1, W = a6, N = f11, E = k6). Each seat card has:
+Four seats, S W N E (Q4Rules §2: S = player 1 starting at f1, W = a6, N = f11, E = k6). The seat cards sit under the
+board (the Duel page's player cards, four of them). Each has:
 
 - **kind**: *Human* (you play its moves), *AI net* (the Q4 net searches; visits per move, empty = the default), or
   *Bot* (`greedy`, `basher`, `randomPawn`, `random`, `grudge`; `grudge` needs a target seat). Changes apply at once, also
   in the middle of a game. All four Human = *analysis mode* (the header says so).
-- the **walls left**, the **distance to the centre** (walls-only, from the engine), alive / eliminated, and the seat to
-  move (outlined in the card and named in the header).
-- **eliminate**: asks first. With two seats alive the confirmation says that the game ends at once (the engine ends it,
+- the **walls left** (as bars, like the Duel card), the **distance to the centre** (walls-only, from the engine), alive /
+  eliminated, and the seat to move (the card has the seat colour as an outline, and the status line names it).
+- **eliminate** (✕): asks first, in a dialog. With two seats alive the confirmation says that the game ends at once (the engine ends it,
   undo reopens it). Eliminating a seat keeps its walls on the board; its unplaced walls are lost (engine rule), and undo
   gives them back.
 
@@ -50,17 +58,25 @@ other (20 moves per request, repeated until a human seat is to move; *Stop* ends
 
 ## Board
 
-- 11 × 11, `a..k` and `1..11`, row 11 at the top. The centre f6 is marked. Pawns are circles in the seat colour (the Q4
-  viewer's set: S blue, W orange, N pink, E green); the seat to move has a dark ring.
-- **Rotate** (R, or the S W N E buttons above the board): puts that seat at the bottom.
+- 11 × 11, drawn like the Duel board: rounded cells with grooves between them, row 11 at the top, the centre f6 marked.
+  **No coordinates or move names are drawn on the board** (no text in the cells, none on candidates or on a hovered
+  wall); only the file / rank letters outside the four edges (they follow the rotation), the seat letter in each pawn
+  and the numbers of the candidates and of a variation. The move list, the move box and the tables use the notation.
+- Pawns are discs in the seat colour (the Q4 viewer's set: S blue, W orange, N pink, E green); the seat to move has a
+  dashed ring; the last pawn move shows where it came from.
+- **Rotate** (R, *turn*, or the S W N E buttons in the header): puts that seat at the bottom.
 - Legal pawn destinations of the seat to move are dots (jumps included). Clicking a pawn highlights its seat's legal
   moves (a read from the engine for a seat that is not to move); clicking a dot plays it.
-- **Walls**: hover a groove (the band between cells, see the wall lines) to see the wall name and whether it is legal
-  for the seat to move. A legal wall is a preview in the seat colour and is placed by a click; an illegal one is red,
-  labelled "illegal", and not clickable. Legality is the engine's `legal_moves`, not a JS rule.
-- Walls are drawn in the colour of the seat that placed them (dimmed once that seat is eliminated); the last move is
-  marked with a dashed ring (pawn) or outline (wall).
-- Keyboard move entry: type `f2`, `e5h`, `j10v` in the box and press Enter (the engine checks it).
+- **Walls**: hover a groove (the band between cells) to see whether the wall is legal for the seat to move. A legal
+  wall is a preview in the seat colour and is placed by a click; an illegal one is red and not clickable (a click says
+  so in a message). Legality is the engine's `legal_moves`, not a JS rule. On a touch screen the first tap on a wall
+  previews it and a second tap on the same wall places it.
+- Walls are drawn in the colour of the seat that placed them (dimmed once that seat is eliminated); the last wall has
+  a white glow.
+- Keyboard move entry: type `f2`, `e5h`, `j10v` in the box and press Enter (the engine checks it; a wrong entry shows
+  a message).
+- **Wheel over the board**: up = undo one event, down = redo one event (an elimination is one event) in analysis mode;
+  see *Moves and review* for a game against the AI.
 
 ## Analysis
 
@@ -71,10 +87,13 @@ Press **Start analysis** (Space). While it runs, the engine searches the positio
   and leads (in cells). When analysis is off, the stored value of this position or the raw net is shown.
 - **Raw net**: `net, no search`: the net's own value of the position and the plies to the end (`q4-rawnn`).
 - **Candidates**: at most **5** moves, on the board and in the table: those whose visits are **more than 1%** of all
-  searched children's visits, best LCB first. The table shows the mover's win probability, prior, utility, LCB (sort by
-  clicking a header) and the five win probabilities after the move as a stacked bar. Click a line to play it; hover to
-  see its principal variation on the board (numbered, with the seat letters under the table). On the board the best is
-  light blue and the others green, fading with visits, each with the mover's win chance.
+  searched children's visits, best LCB first. The table (as Duel's) shows the rank, the move, the mover's win
+  probability, visits (and their share), policy, utility and LCB (sort by clicking win%, visits, policy, utility or lcb;
+  the choice is remembered), and under each line the five win probabilities after the move as a stacked bar and the
+  principal variation with the seat letters. Click a line, or the candidate on the board, to play it; hover either
+  to see the variation on the board (numbered; the **PV** button / P turns this off). On the board the best is light
+  blue and the others green, fading with visits; a pawn move shows the mover's win chance and the visits, a wall
+  its win chance.
 - **Max visits** (empty = unlimited) caps the search; at the cap the analysis reports *done*. The **interval** is in
   centiseconds (25 = a report every 0.25 s).
 - The search keeps its tree while the position stays the same: a second search on the same position starts from the
@@ -85,11 +104,18 @@ list (the mover's win chance before each move) and written as the comment of tha
 
 ## Moves and review
 
-- The move list: `1. S f2`, `2. W e2h` (an AI move has the tag `AI`), `EL N` (an elimination, own row). Click a row to
-  review that position; the mouse wheel over the list, ← and → step, Home and End jump. Reviewing is the engine at that
-  position (undo and redo are engine moves).
-- **Undo** (U, Backspace, ←) takes back exactly one event: a move or an elimination. **Redo** (→) replays the next event.
-  Playing a move while reviewing drops the events after the position (the redo line), as a branch does.
+- The move list: a row per event with the seat colour, the move (`f2`, `e5h`; an AI move has the tag `AI`), `EL N` for an
+  elimination, and the mover's win chance before the move. Undone events stay in the list, dimmed. The wheel over the
+  list scrolls it. Click a row to go to that position.
+- **Analysis mode** (all four seats Human): the wheel over the board, ← and →, Home and End, a row of the list and the
+  chart go through the engine: ← / wheel up = undo one event, → / wheel down = redo one. One step per engine answer:
+  wheel events that arrive while the engine is answering are dropped.
+- **A game against the AI** (at least one seat is not Human): the wheel, ← →, Home / End, the list and the chart *review*
+  read-only: the position is rebuilt in the page from the event list (pawns, walls, who is out, walls left; distances
+  and legal moves are not known there) and the game is not touched; *Back to current* (or Esc, End) returns. The
+  **Undo** and **Redo** buttons (U, Backspace) still go through the engine.
+- **Undo** takes back exactly one event: a move or an elimination. **Redo** replays the next event. Playing a move after
+  an undo drops the events after the position (the redo line), as a branch does.
 - An elimination that leaves one seat ends the game (*game over: X wins*); undo reopens it.
 - **Download .sgfs**: the game up to the position shown (the engine's `printrecord`), with the evaluation of every
   searched position as the comment of the move after it (`C[pS pW pN pE pD v=.. weight=1.00 lead=..]`, see
@@ -99,7 +125,9 @@ list (the mover's win chance before each move) and written as the comment of tha
   (move numbers are allowed). The game is replayed into the engine: every move and elimination is checked against the
   rules and the seat to move, and an error names the event. *Stop at ply* leaves the game at that position, so you can
   continue analysing from there (any later move branches).
-- **New game…**: the rules (`maxPlies`, `repetitionDrawCount`, initial walls per seat); the seat settings are kept.
+- **New game…** (a dialog like Duel's): *You play* (keep the seats, one seat, random, AI only, analysis = all human),
+  the strength of the AI seats (Easy 1, Normal 16, Hard 256, Max 800 visits, or custom) and, folded, the rules
+  (`maxPlies`, `repetitionDrawCount`, initial walls per seat). With *Keep seats* the seat settings stay.
 
 ## Search settings
 
@@ -119,13 +147,16 @@ vet a net for them.
 
 | key | action |
 |---|---|
-| ← / U / Backspace | undo |
-| → | redo |
+| U / Backspace | undo one event (engine) |
+| ← / → | analysis mode: undo / redo one event; against the AI: review back / forward (read-only) |
+| wheel over the board | the same as ← / → |
 | Home / End | start / latest position |
 | Space | start / pause the analysis |
-| R | rotate the board |
+| R | rotate the board by 90° |
+| N | New game |
+| P / E | PV on hover on / off; evaluation on / off |
+| Esc | clear a selected pawn, or back from a review |
 | Enter (in the move box) | play the move typed |
-| wheel over the move list | step back / forward |
 
 ## Engine commands added (`cpp/q4/command/q4qtp.cpp`)
 
@@ -173,5 +204,8 @@ Q4_KATAGO=/path/katago Q4_MODEL=/path/model.bin.gz /home/kenny/ml_venv/bin/pytho
 - Not done (nice-to-haves): the policy heat map (`q4-rawnn` gives the top 10 only), the shortest-path and "delays seat
   X" overlays, a position editor (`set_position` does not exist), compare mode, the repetition indicator.
 - The raw net and the search settings are one net per process; to compare two nets, start two servers on two ports.
-- Phone layout: checked at 375 px width (the board, the seat cards and the list stack; the candidate table scrolls
-  sideways inside its box). Not checked on a real phone.
+- Phone layout: checked at 375 px width (the board, the four seat cards, the evaluation, the candidate table, the list
+  and the settings stack; the candidate table has narrower columns there). Not checked on a real phone.
+- Read-only review in a game against the AI shows no distances (`? steps`), no analysis and no legal moves: the
+  engine only knows its current position.
+- The page is light only (the Duel palette); the earlier dark theme is gone.
