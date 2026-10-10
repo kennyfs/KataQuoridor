@@ -85,3 +85,28 @@ assert.strictEqual(C.grooveAt(3.5, 3.5), null);
 assert.deepStrictEqual(C.grooveAt(3.5, 4.0), { ax: 3, ay: 3, h: true }); // on the line y = 4, between x = 3 and 4
 assert.ok(C.grooveAt(3.5, 4.05) !== null);
 console.log("core_check: grooves ok");
+
+// read-only review: replay of the event list
+const evs = [{ seat: 0, a: "f2" }, { seat: 1, a: "b6" }, { seat: 2, a: "e5h" }, { seat: 3, elim: true },
+             { seat: 0, a: "f3" }, { seat: 1, a: "c6" }];
+const r0 = C.replay(evs, 0, [7, 7, 7, 7]);
+assert.deepStrictEqual(r0.pawns, ["f1", "a6", "f11", "k6"]);
+assert.strictEqual(r0.toMove, 0);
+const r3 = C.replay(evs, 3, [7, 7, 7, 7]);
+assert.strictEqual(r3.pawns[0], "f2");
+assert.strictEqual(r3.pawns[1], "b6");
+assert.deepStrictEqual(r3.walls, ["e5h"]);
+assert.deepStrictEqual(r3.wallsLeft, [7, 7, 6, 7]);
+assert.strictEqual(r3.toMove, 3);
+const r4 = C.replay(evs, 4, [7, 7, 7, 7]);
+assert.deepStrictEqual(r4.alive, [true, true, true, false]);
+assert.strictEqual(r4.pawns[3], "");
+assert.strictEqual(r4.wallsLeft[3], 0);
+assert.strictEqual(r4.toMove, 0);            // the seat to move was the eliminated E: next alive is S
+assert.strictEqual(C.replay(evs, 6, [7, 7, 7, 7]).toMove, 2);
+const lone = C.replay([{ seat: 1, elim: true }, { seat: 2, elim: true }, { seat: 3, elim: true }], 3, [7, 7, 7, 7]);
+assert.ok(lone.finished && lone.winner === 0);
+assert.strictEqual(C.cellBefore(evs, 5), "f2");   // S f2 -> f3
+assert.strictEqual(C.cellBefore(evs, 2), "a6");   // W a6 -> b6
+assert.strictEqual(C.cellBefore(evs, 3), null);   // a wall
+console.log("core_check: replay ok");

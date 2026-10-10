@@ -115,12 +115,49 @@ const Q4Core = (function () {
   // The mover's win probability of a candidate: value[seat].
   function moverWin(candidate, seat) { return candidate.value ? candidate.value[seat] : null; }
 
+
+  // -- read-only review: the position after the first n events, rebuilt from the event list alone ------------
+  // (the engine only knows the position at the cursor). Pawns, walls, who is out and the walls left are exact;
+  // distances and legal moves are not known here, so a reviewed position shows none.
+  const START_CELLS = ["f1", "a6", "f11", "k6"];
+  function replay(events, n, initialWalls) {
+    const alive = [true, true, true, true], pawns = START_CELLS.slice(), walls = [];
+    const wallsLeft = (initialWalls || [7, 7, 7, 7]).slice(), wallOwner = {};
+    const nextAlive = (s) => { for (let k = 1; k <= 4; k++) if (alive[(s + k) % 4]) return (s + k) % 4; return s; };
+    let toMove = 0;
+    for (let k = 0; k < n && k < events.length; k++) {
+      const e = events[k];
+      if (e.elim) {
+        alive[e.seat] = false; pawns[e.seat] = ""; wallsLeft[e.seat] = 0;
+        if (toMove === e.seat) toMove = nextAlive(e.seat);
+      } else if (e.a.endsWith("h") || e.a.endsWith("v")) {
+        walls.push(e.a); wallOwner[e.a] = e.seat; wallsLeft[e.seat] -= 1; toMove = nextAlive(e.seat);
+      } else {
+        pawns[e.seat] = e.a; toMove = nextAlive(e.seat);
+      }
+    }
+    const left = alive.filter(Boolean).length;
+    return { alive, pawns, walls, wallsLeft, toMove, wallOwner, dist: [null, null, null, null],
+             finished: left <= 1, winner: left === 1 ? alive.indexOf(true) : -1, replayed: true };
+  }
+
+  // The cell the pawn moved by event n-1 came from (null if that event is not a pawn move).
+  function cellBefore(events, n) {
+    const last = events[n - 1];
+    if (!last || last.elim || !parseMove(last.a) || parseMove(last.a).kind !== "pawn") return null;
+    for (let k = n - 2; k >= 0; k--) {
+      const e = events[k];
+      if (e.seat === last.seat && !e.elim && parseMove(e.a) && parseMove(e.a).kind === "pawn") return e.a;
+    }
+    return START_CELLS[last.seat];
+  }
+
   return {
     N, SEAT_LETTERS, SEAT_NAMES, SEAT_COLORS, DRAW_COLOR, CENTER,
     cellName, parseMove, wallName, normaliseMoveInput,
     rotatePoint, unrotatePoint, rotateCellPoint, viewToBase, cellAtView,
     wallSegment, grooveAt, wallRect, rotationForSeat,
-    pct, barSegments, wallSeats, sortCandidates, moverWin,
+    pct, barSegments, wallSeats, sortCandidates, moverWin, replay, cellBefore, START_CELLS,
   };
 })();
 

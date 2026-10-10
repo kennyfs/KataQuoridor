@@ -3,99 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Q4 play and analysis</title>
+<title>KataQuoridor Q4 Play</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header class="top">
-  <h1>Four at a Table <span class="sub">play &amp; analysis</span></h1>
-  <div class="badges">
-    <span id="mode" class="badge">analysis</span>
-    <span id="opp" class="badge">maxn</span>
-    <span id="engine" class="badge">engine …</span>
+<header>
+  <h1><span class="dot" style="background:var(--s0)"></span><span class="dot" style="background:var(--s1)"></span><span class="dot" style="background:var(--s2)"></span><span class="dot" style="background:var(--s3)"></span> KataQuoridor Q4</h1>
+  <span id="engineInfo" class="engine-info">Starting…</span>
+  <div class="actions">
+    <button id="newBtn" class="primary" title="New game (N)">New game</button>
+    <button id="undoBtn" title="Take back the last event, a move or an elimination (U, Backspace)">Undo</button>
+    <button id="redoBtn" title="Replay the next event (Redo)">Redo</button>
+    <button id="anaBtn" class="toggle" title="Start / pause the engine analysis (Space)">▶ Analysis</button>
+    <label class="maxv" title="Stop the analysis at this many visits; empty = no limit">max
+      <input id="maxVisits" type="number" min="0" placeholder="∞"></label>
+    <span class="ai-seg" title="Let the AI play the seat to move">AI
+      <button id="aiNowBtn" title="The seat to move plays one AI move">move</button><button id="aiAllBtn" title="AI seats play until a human seat is to move">until human</button><button id="aiStopBtn" hidden>■</button></span>
+    <span class="ai-seg" title="Turn the board (R) or put a seat at the bottom">⟳
+      <button id="rotateBtn" title="Rotate the board by 90° (R)">turn</button><span id="seatView" class="seat-view"></span></span>
+    <button id="pvBtn" class="toggle on" title="Show a candidate's continuation when the pointer is over it (P)">PV</button>
+    <button id="evalBtn" class="toggle on" title="Show or hide the evaluation (E)">Evaluation</button>
+    <button id="saveBtn" title="Download the game as .sgfs (opens in the Q4 sgfs viewer)">SGF</button>
+    <button id="loadBtn" title="Load a game or paste a move list">Load</button>
   </div>
 </header>
-<div id="banner" class="banner" hidden>
-  <span id="bannerText"></span>
-  <button id="restartBtn" type="button">Restart engine</button>
-</div>
-<div id="toast" class="toast" role="status" hidden></div>
 
-<main class="layout">
-  <section class="boardcol">
-    <div class="boardbar">
-      <div class="seatview" id="seatView" aria-label="Seat at the bottom"></div>
-      <button id="rotateBtn" type="button" title="Rotate the board (R)">Rotate ⟳ <kbd>R</kbd></button>
-      <span id="toMoveText" class="tomove"></span>
-    </div>
-    <div class="boardwrap">
+<div id="banner" hidden>
+  <div class="banner-text"><b id="bannerTitle"></b><pre id="bannerMsg"></pre></div>
+  <button id="restartBtn">Restart engine</button>
+</div>
+
+<main>
+  <section class="panel center">
+    <div id="boardWrap">
       <svg id="board" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Quoridor board"></svg>
+      <div id="overlay" hidden>
+        <div class="ov-box">
+          <div class="ov-title" id="ovTitle"></div>
+          <div class="ov-sub" id="ovSub"></div>
+          <div class="ov-btns"><button class="primary" id="ovNew">New game</button><button id="ovReview">Review the board</button></div>
+        </div>
+      </div>
     </div>
-    <div class="rootbar" id="rootBar" title="Win probabilities at the root of the analysis"></div>
-    <div class="rootlegend" id="rootLegend"></div>
-    <div class="entry">
-      <input id="moveBox" type="text" autocomplete="off" spellcheck="false" placeholder="move: f2, e5h, j10v (Enter)">
-      <button id="moveBtn" type="button">Play</button>
-      <span id="moveMsg" class="msg"></span>
-    </div>
-    <div class="nav">
-      <button id="homeBtn" type="button" title="Start (Home)">⏮</button>
-      <button id="undoBtn" type="button" title="Undo (U, Backspace, ←)">Undo <kbd>U</kbd></button>
-      <button id="redoBtn" type="button" title="Redo (→)">Redo <kbd>→</kbd></button>
-      <button id="endBtn" type="button" title="Latest (End)">⏭</button>
-      <span id="plyText" class="plytext"></span>
-    </div>
-    <div class="aibar">
-      <button id="aiNowBtn" type="button">AI plays now</button>
-      <button id="aiAllBtn" type="button">AI plays until a human seat</button>
-      <button id="aiStopBtn" type="button" hidden>Stop</button>
-    </div>
+    <div id="seats" class="seats"></div>
+    <div id="status" class="status"></div>
+    <form id="moveForm" class="move-form" autocomplete="off">
+      <input id="moveInput" placeholder="Type a move: f2, e5h, j10v" spellcheck="false" aria-label="Move in QTP notation">
+      <button type="submit">Play</button>
+    </form>
   </section>
 
-  <section class="sidecol">
-    <div class="panel">
-      <h2>Seats</h2>
-      <div id="seats" class="seats"></div>
-      <p class="hint">Human = you move it. AI net = the Q4 net searches (visits per move). Bot = a fixed bot.
-        Changes take effect at once, also mid-game.</p>
+  <section class="panel side">
+    <div id="evalCard" class="card">
+      <h2>Evaluation <span class="sub" id="evalPly"></span></h2>
+      <div class="ev-bar" id="evBar" title="Win probabilities S W N E draw"></div>
+      <div class="ev-nums" id="evNums"></div>
+      <div class="ev-lead" id="evLead">—</div>
+      <div class="ev-src" id="evSrc"></div>
+      <div class="ev-src" id="evNet"></div>
+      <svg id="chart" aria-label="Win probability of each seat over the game"></svg>
     </div>
-
-    <div class="panel">
-      <h2>Analysis <span id="anaState" class="sub"></span></h2>
-      <div class="row">
-        <button id="anaBtn" type="button">Start analysis <kbd>Space</kbd></button>
-        <label>interval <input id="anaCs" type="number" min="1" value="25" class="small"> cs</label>
-        <label>max visits <input id="anaCap" type="number" min="1" placeholder="unlimited" class="small"></label>
-        <button id="anaCapBtn" type="button">Apply</button>
-      </div>
-      <div id="rootInfo" class="rootinfo"></div>
-      <div id="rawInfo" class="rawinfo"></div>
-      <div class="tablewrap">
-        <table id="cands" class="cands">
-          <thead><tr>
-            <th data-key="lcb">move</th><th data-key="visits">visits</th><th data-key="win">mover</th>
-            <th data-key="prior">prior</th><th data-key="utility">utility</th><th data-key="lcb">lcb</th>
-            <th>win after move: S W N E draw</th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <p class="hint">Click a line to play it. Hover a line to see its variation on the board (numbered, with the seat letters
-        below the table). Best (light blue) = the engine's choice by LCB; the others fade with visits.</p>
-      <div id="pvText" class="pvtext"></div>
+    <div id="candCard" class="card" hidden>
+      <h2><span id="candTitle">Analysis</span> <span class="sub" id="candSub"></span></h2>
+      <div id="candRoot" class="cand-root"></div>
+      <div id="candList" class="cand-list"></div>
     </div>
-
-    <div class="panel">
-      <h2>Moves <span class="sub">(click to review; wheel or ← → steps)</span></h2>
-      <ol id="moves" class="moves" tabindex="0"></ol>
-      <div class="row">
-        <button id="saveBtn" type="button">Download .sgfs</button>
-        <button id="loadBtn" type="button">Load / paste…</button>
-        <button id="newBtn" type="button">New game…</button>
-      </div>
+    <div class="card grow">
+      <h2>Moves <span class="sub" id="moveCount"></span></h2>
+      <div id="reviewBar" hidden><span id="reviewText"></span><button id="backBtn" class="primary">Back to current</button></div>
+      <div id="moveList"></div>
     </div>
-
-    <details class="panel" id="settingsPanel">
+    <details class="card" id="settingsPanel">
       <summary><h2>Search settings</h2></summary>
       <div class="grid2">
         <label>opponent mode
@@ -110,6 +88,7 @@
             <option value="0">S</option><option value="1">W</option><option value="2">N</option><option value="3">E</option>
           </select></label>
         <label>visits (default for AI seats) <input id="setVisits" type="number" min="1"></label>
+        <label>analysis interval (cs) <input id="anaCs" type="number" min="1" value="25"></label>
         <label>lead factor (dynamicScoreUtilityFactor) <input id="setLead" type="number" step="0.05" min="0"></label>
         <label>lead smoothing (q4LeadWeightEps) <input id="setEps" type="number" step="0.01" min="0" max="1"></label>
         <label>cpuctExploration <input id="setCpuct" type="number" step="0.05" min="0"></label>
@@ -121,46 +100,83 @@
       </div>
       <pre id="paramsOut" class="params" hidden></pre>
     </details>
+    <div class="keys" id="keys"></div>
   </section>
 </main>
 
-<dialog id="dlgLoad">
-  <form method="dialog" class="dlg">
-    <h2>Load a game or a move list</h2>
-    <p class="hint">A Q4 record line (.sgfs, from this GUI or the self-play files) or a move list:
+<dialog id="newDlg">
+  <form method="dialog" id="newForm">
+    <h3>New game</h3>
+    <div class="field">
+      <div class="lab">You play</div>
+      <div class="seg" id="sideSeg">
+        <label><input type="radio" name="side" value="keep"><span>Keep seats <small>as they are</small></span></label>
+        <label><input type="radio" name="side" value="0"><span><i class="pawn s0"></i>S <small>moves first</small></span></label>
+        <label><input type="radio" name="side" value="1"><span><i class="pawn s1"></i>W</span></label>
+        <label><input type="radio" name="side" value="2"><span><i class="pawn s2"></i>N</span></label>
+        <label><input type="radio" name="side" value="3"><span><i class="pawn s3"></i>E</span></label>
+        <label><input type="radio" name="side" value="random"><span>Random</span></label>
+        <label><input type="radio" name="side" value="none"><span>AI only <small>demo</small></span></label>
+        <label><input type="radio" name="side" value="analysis"><span>Analysis <small>all human</small></span></label>
+      </div>
+    </div>
+    <div class="field" id="strField">
+      <div class="lab">Strength of the AI seats</div>
+      <div class="seg" id="strSeg">
+        <label><input type="radio" name="preset" value="easy"><span>Easy <small>1 visit</small></span></label>
+        <label><input type="radio" name="preset" value="normal"><span>Normal <small>16</small></span></label>
+        <label><input type="radio" name="preset" value="hard"><span>Hard <small>256</small></span></label>
+        <label><input type="radio" name="preset" value="max"><span>Max <small>800</small></span></label>
+        <label><input type="radio" name="preset" value="custom"><span>Custom <input type="number" id="customVisits" min="1" max="100000" value="400"></span></label>
+      </div>
+      <div class="note">Visits per move. Easy plays the raw policy net without search. Each seat can be changed on its card afterwards.</div>
+    </div>
+    <details class="field">
+      <summary class="lab">Rules</summary>
+      <div class="grid2">
+        <label>maxPlies <input id="newPlies" type="number" min="1" max="1000" value="400"></label>
+        <label>repetitionDrawCount (0 = off) <input id="newRep" type="number" min="0" max="50" value="0"></label>
+        <label>initial walls S <input id="newW0" type="number" min="0" max="10" value="7"></label>
+        <label>W <input id="newW1" type="number" min="0" max="10" value="7"></label>
+        <label>N <input id="newW2" type="number" min="0" max="10" value="7"></label>
+        <label>E <input id="newW3" type="number" min="0" max="10" value="7"></label>
+      </div>
+    </details>
+    <div class="note" id="newWarn">The current game is discarded; download it first (SGF) to keep it.</div>
+    <div class="dlg-btns">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary" id="startBtn">Start</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="loadDlg">
+  <form method="dialog" id="loadForm">
+    <h3>Load a game or a move list</h3>
+    <p class="note">A Q4 record line (.sgfs, from this page or the self-play files) or a move list:
       <code>S f2, W b6, EL N, E j10v</code>. The game is replayed into the engine and checked move by move.</p>
-    <input type="file" id="loadFile" accept=".sgfs,.txt">
-    <textarea id="loadText" rows="6" spellcheck="false"></textarea>
-    <label>stop at ply <input id="loadPly" type="number" min="0" placeholder="the end"></label>
-    <div class="row">
-      <button id="loadGo" type="button">Load</button>
-      <button type="submit" value="cancel">Cancel</button>
+    <div class="field"><input type="file" id="loadFile" accept=".sgfs,.txt"></div>
+    <div class="field"><textarea id="loadText" rows="6" spellcheck="false"></textarea></div>
+    <div class="field"><label class="inl">stop at ply <input id="loadPly" type="number" min="0" placeholder="the end"></label></div>
+    <div class="dlg-btns">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary" id="loadGo">Load</button>
     </div>
   </form>
 </dialog>
 
-<dialog id="dlgNew">
-  <form method="dialog" class="dlg">
-    <h2>New game</h2>
-    <p class="hint">The seats keep their settings. Rules of the new game:</p>
-    <div class="grid2">
-      <label>maxPlies <input id="newPlies" type="number" min="1" max="1000" value="400"></label>
-      <label>repetitionDrawCount (0 = off) <input id="newRep" type="number" min="0" max="50" value="0"></label>
-      <label>initial walls S <input id="newW0" type="number" min="0" max="10" value="7"></label>
-      <label>W <input id="newW1" type="number" min="0" max="10" value="7"></label>
-      <label>N <input id="newW2" type="number" min="0" max="10" value="7"></label>
-      <label>E <input id="newW3" type="number" min="0" max="10" value="7"></label>
-    </div>
-    <div class="row">
-      <button id="newGo" type="button">Start a new game</button>
-      <button type="submit" value="cancel">Cancel</button>
+<dialog id="confirmDlg">
+  <form method="dialog">
+    <h3 id="confirmTitle">Eliminate?</h3>
+    <p id="confirmText" class="note"></p>
+    <div class="dlg-btns">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary" id="confirmGo">Eliminate</button>
     </div>
   </form>
 </dialog>
 
-<dialog id="dlgBusy">
-  <form method="dialog" class="dlg"><p id="busyText">Working…</p></form>
-</dialog>
+<div id="toast" hidden></div>
 
 <script src="/js/core.js"></script>
 <script src="/js/board.js"></script>
