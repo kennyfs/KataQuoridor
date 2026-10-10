@@ -9,6 +9,7 @@
 #include "../../core/fancymath.h"
 #include "../../core/test.h"
 #include "../../core/timer.h"
+#include "../../neuralnet/nninputs.h"
 #include "q4searchnode.h"
 #include "q4searchnodetable.h"
 
@@ -53,8 +54,6 @@ static const double VALUE_WEIGHT_DEGREES_OF_FREEDOM = 3.0;
 
 void Search::checkParams(const SearchParams& params) {
   std::vector<std::string> offending;
-  if(params.staticScoreUtilityFactor != 0.0) offending.push_back("staticScoreUtilityFactor");
-  if(params.dynamicScoreUtilityFactor != 0.0) offending.push_back("dynamicScoreUtilityFactor");
   if(params.policyOptimism != 0.0) offending.push_back("policyOptimism");
   if(params.rootPolicyOptimism != 0.0) offending.push_back("rootPolicyOptimism");
   if(params.useGraphSearch) offending.push_back("useGraphSearch");
@@ -103,6 +102,7 @@ Search::Search(
     rootState(),
     rootHintAction(Q4Board::NULL_ACTION),
     searchParams(params),
+    recentLeadCenter{0.0, 0.0, 0.0, 0.0},
     numSearchesBegun(0),
     searchNodeAge(0),
     lastSearchNumPlayouts(0),
@@ -125,6 +125,9 @@ Search::Search(
     oldNNOutputsToCleanUp()
 {
   checkParams(params);
+  // The score terms (computeLeafUtilities) read ScoreValue's tables; Duel's entry points init them, Q4's do not
+  if(!ScoreValue::areTablesInitialized())
+    ScoreValue::initTables();
 
   valueWeightDistribution = new DistributionTable(
     [](double z) { return FancyMath::tdistpdf(z, VALUE_WEIGHT_DEGREES_OF_FREEDOM); },
@@ -159,6 +162,99 @@ double Search::computeSeatUtility(
   if(nAlive <= 0)
     return -winLossUtilityFactor;
   return winLossUtilityFactor * (2.0 * value[seat] + (2.0 / (double)nAlive) * value[4] - 1.0);
+}
+
+// docs/q4/Q4Lead.md: lead_i = sum over the other alive seats j of w_j (D_j - D_i), w_j = p_j / sum of the p_k (k alive, k != i),
+// uniform over the other alive seats if that sum is below 1e-6. A dead seat has no lead; with no other alive seat the lead is 0.
+void Search::computeSeatLeads(const double value[5], const double dist[4], uint8_t aliveMask, double leadOut[4]) {
+  for(int i = 0; i < 4; i++) {
+    leadOut[i] = 0.0;
+    if(((aliveMask >> i) & 1) == 0)
+      continue;
+    double pSum = 0.0;
+    int numOthers = 0;
+    for(int j = 0; j < 4; j++) {
+      if(j == i || ((aliveMask >> j) & 1) == 0)
+        continue;
+      pSum += value[j];
+      numOthers++;
+    }
+    if(numOthers == 0)
+      continue;
+    double lead = 0.0;
+    for(int j = 0; j < 4; j++) {
+      if(j == i || ((aliveMask >> j) & 1) == 0)
+        continue;
+      double weight = (pSum < 1e-6) ? 1.0 / (double)numOthers : value[j] / pSum;
+      lead += weight * (dist[j] - dist[i]);
+    }
+    leadOut[i] = lead;
+  }
+}
+
+void Search::computeLeafUtilities(const double value[5], const double lead[4], uint8_t aliveMask, double utilityOut[4]) const {
+  // Duel's getScoreUtility: the static term centred at 0 with scale 2.0, the dynamic term centred at recentLeadCenter
+  const double sqrtBoardArea = std::sqrt((double)Q4Board::NUM_CELLS);
+  for(int s = 0; s < 4; s++) {
+    bool isAlive = (rootAliveMask & (1 << s)) != 0;
+    double utility = computeSeatUtility(s, value, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
+    if(((aliveMask >> s) & 1) != 0) {
+      // The net predicts the mean distance only, so the lead has no stdev here (Duel's scoreStdev is 0)
+      if(searchParams.staticScoreUtilityFactor != 0.0)
+        utility += searchParams.staticScoreUtilityFactor
+          * ScoreValue::expectedWhiteScoreValue(lead[s], 0.0, 0.0, 2.0, sqrtBoardArea);
+      if(searchParams.dynamicScoreUtilityFactor != 0.0)
+        utility += searchParams.dynamicScoreUtilityFactor
+          * ScoreValue::expectedWhiteScoreValue(lead[s], 0.0, recentLeadCenter[s], searchParams.dynamicScoreCenterScale, sqrtBoardArea);
+    }
+    utilityOut[s] = utility;
+  }
+}
+
+void Search::computeNNOutputLeafUtilities(const NNOutput& nnOutput, double utilityOut[4], double leadOut[4]) const {
+  double value[5];
+  double dist[4];
+  for(int k = 0; k < 5; k++)
+    value[k] = (double)nnOutput.valueAbs[k];
+  for(int s = 0; s < 4; s++)
+    dist[s] = (double)nnOutput.finalDistAbs[s];
+  computeSeatLeads(value, dist, nnOutput.aliveMask, leadOut);
+  computeLeafUtilities(value, leadOut, nnOutput.aliveMask, utilityOut);
+}
+
+double Search::utilityRangeRadius() const {
+  return searchParams.winLossUtilityFactor + searchParams.staticScoreUtilityFactor + searchParams.dynamicScoreUtilityFactor;
+}
+
+void Search::updateRecentLeadCenters() {
+  // As Duel's recentScoreCenter (cpp/search/search.cpp): the previous tree's root lead if it has visits, else the root NN
+  double expectedLead[4] = {0.0, 0.0, 0.0, 0.0};
+  bool foundExpectedLeadFromTree = false;
+  if(rootNode != NULL) {
+    int64_t numVisits = rootNode->stats.visits.load(std::memory_order_acquire);
+    double weightSum = rootNode->stats.weightSum.load(std::memory_order_acquire);
+    if(numVisits > 0 && weightSum > 0) {
+      foundExpectedLeadFromTree = true;
+      for(int s = 0; s < 4; s++)
+        expectedLead[s] = rootNode->stats.leadAvg[s].load(std::memory_order_acquire);
+    }
+  }
+  if(!foundExpectedLeadFromTree) {
+    const NNOutput* nnOutput = rootNode->getNNOutput();
+    assert(nnOutput != NULL);
+    double utilityUnused[4];
+    computeNNOutputLeafUtilities(*nnOutput, utilityUnused, expectedLead);
+  }
+
+  const double cap = std::sqrt((double)Q4Board::NUM_CELLS) * searchParams.dynamicScoreCenterScale;
+  for(int s = 0; s < 4; s++) {
+    double center = expectedLead[s] * (1.0 - searchParams.dynamicScoreCenterZeroWeight);
+    if(center > expectedLead[s] + cap)
+      center = expectedLead[s] + cap;
+    if(center < expectedLead[s] - cap)
+      center = expectedLead[s] - cap;
+    recentLeadCenter[s] = center;
+  }
 }
 
 void Search::setPosition(const Q4PlayState& state) {
@@ -500,6 +596,7 @@ void Search::beginSearch() {
     rootNode->initializeChildren();
     rootNode->state.store(SearchNode::STATE_EXPANDED0, std::memory_order_seq_cst);
   }
+  updateRecentLeadCenters();
 }
 
 void Search::computeRootValues() {}
@@ -531,8 +628,15 @@ bool Search::playoutDescend(SearchThread& thread, SearchNode& node, bool isRoot)
       else
         value[4] = 1.0;
     }
+    // The exact walls-only distances to the centre at the end; the winner's is 0 (docs/q4/Q4Lead.md)
+    const Q4Board& board = thread.state.board;
+    double dist[4] = {0.0, 0.0, 0.0, 0.0};
+    for(int s = 0; s < 4; s++) {
+      if(board.isAlive(s) && s != thread.state.winnerSeat)
+        dist[s] = (double)board.distToCenter[board.pawn[s]];
+    }
     double weight = (searchParams.useUncertainty && nnEvaluator->supportsShorttermError()) ? searchParams.uncertaintyMaxWeight : 1.0;
-    addLeafValue(node, value, weight, true, false);
+    addLeafValue(node, value, dist, board.alive, weight, true, false);
     return true;
   }
 

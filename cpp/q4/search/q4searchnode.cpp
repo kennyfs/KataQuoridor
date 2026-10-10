@@ -11,21 +11,25 @@ namespace Q4S {
 NNOutput::NNOutput()
   : noisedPolicyProbs(nullptr),
     stylePolicyProbs(nullptr),
+    aliveMask(0),
     shorttermWinlossError(0.0f),
     nnHash()
 {
   std::fill(policyProbs, policyProbs + Q4Board::NUM_ACTIONS, -1.0f);
   for(int i = 0; i < 5; i++) valueAbs[i] = 0.0f;
+  for(int i = 0; i < 4; i++) finalDistAbs[i] = 0.0f;
 }
 
 NNOutput::NNOutput(const NNOutput& other)
   : noisedPolicyProbs(nullptr),
     stylePolicyProbs(nullptr),
+    aliveMask(other.aliveMask),
     shorttermWinlossError(other.shorttermWinlossError),
     nnHash(other.nnHash)
 {
   std::copy(other.policyProbs, other.policyProbs + Q4Board::NUM_ACTIONS, policyProbs);
   std::copy(other.valueAbs, other.valueAbs + 5, valueAbs);
+  std::copy(other.finalDistAbs, other.finalDistAbs + 4, finalDistAbs);
   if(other.noisedPolicyProbs != nullptr) {
     noisedPolicyProbs = new float[Q4Board::NUM_ACTIONS];
     std::copy(other.noisedPolicyProbs, other.noisedPolicyProbs + Q4Board::NUM_ACTIONS, noisedPolicyProbs);
@@ -51,6 +55,7 @@ NodeStatsAtomic::NodeStatsAtomic()
   for(int i = 0; i < 5; i++) valueAvg[i].store(0.0, std::memory_order_relaxed);
   for(int i = 0; i < 4; i++) utilityAvg[i].store(0.0, std::memory_order_relaxed);
   for(int i = 0; i < 4; i++) utilitySqAvg[i].store(0.0, std::memory_order_relaxed);
+  for(int i = 0; i < 4; i++) leadAvg[i].store(0.0, std::memory_order_relaxed);
 }
 
 NodeStatsAtomic::NodeStatsAtomic(const NodeStatsAtomic& other)
@@ -61,6 +66,7 @@ NodeStatsAtomic::NodeStatsAtomic(const NodeStatsAtomic& other)
   for(int i = 0; i < 5; i++) valueAvg[i].store(other.valueAvg[i].load(std::memory_order_acquire), std::memory_order_relaxed);
   for(int i = 0; i < 4; i++) utilityAvg[i].store(other.utilityAvg[i].load(std::memory_order_acquire), std::memory_order_relaxed);
   for(int i = 0; i < 4; i++) utilitySqAvg[i].store(other.utilitySqAvg[i].load(std::memory_order_acquire), std::memory_order_relaxed);
+  for(int i = 0; i < 4; i++) leadAvg[i].store(other.leadAvg[i].load(std::memory_order_acquire), std::memory_order_relaxed);
 }
 
 NodeStatsAtomic::~NodeStatsAtomic() {}
@@ -73,6 +79,7 @@ NodeStats::NodeStats()
   for(int i = 0; i < 5; i++) valueAvg[i] = 0.0;
   for(int i = 0; i < 4; i++) utilityAvg[i] = 0.0;
   for(int i = 0; i < 4; i++) utilitySqAvg[i] = 0.0;
+  for(int i = 0; i < 4; i++) leadAvg[i] = 0.0;
 }
 
 NodeStats::NodeStats(const NodeStatsAtomic& other)
@@ -83,6 +90,7 @@ NodeStats::NodeStats(const NodeStatsAtomic& other)
   for(int i = 0; i < 5; i++) valueAvg[i] = other.valueAvg[i].load(std::memory_order_acquire);
   for(int i = 0; i < 4; i++) utilityAvg[i] = other.utilityAvg[i].load(std::memory_order_acquire);
   for(int i = 0; i < 4; i++) utilitySqAvg[i] = other.utilitySqAvg[i].load(std::memory_order_acquire);
+  for(int i = 0; i < 4; i++) leadAvg[i] = other.leadAvg[i].load(std::memory_order_acquire);
 }
 
 NodeStats::~NodeStats() {}

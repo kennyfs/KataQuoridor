@@ -8,6 +8,7 @@ namespace Q4S {
 struct ReportedSearchValues {
   double value[5];    // win probability for seats 0..3, and [4] = draw
   double utility[4];  // utility of seats 0..3
+  double lead[4];     // lead of seats 0..3 (docs/q4/Q4Lead.md)
   double weight;
   int64_t visits;
 

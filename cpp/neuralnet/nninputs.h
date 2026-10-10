@@ -247,6 +247,8 @@ namespace ScoreValue {
   //MUST BE CALLED AT PROGRAM START!
   void initTables();
   void freeTables();
+  //Whether initTables has been called and freeTables has not (Q4 searches init the tables when they are missing)
+  bool areTablesInitialized();
 
   //The number of wins a game result should count as
   double whiteWinsOfWinner(Player winner, double drawEquivalentWinsForWhite);

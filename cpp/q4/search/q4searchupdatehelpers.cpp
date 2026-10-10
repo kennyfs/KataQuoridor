@@ -13,18 +13,20 @@ namespace Q4S {
 void Search::addLeafValue(
   SearchNode& node,
   const double value[5],
+  const double dist[4],
+  uint8_t aliveMask,
   double weight,
   bool isTerminal,
   bool assumeNoExistingWeight
 ) {
   (void)isTerminal;
+  double lead[4];
+  computeSeatLeads(value, dist, aliveMask, lead);
   double utility[4];
   double utilitySq[4];
-  for(int s = 0; s < 4; s++) {
-    bool isAlive = (rootAliveMask & (1 << s)) != 0;
-    utility[s] = computeSeatUtility(s, value, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
+  computeLeafUtilities(value, lead, aliveMask, utility);
+  for(int s = 0; s < 4; s++)
     utilitySq[s] = utility[s] * utility[s];
-  }
 
   double weightSq = weight * weight;
 
@@ -35,6 +37,7 @@ void Search::addLeafValue(
     for(int s = 0; s < 4; s++) {
       node.stats.utilityAvg[s].store(utility[s], std::memory_order_release);
       node.stats.utilitySqAvg[s].store(utilitySq[s], std::memory_order_release);
+      node.stats.leadAvg[s].store(lead[s], std::memory_order_release);
     }
     node.stats.weightSqSum.store(weightSq, std::memory_order_release);
     node.stats.weightSum.store(weight, std::memory_order_release);
@@ -59,6 +62,8 @@ void Search::addLeafValue(
       double oldUSq = node.stats.utilitySqAvg[s].load(std::memory_order_relaxed);
       node.stats.utilityAvg[s].store((oldU * oldWeightSum + utility[s] * weight) / newWeightSum, std::memory_order_release);
       node.stats.utilitySqAvg[s].store((oldUSq * oldWeightSum + utilitySq[s] * weight) / newWeightSum, std::memory_order_release);
+      double oldLead = node.stats.leadAvg[s].load(std::memory_order_relaxed);
+      node.stats.leadAvg[s].store((oldLead * oldWeightSum + lead[s] * weight) / newWeightSum, std::memory_order_release);
     }
     node.stats.weightSqSum.store(node.stats.weightSqSum.load(std::memory_order_relaxed) + weightSq, std::memory_order_release);
     node.stats.weightSum.store(newWeightSum, std::memory_order_release);
@@ -82,8 +87,12 @@ void Search::addCurrentNNOutputAsLeafValue(SearchNode& node, bool assumeNoExisti
       value[k] /= valSum;
   }
 
+  double dist[4];
+  for(int s = 0; s < 4; s++)
+    dist[s] = (double)nnOutput->finalDistAbs[s];
+
   double weight = computeWeightFromNNOutput(nnOutput);
-  addLeafValue(node, value, weight, false, assumeNoExistingWeight);
+  addLeafValue(node, value, dist, nnOutput->aliveMask, weight, false, assumeNoExistingWeight);
 }
 
 double Search::computeWeightFromNNOutput(const NNOutput* nnOutput) const {
@@ -192,6 +201,7 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
   double valueSum[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
   double utilitySum[4] = {0.0, 0.0, 0.0, 0.0};
   double utilitySqSum[4] = {0.0, 0.0, 0.0, 0.0};
+  double leadSum[4] = {0.0, 0.0, 0.0, 0.0};
   double weightSqSum = 0.0;
   double weightSum = currentTotalChildWeight;
 
@@ -206,6 +216,7 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
     for(int s = 0; s < 4; s++) {
       utilitySum[s] += desiredWeight * stats.utilityAvg[s];
       utilitySqSum[s] += desiredWeight * stats.utilitySqAvg[s];
+      leadSum[s] += desiredWeight * stats.leadAvg[s];
     }
     weightSqSum += weightScaling * weightScaling * stats.weightSqSum;
   }
@@ -219,14 +230,18 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
     for(int k = 0; k < 5; k++)
       nnValue[k] = (double)nnOutput->valueAbs[k];
 
+    double nnUtility[4];
+    double nnLead[4];
+    computeNNOutputLeafUtilities(*nnOutput, nnUtility, nnLead);
+
     double weight = computeWeightFromNNOutput(nnOutput);
     for(int k = 0; k < 5; k++)
       valueSum[k] += weight * nnValue[k];
     for(int s = 0; s < 4; s++) {
-      bool isAlive = (rootAliveMask & (1 << s)) != 0;
-      double u = computeSeatUtility(s, nnValue, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
+      double u = nnUtility[s];
       utilitySum[s] += weight * u;
       utilitySqSum[s] += weight * u * u;
+      leadSum[s] += weight * nnLead[s];
     }
     weightSqSum += weight * weight;
     weightSum += weight;
@@ -238,9 +253,11 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
 
   double utilityAvg[4];
   double utilitySqAvg[4];
+  double leadAvg[4];
   for(int s = 0; s < 4; s++) {
     utilityAvg[s] = utilitySum[s] / weightSum;
     utilitySqAvg[s] = utilitySqSum[s] / weightSum;
+    leadAvg[s] = leadSum[s] / weightSum;
   }
 
   while(node.statsLock.test_and_set(std::memory_order_acquire));
@@ -249,6 +266,7 @@ void Search::recomputeNodeStats(SearchNode& node, SearchThread& thread, int32_t 
   for(int s = 0; s < 4; s++) {
     node.stats.utilityAvg[s].store(utilityAvg[s], std::memory_order_release);
     node.stats.utilitySqAvg[s].store(utilitySqAvg[s], std::memory_order_release);
+    node.stats.leadAvg[s].store(leadAvg[s], std::memory_order_release);
   }
   node.stats.weightSqSum.store(weightSqSum, std::memory_order_release);
   node.stats.weightSum.store(weightSum, std::memory_order_release);

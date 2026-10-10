@@ -68,6 +68,10 @@ bool Search::initNodeNNOutput(
 
   for(int i = 0; i < 5; i++)
     out->valueAbs[i] = eval.valueAbsMasked[i];
+  // misc 1..4 are the walls-only distances to the centre at the end of the game of the relative seats, in units of 32 cells
+  for(int k = 0; k < 4; k++)
+    out->finalDistAbs[(thread.state.board.toMove + k) % 4] = (float)(32.0 * eval.misc[1 + k]);
+  out->aliveMask = thread.state.board.alive;
 
   out->shorttermWinlossError = eval.shorttermWinlossError;
   out->nnHash = Q4NN::getCacheHash(thread.state, nnEvaluator->requiresSGFMetadata() ? style : nullptr);

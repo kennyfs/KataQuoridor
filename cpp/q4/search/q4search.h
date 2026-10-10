@@ -93,6 +93,9 @@ struct Search {
   uint8_t ownSeatMask = 0;
 
   SearchParams searchParams;
+  // Duel's recentScoreCenter, per absolute seat: the centre of the dynamic lead term (docs/q4/Q4Lead.md), set at the
+  // start of each search from the root lead of the previous tree or of the root evaluation.
+  double recentLeadCenter[4];
   int64_t numSearchesBegun;
   uint32_t searchNodeAge;
   int64_t lastSearchNumPlayouts;
@@ -203,6 +206,18 @@ struct Search {
     bool isAlive,
     double winLossUtilityFactor
   );
+  // The lead of each alive seat from one evaluation (docs/q4/Q4Lead.md): value = win probabilities (absolute seats,
+  // [4] = draw), dist = predicted walls-only distances to the centre in cells (absolute seats). leadOut of a dead seat is 0.
+  static void computeSeatLeads(const double value[5], const double dist[4], uint8_t aliveMask, double leadOut[4]);
+  // The utility of each seat at one evaluation: the win/loss part plus the static and dynamic score terms (Duel's
+  // getScoreUtility, with the lead for the score). A dead seat (not in aliveMask) gets no score term.
+  void computeLeafUtilities(const double value[5], const double lead[4], uint8_t aliveMask, double utilityOut[4]) const;
+  // computeLeafUtilities and computeSeatLeads for a stored NN output (its value, distances and alive seats).
+  void computeNNOutputLeafUtilities(const NNOutput& nnOutput, double utilityOut[4], double leadOut[4]) const;
+  // The largest magnitude a seat's utility can have: the sum of the three factors (Duel's utilityRangeRadius).
+  double utilityRangeRadius() const;
+  // Sets recentLeadCenter from the previous tree's root or else the root NN evaluation (Duel's recentScoreCenter).
+  void updateRecentLeadCenters();
 
   // Selection constants
   static constexpr double POLICY_ILLEGAL_SELECTION_VALUE = -1e50;
@@ -267,6 +282,8 @@ struct Search {
   void addLeafValue(
     SearchNode& node,
     const double value[5],
+    const double dist[4],
+    uint8_t aliveMask,
     double weight,
     bool isTerminal,
     bool assumeNoExistingWeight

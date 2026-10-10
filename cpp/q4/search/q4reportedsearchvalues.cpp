@@ -5,6 +5,7 @@ namespace Q4S {
 ReportedSearchValues::ReportedSearchValues() {
   for(int i = 0; i < 5; i++) value[i] = 0.0;
   for(int i = 0; i < 4; i++) utility[i] = 0.0;
+  for(int i = 0; i < 4; i++) lead[i] = 0.0;
   weight = 0.0;
   visits = 0;
 }
@@ -17,6 +18,7 @@ ReportedSearchValues::ReportedSearchValues(
 ) {
   for(int i = 0; i < 5; i++) value[i] = valueAvg[i];
   for(int i = 0; i < 4; i++) utility[i] = utilityAvg[i];
+  for(int i = 0; i < 4; i++) lead[i] = 0.0;
   weight = totalWeight;
   visits = totalVisits;
 }

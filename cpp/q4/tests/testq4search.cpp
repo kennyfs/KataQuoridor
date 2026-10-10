@@ -893,7 +893,7 @@ void testT27ConfigGuard() {
   cout << "Running T27 Config guard tests..." << endl;
 
   vector<string> forbiddenParamNames = {
-    "staticScoreUtilityFactor", "dynamicScoreUtilityFactor", "policyOptimism",
+    "policyOptimism",
     "rootPolicyOptimism", "useGraphSearch", "useEvalCache", "subtreeValueBiasFactor",
     "avoidRepeatedPatternUtility", "antiMirror", "playoutDoublingAdvantage",
     "visitCapContempt", "rootSymmetryPruning", "conservativePass",
@@ -903,9 +903,7 @@ void testT27ConfigGuard() {
 
   for(const string& paramName : forbiddenParamNames) {
     SearchParams params = createTestSearchParams(10, 1);
-    if(paramName == "staticScoreUtilityFactor") params.staticScoreUtilityFactor = 0.1;
-    else if(paramName == "dynamicScoreUtilityFactor") params.dynamicScoreUtilityFactor = 0.1;
-    else if(paramName == "policyOptimism") params.policyOptimism = 1.0;
+    if(paramName == "policyOptimism") params.policyOptimism = 1.0;
     else if(paramName == "rootPolicyOptimism") params.rootPolicyOptimism = 1.0;
     else if(paramName == "useGraphSearch") params.useGraphSearch = true;
     else if(paramName == "useEvalCache") params.useEvalCache = true;
@@ -936,7 +934,134 @@ void testT27ConfigGuard() {
     testAssert(caught);
   }
 
+  // The score factors are allowed (docs/q4/Q4Lead.md)
+  SearchParams scoreParams = createTestSearchParams(10, 1);
+  scoreParams.staticScoreUtilityFactor = 0.1;
+  scoreParams.dynamicScoreUtilityFactor = 0.3;
+  Q4S::Search::checkParams(scoreParams);
+
   cout << "T27 Config guard passed!" << endl;
+}
+
+// L1: the lead of each seat (docs/q4/Q4Lead.md) on hand-made evaluations: weights p_j / sum p_k over the other alive seats,
+// uniform when that sum is below 1e-6, dead seats have no lead and are no opponents, the terminal distances.
+void testL1LeadFormula() {
+  cout << "Running L1 lead formula tests..." << endl;
+  const double eps = 1e-9;
+  double lead[4];
+
+  // Win probabilities 0.5 0.3 0.1 0.1, distances 0 4 2 6, all alive
+  double value[5] = {0.5, 0.3, 0.1, 0.1, 0.0};
+  double dist[4] = {0.0, 4.0, 2.0, 6.0};
+  Q4S::Search::computeSeatLeads(value, dist, 0x0f, lead);
+  testAssert(fabs(lead[0] - 4.0) < eps);                  // (0.3*4 + 0.1*2 + 0.1*6) / 0.5
+  testAssert(fabs(lead[1] + 20.0 / 7.0) < eps);           // (5*(0-4) + 1*(2-4) + 1*(6-4)) / 7
+  testAssert(fabs(lead[2]) < eps);                        // (0.5*(-2) + 0.3*2 + 0.1*4) / 0.9
+  testAssert(fabs(lead[3] + 40.0 / 9.0) < eps);           // (0.5*(-6) + 0.3*(-2) + 0.1*(-4)) / 0.9
+
+  // A draw: all p_j are on the draw slot, so the weights are uniform over the other three seats
+  double drawValue[5] = {0.0, 0.0, 0.0, 0.0, 1.0};
+  Q4S::Search::computeSeatLeads(drawValue, dist, 0x0f, lead);
+  testAssert(fabs(lead[0] - 4.0) < eps);                  // (4 + 2 + 6) / 3
+  testAssert(fabs(lead[1] + 4.0 / 3.0) < eps);            // ((0-4) + (2-4) + (6-4)) / 3
+
+  // Seat 3 eliminated: its distance (9) is not used by the others, and it has no lead
+  double elimValue[5] = {0.6, 0.2, 0.2, 0.0, 0.0};
+  double elimDist[4] = {0.0, 4.0, 2.0, 9.0};
+  Q4S::Search::computeSeatLeads(elimValue, elimDist, 0x07, lead);
+  testAssert(fabs(lead[0] - 3.0) < eps);                  // (0.2*4 + 0.2*2) / 0.4
+  testAssert(fabs(lead[1] + 3.5) < eps);                  // (0.6*(-4) + 0.2*(-2)) / 0.8
+  testAssert(fabs(lead[2] + 1.0) < eps);                  // (0.6*(-2) + 0.2*2) / 0.8
+  testAssert(lead[3] == 0.0);
+
+  // Terminal: seat 1 wins (its distance is 0), the others' distances at the end; the winner's lead is the mean of the others'
+  double termValue[5] = {0.0, 1.0, 0.0, 0.0, 0.0};
+  double termDist[4] = {5.0, 0.0, 3.0, 7.0};
+  Q4S::Search::computeSeatLeads(termValue, termDist, 0x0f, lead);
+  testAssert(fabs(lead[0] + 5.0) < eps);                  // the winner alone counts: 0 - 5
+  testAssert(fabs(lead[1] - 5.0) < eps);                  // no p on the others: (5 + 3 + 7) / 3
+  testAssert(fabs(lead[2] + 3.0) < eps);
+  testAssert(fabs(lead[3] + 7.0) < eps);
+
+  // One alive seat: nobody to be ahead of
+  Q4S::Search::computeSeatLeads(termValue, termDist, 0x02, lead);
+  for(int s = 0; s < 4; s++)
+    testAssert(lead[s] == 0.0);
+
+  cout << "L1 lead formula tests passed" << endl;
+}
+
+// L2: the utility with the score terms, the dynamic centres and the range of the utility (docs/q4/Q4Lead.md), on the NN.
+void testL2LeadUtilityAndCentres(NNEvaluator* nnEval, Logger& logger) {
+  cout << "Running L2 lead utility and centre tests..." << endl;
+  SearchParams params = createTestSearchParams(64, 1);
+  double util[4];
+
+  // Both factors 0: the utility is the win/loss part, bit for bit
+  {
+    Q4S::Search search(params, nnEval, &logger, "l2a");
+    double value[5] = {0.4, 0.3, 0.2, 0.05, 0.05};
+    double lead[4] = {2.0, -1.0, 0.5, -3.0};
+    search.computeLeafUtilities(value, lead, 0x0f, util);
+    for(int s = 0; s < 4; s++)
+      testAssert(util[s] == Q4S::Search::computeSeatUtility(s, value, 4, true, 1.0));
+  }
+
+  // Dynamic term on, centres at 0: equal win probabilities, so the utility order is the lead order
+  {
+    SearchParams p = params;
+    p.dynamicScoreUtilityFactor = 0.3;
+    p.dynamicScoreCenterScale = 0.5;
+    Q4S::Search search(p, nnEval, &logger, "l2b");
+    testAssert(fabs(search.utilityRangeRadius() - 1.3) < 1e-12);
+    double value[5] = {0.25, 0.25, 0.25, 0.25, 0.0};
+    double lead[4] = {2.0, -1.0, 0.5, -3.0};
+    search.computeLeafUtilities(value, lead, 0x0f, util);
+    testAssert(util[0] > util[2] && util[2] > util[1] && util[1] > util[3]);
+    for(int s = 0; s < 4; s++) {
+      testAssert(fabs(util[s]) <= search.utilityRangeRadius());
+      // The win/loss part is -0.5 for each seat, so the score part is util + 0.5 and bounded by the factor
+      testAssert(fabs(util[s] + 0.5) < 0.3 + 1e-12);
+    }
+    // A dead seat (not in aliveMask) gets no score term
+    search.computeLeafUtilities(value, lead, 0x07, util);
+    testAssert(util[3] == Q4S::Search::computeSeatUtility(3, value, 4, true, 1.0));
+  }
+
+  // The root NN: the dynamic centres are (1 - zeroWeight) * lead, clamped to the cap around the lead (Duel's rule)
+  {
+    SearchParams p = params;
+    p.dynamicScoreUtilityFactor = 0.3;
+    p.dynamicScoreCenterScale = 0.5;
+    p.dynamicScoreCenterZeroWeight = 0.25;
+    Q4Rules rules;
+    Q4PlayState state(rules);
+    Q4S::Search search(p, nnEval, &logger, "l2c");
+    search.setPosition(state);
+    search.beginSearch();
+    const Q4S::NNOutput* nnOutput = search.rootNode->getNNOutput();
+    testAssert(nnOutput != nullptr);
+    double rootUtil[4];
+    double rootLead[4];
+    search.computeNNOutputLeafUtilities(*nnOutput, rootUtil, rootLead);
+    const double cap = sqrt((double)Q4Board::NUM_CELLS) * p.dynamicScoreCenterScale;
+    for(int s = 0; s < 4; s++) {
+      double expected = rootLead[s] * (1.0 - p.dynamicScoreCenterZeroWeight);
+      expected = std::min(std::max(expected, rootLead[s] - cap), rootLead[s] + cap);
+      testAssert(fabs(search.recentLeadCenter[s] - expected) < 1e-9);
+    }
+
+    // A search with the score terms on produces finite leads and values
+    search.runWholeSearch();
+    Q4S::ReportedSearchValues values;
+    testAssert(search.getRootValues(values));
+    for(int s = 0; s < 4; s++) {
+      testAssert(std::isfinite(values.lead[s]));
+      testAssert(fabs(values.lead[s]) < 100.0);
+    }
+  }
+
+  cout << "L2 lead utility and centre tests passed" << endl;
 }
 
 
@@ -1470,6 +1595,8 @@ void Tests::runQ4SearchTests() {
   testO2SelectionRules(nnEval, logger);
   testO3ExpectSharesFollowStylePrior(nnEval, logger);
   testO4MaxnUnchanged(nnEval, logger);
+  testL1LeadFormula();
+  testL2LeadUtilityAndCentres(nnEval, logger);
 
   delete nnEval;
   cout << "All Q4 Search tests PASSED!" << endl;

@@ -235,8 +235,8 @@ double Search::interpolateEarly(double halflife, double earlyValue, double value
 
 void Search::getSelfUtilityLCBAndRadiusZeroVisits(double& lcbBuf, double& radiusBuf) const {
   // Max radius of the entire utility range
-  double utilityRangeRadius = searchParams.winLossUtilityFactor;
-  radiusBuf = 2.0 * utilityRangeRadius * searchParams.lcbStdevs;
+  double rangeRadius = utilityRangeRadius();
+  radiusBuf = 2.0 * rangeRadius * searchParams.lcbStdevs;
   lcbBuf = -radiusBuf;
 }
 
@@ -253,8 +253,8 @@ void Search::getSelfUtilityLCBAndRadius(
   double weightSqSum = child->stats.getChildWeightSq(edgeVisits, childVisits);
 
   // Max radius of the entire utility range
-  double utilityRangeRadius = searchParams.winLossUtilityFactor;
-  radiusBuf = 2.0 * utilityRangeRadius * searchParams.lcbStdevs;
+  double rangeRadius = utilityRangeRadius();
+  radiusBuf = 2.0 * rangeRadius * searchParams.lcbStdevs;
   lcbBuf = -radiusBuf;
   if(childVisits <= 0 || weightSum <= 0.0 || weightSqSum <= 0.0)
     return;
@@ -264,7 +264,7 @@ void Search::getSelfUtilityLCBAndRadius(
 
   double priorWeight = weightSum / (ess * ess * ess);
   utilitySqAvg = std::max(utilitySqAvg, utilityAvg * utilityAvg + 1e-8);
-  utilitySqAvg = (utilitySqAvg * weightSum + (utilitySqAvg + utilityRangeRadius * utilityRangeRadius) * priorWeight) / (weightSum + priorWeight);
+  utilitySqAvg = (utilitySqAvg * weightSum + (utilitySqAvg + rangeRadius * rangeRadius) * priorWeight) / (weightSum + priorWeight);
   weightSum += priorWeight;
   weightSqSum += priorWeight * priorWeight;
 

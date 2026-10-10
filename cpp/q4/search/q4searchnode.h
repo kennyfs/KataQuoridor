@@ -26,6 +26,8 @@ struct NNOutput {
   float* noisedPolicyProbs;
   float* stylePolicyProbs;                 // variant 1 (style policy), illegal -1.0f; only if the opponent mode needs it
   float valueAbs[5];                       // absolute seats 0..3 and draw 4 (masked)
+  float finalDistAbs[4];                   // predicted walls-only distance to the centre at the end, cells, absolute seats
+  uint8_t aliveMask;                       // seats alive at this position (bit s = seat s); the score terms need it
   float shorttermWinlossError;
   Hash128 nnHash;
 
@@ -44,6 +46,7 @@ struct NodeStatsAtomic {
   std::atomic<double> valueAvg[5];      // probability seat 0..3 wins, [4] = draw
   std::atomic<double> utilityAvg[4];    // utility of seats 0..3
   std::atomic<double> utilitySqAvg[4];  // utility squared of seats 0..3
+  std::atomic<double> leadAvg[4];       // lead of seats 0..3 (docs/q4/Q4Lead.md), the mean over the same weights
   std::atomic<double> weightSum;
   std::atomic<double> weightSqSum;
 
@@ -66,6 +69,7 @@ struct NodeStats {
   double valueAvg[5];
   double utilityAvg[4];
   double utilitySqAvg[4];
+  double leadAvg[4];
   double weightSum;
   double weightSqSum;
 

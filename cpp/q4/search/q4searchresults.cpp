@@ -29,6 +29,8 @@ bool Search::getRootValues(ReportedSearchValues& values) const {
     values.value[k] = rootNode->stats.valueAvg[k].load(std::memory_order_acquire);
   for(int s = 0; s < 4; s++)
     values.utility[s] = rootNode->stats.utilityAvg[s].load(std::memory_order_acquire);
+  for(int s = 0; s < 4; s++)
+    values.lead[s] = rootNode->stats.leadAvg[s].load(std::memory_order_acquire);
   values.weight = weightSum;
   values.visits = visits;
   return true;

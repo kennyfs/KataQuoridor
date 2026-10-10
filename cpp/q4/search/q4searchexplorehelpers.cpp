@@ -115,8 +115,7 @@ double Search::getExploreSelectionValueOfChild(
   // Virtual losses to direct threads down different paths
   if(childVirtualLosses > 0) {
     double virtualLossWeight = childVirtualLosses * searchParams.numVirtualLossesPerThread;
-    double utilityRadius = searchParams.winLossUtilityFactor;
-    double virtualLossUtility = -utilityRadius;
+    double virtualLossUtility = -utilityRangeRadius();
     double virtualLossWeightFrac = (double)virtualLossWeight / (virtualLossWeight + std::max(0.25, childWeight));
     childUtility = childUtility + (virtualLossUtility - childUtility) * virtualLossWeightFrac;
     childWeight += virtualLossWeight;
@@ -252,10 +251,10 @@ double Search::getFpuValueForChildrenAssumeVisited(
   double parentUtilityForFPU = parentUtility;
   const NNOutput* nnOutput = node.getNNOutput();
   if(nnOutput != nullptr) {
-    double val[5];
-    for(int i = 0; i < 5; i++) val[i] = nnOutput->valueAbs[i];
-    bool isAlive = (rootAliveMask & (1 << mover)) != 0;
-    double nnUtility = computeSeatUtility(mover, val, rootNumAlive, isAlive, searchParams.winLossUtilityFactor);
+    double nnUtilities[4];
+    double nnLeads[4];
+    computeNNOutputLeafUtilities(*nnOutput, nnUtilities, nnLeads);
+    double nnUtility = nnUtilities[mover];
 
     if(searchParams.fpuParentWeightByVisitedPolicy) {
       double avgWeight = std::min(1.0, pow(policyProbMassVisited, searchParams.fpuParentWeightByVisitedPolicyPow));
@@ -268,11 +267,11 @@ double Search::getFpuValueForChildrenAssumeVisited(
 
   double fpuReductionMax = isRoot ? searchParams.rootFpuReductionMax : searchParams.fpuReductionMax;
   double fpuLossProp = isRoot ? searchParams.rootFpuLossProp : searchParams.fpuLossProp;
-  double utilityRadius = searchParams.winLossUtilityFactor;
+  double utilityRadius = utilityRangeRadius();
 
   double reduction = fpuReductionMax * sqrt(policyProbMassVisited);
   double fpuValue = parentUtilityForFPU - reduction;
-  double lossValue = -utilityRadius;
+  double lossValue = -searchParams.winLossUtilityFactor;
   fpuValue = fpuValue + (lossValue - fpuValue) * fpuLossProp;
   if(fpuValue < -utilityRadius)
     fpuValue = -utilityRadius;

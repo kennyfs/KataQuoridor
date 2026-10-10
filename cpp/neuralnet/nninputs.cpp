@@ -97,6 +97,10 @@ static const int svTableMeanRadius = svTableAssumedBSize*svTableAssumedBSize + N
 static const int svTableMeanLen = svTableMeanRadius*2;
 static const int svTableStdevLen = svTableAssumedBSize*svTableAssumedBSize + NNPos::EXTRA_SCORE_DISTR_RADIUS;
 
+bool ScoreValue::areTablesInitialized() {
+  return scoreValueTablesInitialized;
+}
+
 void ScoreValue::freeTables() {
   if(scoreValueTablesInitialized) {
     delete[] expectedSVTable;
