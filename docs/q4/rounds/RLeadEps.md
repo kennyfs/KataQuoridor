@@ -45,11 +45,54 @@ Note: the first q4search run failed in T19 (`bad_alloc`, then an assert in `dele
 parent commit passes; a clean rebuild of the branch passes. The cause was stale objects in the build directory, not the
 change. The L1 tests now run before the evaluator is built (they need no net).
 
-## 4. Pending (GPU)
+## 4. Noise on the run1 net (GPU, `q4tool evalnn` on the CUDA build)
 
-- Noise table: 100 self-play positions with the mover at p > 0.97 and 100 hopeless, from
-  `~/q4/run1/selfplay/q4f-s8162304-d1651071/sgfs/*.sgfs`, with the newest run1 net `q4f-s9026048-d1785547` (by mtime,
-  read-only). Std of `lead_i` over the 8 symmetries (`q4tool evalnn`, `sym` 0–7) for eps 0 vs 0.02 (and 0.05).
-- Effect check, table 1 of [RLead.md](RLead.md) only: eps 0.02 vs eps 0 at `dyn = 0.3`, 100 openings, Wilson intervals.
+Net: the newest run1 model `q4f-s9026048-d1785547` (by mtime). Positions: 100 with the mover's own p > 0.97 and 100 with
+p < 0.02, sampled (seed 20261010) from the self-play record `q4f-s8162304-d1651071/sgfs/72264716F37540A6.sgfs`, only
+search moves before any elimination. Each position in 8 symmetries (the net is not symmetric, so these are the
+"small perturbations"; `nnRandomize` was not used). `lead_i` of the mover, population of 8 values per position, sample
+std (ddof 1), averaged over the 100 positions of each class.
 
-Both wait for the GPU. Run them when it is free.
+| Class | eps | mean std | median std | mean lead_i |
+|---|---|---|---|---|
+| winner (p > 0.97) | 0 | 0.359 | 0.314 | 8.49 |
+| winner | 0.02 | 0.357 | 0.305 | 11.65 |
+| winner | 0.05 | 0.330 | 0.301 | 11.88 |
+| winner | 0.10 | 0.316 | 0.287 | 11.99 |
+| hopeless (p < 0.02) | 0 | 0.358 | 0.335 | -12.23 |
+| hopeless | 0.02 | 0.353 | 0.327 | -11.92 |
+| hopeless | 0.05 | 0.346 | 0.321 | -11.51 |
+| hopeless | 0.10 | 0.337 | 0.321 | -10.96 |
+
+**The prediction did not hold.** The winner's lead noise does not drop with eps 0.02 (0.359 → 0.357). Diagnosis: the
+old weights are unstable only when the other seats' p sum is tiny. For the winners the median sum of the others' p is
+4.3e-3 (min 5e-4), and only 14 % of the positions have it below 1e-3. In the rest the old weights are already smooth
+across symmetries, and the spread of `lead_i` comes from the distance outputs (misc), which eps does not touch. The
+hopeless seat's noise is unchanged, as expected. The mean lead of the winner moves from 8.5 to 11.6 cells with eps:
+the eps 0 mean is pulled by the discontinuous cases, so the eps 0.02 values are the more faithful average.
+
+So the continuity fix is correct in the formula (§3) but does not reduce noise on this sample. Its benefit, if any, is
+at the fallback and the terminal node, which this table does not measure.
+
+## 5. Effect check (GPU), table 1 of RLead
+
+Table `t1` = on02, on00, on02, on00 (`q4match` 4-seat table, 100 openings × 2 rotations = 200 games, 100 visits,
+`nnRandomize = true`, the newest run1 net). Both players: `dyn = 0.3`, `static = 0`; they differ only in
+`q4LeadWeightEps`: on02 = 0.02, on00 = 0. (The per-player key `eps=` is new in q4match, §7 of Q4Lead.md.)
+
+| Player | Wins / 200 | Win rate | Wilson 95 % |
+|---|---|---|---|
+| eps 0.02 | 95 | 47.5 % | [40.7, 54.4] |
+| eps 0 | 105 | 52.5 % | [45.6, 59.3] |
+
+Difference −5 points, z = −0.71, two-sided p ≈ 0.48: no measured loss between equals. Seat wins 39 / 61 / 42 / 58; mean
+plies 126.7; no draws. The sample is one table of 200 games, so intervals are about ±7 points: a loss of 5 points
+cannot be ruled out (the upper end of the eps-0.02 interval is 54 %, the lower end 41 %, so a loss up to about 7 points
+or a gain of about 7 points are both within the noise). This is the table the prompt asked for; no more tables were run.
+
+## 6. Conclusion
+
+- The continuity change is implemented and unit-tested; eps 0.02 costs no measurable win rate at this sample size.
+- The noise reduction that motivated it is **not** visible on the run1 self-play positions (§4). Do not claim it.
+- Keep the default at 0.02 (it is the continuous version of the same weights, and it is what the tests check), or set
+  0 to restore the old behaviour exactly. Any decision on the default is the user's.

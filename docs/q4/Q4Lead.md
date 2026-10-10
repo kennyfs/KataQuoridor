@@ -110,8 +110,8 @@ Python and the viewer: no `lead` key). See [Q4Sgf.md](Q4Sgf.md) §4.
 
 ## 7. Q4 match players
 
-`search:<model>@visits[:mode],dyn=0.3,static=0` overrides the two factors for one player (`dyn`, `static`), so one
-table can hold players with and without the lead term.
+`search:<model>@visits[:mode],dyn=0.3,static=0,eps=0.02` overrides the two factors for one player (`dyn`, `static`) and
+`q4LeadWeightEps` (`eps`, §2), so one table can hold players with and without the lead term, or two smoothings.
 
 ## 8. Tests
 

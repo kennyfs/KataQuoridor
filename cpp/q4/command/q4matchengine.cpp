@@ -43,8 +43,14 @@ PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec) {
           ps.hasDynamicOverride = true;
           ps.dynamicScoreUtilityFactor = value;
         }
+        else if(key == "eps") {
+          if(value < 0.0 || value > 1.0)
+            throw StringError("Bad Q4 match player '" + name + "': eps must be in [0, 1]");
+          ps.hasEpsOverride = true;
+          ps.leadWeightEps = value;
+        }
         else
-          throw StringError("Bad Q4 match player '" + name + "': unknown key " + key + " (static, dyn)");
+          throw StringError("Bad Q4 match player '" + name + "': unknown key " + key + " (static, dyn, eps)");
       }
       size_t colon = visitsAndMode.find(':');
       if(colon != std::string::npos) {
@@ -288,7 +294,7 @@ GameResult playGame(
       players[s].search->setOpponentModel(
         ps.opponentMode.empty() ? defaultOpponentMode : Q4S::parseOpponentMode(ps.opponentMode), (uint8_t)(1 << s)
       );
-      players[s].search->setLeadWeightEps(leadWeightEps);
+      players[s].search->setLeadWeightEps(ps.hasEpsOverride ? ps.leadWeightEps : leadWeightEps);
       players[s].search->setPosition(history);
     }
     else {

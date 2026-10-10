@@ -36,6 +36,9 @@ struct PlayerSpec {
   double staticScoreUtilityFactor = 0.0;
   bool hasDynamicOverride = false;
   double dynamicScoreUtilityFactor = 0.0;
+  // q4LeadWeightEps for this player only (Q4Lead.md §2): the effect check puts eps 0.02 and 0 at one table.
+  bool hasEpsOverride = false;
+  double leadWeightEps = 0.0;
 };
 
 PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec);
