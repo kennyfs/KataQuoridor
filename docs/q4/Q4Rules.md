@@ -77,16 +77,28 @@ Let $C_0$ be the current position of the active pawn.
     4. $C_2$ is unoccupied.
 
 ### 4.3 Diagonal Jump
-- A diagonal jump around the adjacent pawn at $C_1$ is considered **only when** the straight jump to $C_2$ is blocked specifically by:
-  - The **board edge** (i.e. $C_2$ is off-board); OR
-  - A **wall** blocking $C_1 \leftrightarrow C_2$.
-- **Crucial Rule on Pawn Obstruction:** If $C_2$ is on the board and no wall blocks $C_1 \leftrightarrow C_2$, but $C_2$ is **occupied by a pawn**, diagonal jumps are **NOT permitted**. (In that situation, only a two-pawn jump may apply if eligible).
-- When eligible (straight jump blocked by edge or wall), the player may branch to either perpendicular cell adjacent to $C_1$ ($C_{diag}$):
-  - $C_{diag}$ is legal if and only if:
-    1. No wall blocks $C_0 \leftrightarrow C_1$;
-    2. $C_{diag}$ is on the board;
-    3. No wall blocks $C_1 \leftrightarrow C_{diag}$;
-    4. $C_{diag}$ is unoccupied.
+Let $d$ be a direction, $C_1 = C_0 + d$ an adjacent cell with no wall between $C_0$ and $C_1$, occupied by an alive pawn, and $C_2 = C_1 + d$. What may be done around $C_1$ depends on $C_2$:
+
+| situation | moves |
+|---|---|
+| $C_2$ off the board, or a wall between $C_1$ and $C_2$ | the diagonal steps around $C_1$ |
+| $C_2$ on the board, no wall between $C_1$ and $C_2$, **empty** | the straight jump to $C_2$ (no diagonal steps) |
+| $C_2$ on the board, no wall between $C_1$ and $C_2$, **occupied by an alive pawn** | the diagonal steps around $C_1$, **and** the two-pawn jump to $C_3$ of 4.4 remains a candidate |
+
+A diagonal step around $C_1$ goes to a perpendicular neighbour $C_{diag}$ of $C_1$ and is legal if and only if $C_{diag}$ is on the board, no wall blocks $C_1 \leftrightarrow C_{diag}$, and $C_{diag}$ is unoccupied (a pawn on $C_{diag}$ forbids it). Diagonal steps around $C_2$ are never legal. An eliminated pawn neither blocks nor is jumped (Section 6): it counts as an empty cell.
+
+The diagonal steps around $C_1$ with an occupied $C_2$ are the rule of 2026-10-10 (Section 4.6); the first two rows are unchanged.
+
+Example (new case): the mover `X` on `c3` goes north; pawns `O` on `c4` ($C_1$) and `c5` ($C_2$), no walls. `*` marks the diagonal steps (the two-pawn jump to `c6` is a candidate and not legal here, see 4.4):
+
+```
+     a b c d e
+  6  . . . . .
+  5  . . O . .
+  4  . * O * .
+  3  . . X . .
+```
+`b4` and `d4` are legal; under the old rule neither was.
 
 ### 4.4 Four-Player Two-Pawn Jump
 If two pawns consecutively occupy cells $C_1$ and $C_2$ in the same orthogonal direction directly in front of $C_0$:
@@ -97,16 +109,30 @@ If two pawns consecutively occupy cells $C_1$ and $C_2$ in the same orthogonal d
   >    - $C_3$ is on the board;
   >    - No wall blocks $C_0 \leftrightarrow C_1$, $C_1 \leftrightarrow C_2$, and $C_2 \leftrightarrow C_3$;
   >    - $C_3$ is unoccupied.
-  > 2. **Distance Condition:** **Every** ordinary legal pawn move (normal steps, straight single jumps, diagonal jumps) strictly increases the player's shortest-path distance to the goal, OR there are no ordinary legal pawn moves available at all.
+  > 2. **Distance Condition:** **Every** ordinary legal pawn move (normal steps, straight single jumps, diagonal steps, **including the diagonal steps around $C_1$ of 4.3**) strictly increases the player's shortest-path distance to the goal, OR there are no ordinary legal pawn moves available at all.
   >
   > Formally: For all ordinary legal pawn moves with destination $D$:
   > $$\text{distToCenter}(D) > \text{distToCenter}(C_0)$$
   > where $\text{distToCenter}(c)$ is the shortest-path distance on the cell graph considering only walls and board edges (pawns are ignored for distance calculation).
 - Diagonal branching off the second pawn ($C_2$) is never permitted.
-- A two-pawn jump landing on the center `f6` is legal (if the restriction is satisfied) and immediately wins the game.
+- A two-pawn jump landing on the center `f6` is legal (if the restriction is satisfied) and immediately wins the game. A diagonal step onto `f6` (as $C_{diag}$) wins as well.
+
+Example (two-pawn jump blocked by a diagonal step): the mover `X` on `c3` (distance to `f6` is 6), a wall `|` between `c3` and `d3`, pawns `O` on `c4` and `c5`, `c6` empty:
+
+```
+     a b c d e
+  6  . . . . .      c6: the two-pawn jump, NOT legal
+  5  . . O . .
+  4  . * O * .      b4 (distance 6) and d4 (distance 4) are ordinary moves
+  3  . . X | .
+```
+The other ordinary moves (`b3`, `c2`) increase the distance (7), but `b4` has distance 6, not larger than 6 (and `d4` is closer), so the jump to `c6` is **not** legal. Under the old rule (4.6) there were no diagonal steps and the jump was legal. It becomes legal again when walls close both diagonal steps (between `c4` and `b4`, and between `c4` and `d4`).
 
 ### 4.5 Move Deduplication
-- Multiple jump routes might theoretically reach the same destination cell. Any destination cell is listed at most once in the legal action set.
+- Multiple jump routes might theoretically reach the same destination cell (for instance a diagonal step around one pawn and a step around another). Any destination cell is listed at most once in the legal action set.
+
+### 4.6 Rule history
+- 2026-10-10: diagonal steps around $C_1$ are legal when $C_2$ holds an alive pawn (table in 4.3); the distance condition of 4.4 counts them. Before this date a pawn on $C_2$ forbade the diagonal steps and the two-pawn jump was the only move over such a line. Self-play data and nets produced before the change were played under the old rule. New SGF records carry `jump=diag` in the root `C` property (`Q4Sgf.md`); the readers replay a file without that key with the old generator (reader-only, not a game option).
 
 ---
 

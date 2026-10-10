@@ -75,7 +75,7 @@ The relative value probabilities `[v0, v1, v2, v3, vdraw]` (softmax of the 5 log
 | 19, 20 | bin | placed vertical / horizontal walls (anchor grid) | anchor map; channels swap when S exchanges the axes |
 | 21 | bin | anchor domain (ones on `[0..9] × [0..9]`) | invariant |
 | 22, 23 | bin | geometrically legal vertical / horizontal walls: free of overlap, crossing and the "no seat is walled in" rule, **ignoring the wall supply** | anchor map; swap as 19/20 |
-| 24 | bin | legal pawn destinations of the seat to move (including all jumps) | cell map |
+| 24 | bin | legal pawn destinations of the seat to move (including all jumps and, since 2026-10-10, the diagonal steps around a pawn that has a pawn behind it, `Q4Rules.md` 4.3) | cell map |
 | 25 | bin | pawn destinations that repeat an earlier position (since the last wall or elimination); 0 everywhere if the repetition rule is off | cell map |
 | 26 | bin | pawn destinations that end the game by repetition; 0 everywhere if the rule is off | cell map |
 

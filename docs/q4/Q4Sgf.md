@@ -40,7 +40,7 @@ Turn order S → W → N → E (clockwise), the compass names of [Q4Rules.md](Q4
 | `DR[r]` | `repetition` or `maxPlies` for a draw; `unfinished` when `RE[?]`. Not written for a decided game. |
 | `C[...]` | comma-separated `key=value` pairs (Duel's `parseKV`), below. |
 
-Root `C` keys: `gtype` (`normal`; `fork` for a game continued from a side position / fork; `mixed` for a population
+Root `C` keys: `jump=diag` (the rule version: written by the current writers = records played under the diagonal-jump rule of 2026-10-10, `Q4Rules.md` 4.3; a file without it was played under the old rule and is replayed with the old generator by the C++ and Python readers; never in `RU`), `gtype` (`normal`; `fork` for a game continued from a side position / fork; `mixed` for a population
 game with a seat that is not a learner), `gameHash` (32 hex digits, hash0 then hash1: the id of the training rows of the
 game, `globalTargetsNC` C44-49; only self-play), `startTurnIdx` (number of opening events that the engines did not play:
 self-play `startHist` (fork / policy init), q4match / gatekeeper the random opening), and per seat `i` = 0..3 (S..E)

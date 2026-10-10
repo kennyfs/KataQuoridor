@@ -65,7 +65,7 @@ other (20 moves per request, repeated until a human seat is to move; *Stop* ends
 - Pawns are discs in the seat colour (the Q4 viewer's set: S blue, W orange, N pink, E green); the seat to move has a
   dashed ring; the last pawn move shows where it came from.
 - **Rotate** (R, *turn*, or the S W N E buttons in the header): puts that seat at the bottom.
-- Legal pawn destinations of the seat to move are dots (jumps included). Clicking a pawn highlights its seat's legal
+- Legal pawn destinations of the seat to move are dots (jumps included, with the diagonal steps around a pawn that has a pawn behind it, `Q4Rules.md` 4.3). Loading a record without `jump=diag` (played under the old jump rule) replays it with the new rule: an old two-pawn jump that is no longer legal is rejected with the engine's message at that event. Clicking a pawn highlights its seat's legal
   moves (a read from the engine for a seat that is not to move); clicking a dot plays it.
 - **Walls**: hover a groove (the band between cells) to see whether the wall is legal for the seat to move. A legal
   wall is a preview in the seat colour and is placed by a click; an illegal one is red and not clickable (a click says
