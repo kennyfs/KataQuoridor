@@ -4,8 +4,8 @@ Design and formula: [../Q4Lead.md](../Q4Lead.md) §2 and §4. Branch `q4-lead-ep
 Commits: `b16beee4` (feature), `5a797c41` (L1b tests, L1 before the net), `fa5825e9` (selfplay test configs pin eps 0),
 `e18db303` (docs). All signed.
 
-Status: the CPU part is done (formula, plumbing, tests, the eps study). The GPU part (the noise table on the run1 net
-and the effect check) is **not run yet**: the GPU was at 100 % with a training loop, and no CPU substitute was run.
+Status: complete. The CPU part (formula, plumbing, tests, the eps study) and the GPU part (the noise table on the run1 net
+and the effect check, §4–§6) are done.
 
 ## 1. What changed
 
