@@ -917,6 +917,15 @@ void testSgfRecord() {
   testAssert(rejects("(;FF[4]GM[Q4]SZ[11]RE[S];S[f2)"));                         // unterminated value
   Q4MoveComment junk;
   testAssert(!Q4MoveComment::parse("elim", junk) && !junk.valid);
+  // The optional lead (docs/q4/Q4Lead.md): round trip, and old comments without it still parse
+  Q4MoveComment withLead;
+  testAssert(Q4MoveComment::parse("0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5", withLead));
+  testAssert(withLead.valid && withLead.hasLead && withLead.visits == 600);
+  testAssert(std::fabs(withLead.lead[1] + 0.4) < 1e-6 && std::fabs(withLead.lead[0] - 1.2) < 1e-6);
+  testAssert(withLead.toString() == "0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5");
+  Q4MoveComment oldComment;
+  testAssert(Q4MoveComment::parse("0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00", oldComment) && !oldComment.hasLead);
+  testAssert(oldComment.toString() == "0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00");
   cout << "SGF record test passed" << endl;
 }
 

@@ -30,6 +30,12 @@ struct PlayerSpec {
   std::string modelPath;
   int visits = 200;
   std::string opponentMode;   // "" = the config's q4OpponentMode
+  // Optional per-player score terms (docs/q4/Q4Lead.md), spelled "...@visits[:mode],dyn=0.3,static=0": override the config's
+  // staticScoreUtilityFactor / dynamicScoreUtilityFactor for this player only (the effect check puts both at one table).
+  bool hasStaticOverride = false;
+  double staticScoreUtilityFactor = 0.0;
+  bool hasDynamicOverride = false;
+  double dynamicScoreUtilityFactor = 0.0;
 };
 
 PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec);

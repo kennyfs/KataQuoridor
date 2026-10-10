@@ -625,6 +625,9 @@ Q4FinishedGameData* runGame(
     for(int vi = 0; vi < 5; vi++)
       mc.p[vi] = vt.value[vi];
     mc.visits = unreducedVisits;
+    mc.hasLead = true;
+    for(int s = 0; s < 4; s++)
+      mc.lead[s] = (float)values.lead[s];
     gameData->comments.push_back(mc);
     commentTurnIdx.push_back((int)gameData->targetWeightByTurn.size() - 1);
 

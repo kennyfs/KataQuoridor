@@ -12,7 +12,8 @@ cpp/q4/q4record.cpp.
     match       {"table", "opening", "rotation", "openingPlies", "drawReason"} (only for match / gatekeeper games)
 
 plus the keys "gtype", "startTurnIdx", "drawReason" ("" if none) and, when comments exist, "moveComments": one entry
-per event, None or {"p": [pS, pW, pN, pE, pDraw], "visits", "weight"}.
+per event, None or {"p": [pS, pW, pN, pE, pDraw], "visits", "weight"} and, if the comment has it, "lead": [4 floats]
+(docs/q4/Q4Lead.md; old comments have no "lead" key).
 """
 
 import re
@@ -71,8 +72,8 @@ def parse_kv(text: str) -> Dict[str, str]:
 
 
 def parse_move_comment(text: str) -> Optional[Dict[str, Any]]:
-    """'0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00' -> {"p": [5 floats], "visits", "weight"}; None if not a move
-    comment."""
+    """'0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5' -> {"p": [5 floats], "visits", "weight",
+    "lead": [4 floats]}; the lead key only if the comment has one. None if not a move comment."""
     parts = text.split()
     if len(parts) < 6:
         return None
@@ -88,14 +89,22 @@ def parse_move_comment(text: str) -> Optional[Dict[str, Any]]:
     if "v" not in kv:
         return None
     try:
-        return {"p": p, "visits": int(kv["v"]), "weight": float(kv.get("weight", 0.0))}
+        out = {"p": p, "visits": int(kv["v"]), "weight": float(kv.get("weight", 0.0))}
+        if "lead" in kv:
+            lead = [float(x) for x in kv["lead"].split(",")]
+            if len(lead) == 4:
+                out["lead"] = lead
+        return out
     except ValueError:
         return None
 
 
 def format_move_comment(c: Dict[str, Any]) -> str:
     p = c["p"]
-    return "%.2f %.2f %.2f %.2f %.2f v=%d weight=%.2f" % (p[0], p[1], p[2], p[3], p[4], c["visits"], c["weight"])
+    text = "%.2f %.2f %.2f %.2f %.2f v=%d weight=%.2f" % (p[0], p[1], p[2], p[3], p[4], c["visits"], c["weight"])
+    if "lead" in c:
+        text += " lead=%s" % ",".join("%.1f" % x for x in c["lead"])
+    return text
 
 
 def _result_to_letter(result: str) -> str:

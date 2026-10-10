@@ -25,6 +25,14 @@ def test_move_comment_round_trip():
     assert format_move_comment(c) == text
     assert parse_move_comment("elim") is None
     assert parse_move_comment("0.1 0.2 v=3") is None
+    # The optional lead (docs/q4/Q4Lead.md): round trip; a comment without it has no "lead" key
+    text_lead = "0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5"
+    c_lead = parse_move_comment(text_lead)
+    assert c_lead["lead"] == [1.2, -0.4, -0.3, -0.5]
+    assert format_move_comment(c_lead) == text_lead
+    assert "lead" not in c
+    assert parse_move_comment("0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1,2,3") == {
+        "p": [0.31, 0.22, 0.27, 0.15, 0.05], "visits": 600, "weight": 1.0}
 
 
 def test_hand_written_game():

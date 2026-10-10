@@ -16,12 +16,15 @@ struct Q4PlayerInfo {
 };
 
 // The search values at the position before a move, from the absolute seats' point of view (docs/q4/Q4Sgf.md §4):
-// "0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00". valid is false for a move without a search.
+// "0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5". valid is false for a move without a search.
+// lead (docs/q4/Q4Lead.md) is optional: old comments have none (hasLead false).
 struct Q4MoveComment {
   bool valid = false;
   float p[5] = {0, 0, 0, 0, 0};   // win probabilities of seats 0..3, then the draw
   int64_t visits = 0;             // the unreduced visits of the search
   float weight = 0.0f;            // the training target weight of the turn
+  bool hasLead = false;
+  float lead[4] = {0, 0, 0, 0};   // the root lead of seats 0..3, in cells
 
   std::string toString() const;
   // Parses the text of a move comment; returns false (and leaves valid = false) if it is not one.

@@ -27,7 +27,25 @@ PlayerSpec parsePlayerSpec(const std::string& name, const std::string& spec) {
     size_t atPos = rest.rfind('@');
     if(atPos != std::string::npos) {
       ps.modelPath = rest.substr(0, atPos);
-      std::string visitsAndMode = rest.substr(atPos + 1);
+      std::vector<std::string> fields = Global::split(rest.substr(atPos + 1), ',');
+      std::string visitsAndMode = fields[0];
+      for(size_t f = 1; f < fields.size(); f++) {
+        size_t eq = fields[f].find('=');
+        if(eq == std::string::npos)
+          throw StringError("Bad Q4 match player '" + name + "': expected key=value after the visits, got " + fields[f]);
+        std::string key = fields[f].substr(0, eq);
+        double value = Global::stringToDouble(fields[f].substr(eq + 1));
+        if(key == "static") {
+          ps.hasStaticOverride = true;
+          ps.staticScoreUtilityFactor = value;
+        }
+        else if(key == "dyn") {
+          ps.hasDynamicOverride = true;
+          ps.dynamicScoreUtilityFactor = value;
+        }
+        else
+          throw StringError("Bad Q4 match player '" + name + "': unknown key " + key + " (static, dyn)");
+      }
       size_t colon = visitsAndMode.find(':');
       if(colon != std::string::npos) {
         ps.opponentMode = visitsAndMode.substr(colon + 1);
@@ -258,6 +276,10 @@ GameResult playGame(
       SearchParams params = baseParams;
       params.maxVisits = ps.visits;
       params.numThreads = 1;
+      if(ps.hasStaticOverride)
+        params.staticScoreUtilityFactor = ps.staticScoreUtilityFactor;
+      if(ps.hasDynamicOverride)
+        params.dynamicScoreUtilityFactor = ps.dynamicScoreUtilityFactor;
       Q4S::Search::checkParams(params);
       players[s].search = std::make_unique<Q4S::Search>(
         params, evaluators.at(ps.modelPath).get(), &logger, "q4match_" + Global::uint64ToHexString(seatSeed)
@@ -287,6 +309,9 @@ GameResult playGame(
         mc.p[c] = (float)values.value[c];
       mc.visits = players[toMove].search->getRootVisits();
       mc.weight = 1.0f;
+      mc.hasLead = true;
+      for(int c = 0; c < 4; c++)
+        mc.lead[c] = (float)values.lead[c];
     }
     else
       act = players[toMove].bot->getMove(history.currentBoard);

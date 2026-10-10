@@ -150,12 +150,17 @@ int toInt(const std::string& s, const char* what) {
 }  // namespace
 
 std::string Q4MoveComment::toString() const {
-  char buf[160];
+  char buf[256];
   std::snprintf(
     buf, sizeof(buf), "%.2f %.2f %.2f %.2f %.2f v=%lld weight=%.2f", p[0], p[1], p[2], p[3], p[4],
     (long long)visits, weight
   );
-  return buf;
+  std::string out = buf;
+  if(hasLead) {
+    std::snprintf(buf, sizeof(buf), " lead=%.1f,%.1f,%.1f,%.1f", lead[0], lead[1], lead[2], lead[3]);
+    out += buf;
+  }
+  return out;
 }
 
 bool Q4MoveComment::parse(const std::string& text, Q4MoveComment& out) {
@@ -187,6 +192,14 @@ bool Q4MoveComment::parse(const std::string& text, Q4MoveComment& out) {
     }
     else if(key == "weight") {
       mc.weight = std::strtof(val.c_str(), nullptr);
+    }
+    else if(key == "lead") {
+      std::vector<std::string> leads = Global::split(val, ',');
+      if(leads.size() == 4) {
+        mc.hasLead = true;
+        for(int s = 0; s < 4; s++)
+          mc.lead[s] = std::strtof(leads[s].c_str(), nullptr);
+      }
     }
   }
   if(!hasV)
