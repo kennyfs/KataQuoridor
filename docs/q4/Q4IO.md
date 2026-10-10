@@ -153,6 +153,8 @@ Loss: cross-entropy per variant (weights in round 4). Illegal slots are masked i
   coefficient 0.054, Huber δ = 3.0 on the quantity in moves; Q4 does the same on the distance in cells, i.e.
   on `32 ×` the slot value). Slot 0 and 5 get the weights of Duel's remaining-plies and short-term-error terms.
   Exact values are fixed in round 4.
+  The search reads these slots as well, since 2026-10: the lead of each seat in the search utility uses them as the
+  predicted final distances (docs/q4/Q4Lead.md §2).
 - **Trajectory (ownership slot)**: 1 × 11 × 11 logits, BCE, small weight. Target: 1 for every cell the pawn of the
   seat to move occupies at this row's position and at every later position until the end of the game, else 0.
 

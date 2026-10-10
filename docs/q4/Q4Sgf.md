@@ -61,7 +61,7 @@ An elimination is an external event, not a ply: `;EL[W]`. Plies (and the `maxPli
 
 ### The comment of a move
 
-`C[0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00]` on the node of the move: the **search values at the position before that
+`C[0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5]` on the node of the move: the **search values at the position before that
 move, from the absolute seats' point of view**: `<pS> <pW> <pN> <pE> <pDraw> v=<visits> weight=<weight>` (two decimals).
 
 - the five numbers: win probabilities of S, W, N, E and the draw (they sum to 1);
@@ -72,6 +72,8 @@ move, from the absolute seats' point of view**: `<pS> <pW> <pN> <pE> <pDraw> v=<
   non-learner seat the observer search, whose weight is `q4PopulationObserverRowWeight`; its move is the seat's own).
   q4match / gatekeeper: the root values of the moving seat's search, `weight=1.00`.
 - A move without a search (an opening ply, a bot's move) has no comment. An elimination node has none.
+- `lead=l0,l1,l2,l3` (optional, after `weight`): the root leads of seats S, W, N, E in cells, one decimal (docs/q4/Q4Lead.md
+  §6). Written whenever a search ran, also with the factors at 0; absent in old records.
 
 ## 5. Where each command writes
 
