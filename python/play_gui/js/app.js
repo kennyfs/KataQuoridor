@@ -32,7 +32,6 @@ function saveSettings(o) {
   try { localStorage.setItem(LS_KEY, JSON.stringify({ ...loadSettings(), ...o })); } catch (e) { /* ignore */ }
 }
 let showEval = loadSettings().showEval !== false;
-let polOnly = !!loadSettings().polOnly;
 let pvOnHover = loadSettings().pvOnHover !== false;
 // candidate list order: "lcb", "visits" or "order" (the engine's own ranking)
 let sortBy = ["visits", "lcb", "order"].includes(loadSettings().sortBy) ? loadSettings().sortBy : "lcb";
@@ -176,13 +175,20 @@ function currentCands() {
   if (h && h.ply === S.moves.length) return { src: "hint", color: h.color, moves: h.moves, root: h.root };
   return null;
 }
-// the candidates drawn on the board: searched moves with a fair share of the visits, best first
+// The candidates shown (board and table): at most SHOWN_CANDIDATES searched moves whose visits are more than
+// MIN_VISIT_SHARE of all searched children's visits, in the engine's order (best first).
+const SHOWN_CANDIDATES = 5;
+const MIN_VISIT_SHARE = 0.01;
+function totalVisits(moves) { return moves.reduce((t, m) => t + (m.visits > 0 ? m.visits : 0), 0); }
+function shownCands(moves) {
+  const total = totalVisits(moves) || 1;
+  return moves.filter(m => m.visits > 0 && m.visits / total > MIN_VISIT_SHARE)
+    .sort((a, b) => a.order - b.order).slice(0, SHOWN_CANDIDATES);
+}
+// the candidates drawn on the board
 function boardCands(c) {
   if (!c) return null;
-  const searched = c.moves.filter(m => m.visits > 0).sort((a, b) => a.order - b.order);
-  const top = searched.length ? Math.max(...searched.map(m => m.visits)) : 0;
-  const moves = searched.filter((m, i) => i === 0 || m.visits >= Math.max(2, top * 0.002)).slice(0, 16);
-  return { color: c.color, moves };
+  return { color: c.color, moves: shownCands(c.moves) };
 }
 function playerLabel(c) {
   if (isAnalysis()) return NAME[c];
@@ -386,7 +392,6 @@ const pct1 = x => x == null ? "—" : (100 * x).toFixed(1);
 
 function renderCands(c) {
   const card = $("candCard");
-  $("polOnly").checked = polOnly;
   if (!c) { card.hidden = true; candKey = ""; return; }
   card.hidden = false;
   const col = c.color, r = c.root;
@@ -407,11 +412,11 @@ function renderCands(c) {
   }
   $("candRoot").innerHTML = root;
 
-  const searched = c.moves.filter(m => m.visits > 0).sort(SORTS[sortBy]);
-  const total = searched.reduce((t, m) => t + m.visits, 0) || 1;
-  let rows = searched;
-  if (polOnly) rows = rows.concat(c.moves.filter(m => !(m.visits > 0)).sort((a, b) => (b.prior || 0) - (a.prior || 0)));
-  const key = c.src + "|" + polOnly + "|" + sortBy + "|" + rows.map(m => m.move + m.visits).join(",") ;
+  const total = totalVisits(c.moves) || 1;          // the share column: of all searched children's visits
+  const shown = shownCands(c.moves);
+  const best = shown.length ? Math.max(...shown.map(m => m.visits)) : 0;
+  const rows = shown.slice().sort(SORTS[sortBy]);
+  const key = c.src + "|" + sortBy + "|" + rows.map(m => m.move + m.visits).join(",");
   if (key === candKey) return;
   candKey = key;
   const sh = (k, label, title) => `<span class="sort${sortBy === k ? " on" : ""}" data-sort="${k}" title="${title} · click to sort">${label}${sortBy === k ? " ▾" : ""}</span>`;
@@ -432,7 +437,7 @@ function renderCands(c) {
   }).join("") + `<div class="note">Values for ${NAME[col]}, the side to move. Hover a line to see its continuation; click to play it.</div>`;
   card.querySelectorAll(".crow:not(.chead)").forEach(row => {
     const m = c.moves.find(x => x.move === row.dataset.move);
-    const alpha = m && m.visits > 0 ? (m.order === 0 ? 1 : candAlpha(m.visits, searched[0] ? Math.max(...searched.map(x => x.visits)) : 0)) : 0;
+    const alpha = m && m.visits > 0 ? (m.order === 0 ? 1 : candAlpha(m.visits, best)) : 0;
     row.style.setProperty("--dot", m && m.order === 0 && m.visits > 0 ? CAND_TOP : CAND_OFF);
     row.style.setProperty("--dot-a", alpha);
   });
@@ -628,7 +633,6 @@ $("candList").addEventListener("mouseover", e => {
   setPvHover(row ? row.dataset.move : null);
 });
 $("candList").addEventListener("mouseleave", () => setPvHover(null));
-$("polOnly").addEventListener("change", e => { polOnly = e.target.checked; saveSettings({ polOnly }); candKey = ""; render(); });
 $("moveList").addEventListener("click", e => {
   const row = e.target.closest(".m");
   if (row) review(+row.dataset.ply);

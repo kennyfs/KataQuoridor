@@ -51,10 +51,10 @@ allowResignation=false, reportAnalysisWinratesAs=SIDETOMOVE` and opens the page.
   fades with fewer visits, each with its win chance (for the side to move) and visit count; walls get a
   label on the wall. Hovering a candidate (on the board or in the list) shows its continuation, numbered; **PV** (P)
   switches this off and on.
-- The side panel lists every searched child: win %, lead (moves), visits and their share, the net's raw
-  policy prior, the winrate LCB, and the continuation. It is sorted by LCB; click the *visits* or *#*
-  (the engine's own ranking) header to sort by those instead. *unvisited* also lists the moves the search has not
-  tried yet, with their policy prior. Above the list: the root value, utility, score spread, the net's own
+- At most **5** candidates are shown, on the board and in the side panel: the engine's ranking, restricted to moves
+  whose visits are **more than 1%** of all searched children's visits. The side panel lists them with win %, lead
+  (moves), visits and their share, the net's raw policy prior, the winrate LCB, and the continuation. It is sorted by
+  LCB; click the *visits* or *#* (the engine's own ranking) header to sort by those instead. Above the list: the root value, utility, score spread, the net's own
   uncertainty estimates and the raw net value of the position (also shown under the evaluation bar).
 
 The board is drawn as seen from your side: as White, row 1 is at the bottom and column a on the left; as

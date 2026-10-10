@@ -124,7 +124,6 @@ body.noeval #moveList .ev { visibility: hidden; }
 .maxv input { font: inherit; width: 84px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px; background: #fbfaf7; color: var(--ink); }
 
 /* candidate list (analysis / hint) */
-.pol-only { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
 .cand-root { font-size: 12.5px; font-variant-numeric: tabular-nums; margin-bottom: 6px; }
 .cand-root .muted { color: var(--muted); font-size: 12px; }
 .cand-list { max-height: 42vh; overflow-y: auto; margin: 0 -14px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
