@@ -953,7 +953,7 @@ void testL1LeadFormula() {
   // Win probabilities 0.5 0.3 0.1 0.1, distances 0 4 2 6, all alive
   double value[5] = {0.5, 0.3, 0.1, 0.1, 0.0};
   double dist[4] = {0.0, 4.0, 2.0, 6.0};
-  Q4S::Search::computeSeatLeads(value, dist, 0x0f, lead);
+  Q4S::Search::computeSeatLeads(value, dist, 0x0f, 0.0, lead);
   testAssert(fabs(lead[0] - 4.0) < eps);                  // (0.3*4 + 0.1*2 + 0.1*6) / 0.5
   testAssert(fabs(lead[1] + 20.0 / 7.0) < eps);           // (5*(0-4) + 1*(2-4) + 1*(6-4)) / 7
   testAssert(fabs(lead[2]) < eps);                        // (0.5*(-2) + 0.3*2 + 0.1*4) / 0.9
@@ -961,14 +961,14 @@ void testL1LeadFormula() {
 
   // A draw: all p_j are on the draw slot, so the weights are uniform over the other three seats
   double drawValue[5] = {0.0, 0.0, 0.0, 0.0, 1.0};
-  Q4S::Search::computeSeatLeads(drawValue, dist, 0x0f, lead);
+  Q4S::Search::computeSeatLeads(drawValue, dist, 0x0f, 0.0, lead);
   testAssert(fabs(lead[0] - 4.0) < eps);                  // (4 + 2 + 6) / 3
   testAssert(fabs(lead[1] + 4.0 / 3.0) < eps);            // ((0-4) + (2-4) + (6-4)) / 3
 
   // Seat 3 eliminated: its distance (9) is not used by the others, and it has no lead
   double elimValue[5] = {0.6, 0.2, 0.2, 0.0, 0.0};
   double elimDist[4] = {0.0, 4.0, 2.0, 9.0};
-  Q4S::Search::computeSeatLeads(elimValue, elimDist, 0x07, lead);
+  Q4S::Search::computeSeatLeads(elimValue, elimDist, 0x07, 0.0, lead);
   testAssert(fabs(lead[0] - 3.0) < eps);                  // (0.2*4 + 0.2*2) / 0.4
   testAssert(fabs(lead[1] + 3.5) < eps);                  // (0.6*(-4) + 0.2*(-2)) / 0.8
   testAssert(fabs(lead[2] + 1.0) < eps);                  // (0.6*(-2) + 0.2*2) / 0.8
@@ -977,18 +977,147 @@ void testL1LeadFormula() {
   // Terminal: seat 1 wins (its distance is 0), the others' distances at the end; the winner's lead is the mean of the others'
   double termValue[5] = {0.0, 1.0, 0.0, 0.0, 0.0};
   double termDist[4] = {5.0, 0.0, 3.0, 7.0};
-  Q4S::Search::computeSeatLeads(termValue, termDist, 0x0f, lead);
+  Q4S::Search::computeSeatLeads(termValue, termDist, 0x0f, 0.0, lead);
   testAssert(fabs(lead[0] + 5.0) < eps);                  // the winner alone counts: 0 - 5
   testAssert(fabs(lead[1] - 5.0) < eps);                  // no p on the others: (5 + 3 + 7) / 3
   testAssert(fabs(lead[2] + 3.0) < eps);
   testAssert(fabs(lead[3] + 7.0) < eps);
 
   // One alive seat: nobody to be ahead of
-  Q4S::Search::computeSeatLeads(termValue, termDist, 0x02, lead);
+  Q4S::Search::computeSeatLeads(termValue, termDist, 0x02, 0.0, lead);
   for(int s = 0; s < 4; s++)
     testAssert(lead[s] == 0.0);
 
   cout << "L1 lead formula tests passed" << endl;
+}
+
+// The lead weights before q4LeadWeightEps (the copy of the old code, for the eps = 0 identity check).
+static void referenceSeatLeadsBeforeEps(const double value[5], const double dist[4], uint8_t aliveMask, double leadOut[4]) {
+  for(int i = 0; i < 4; i++) {
+    leadOut[i] = 0.0;
+    if(((aliveMask >> i) & 1) == 0)
+      continue;
+    double pSum = 0.0;
+    int numOthers = 0;
+    for(int j = 0; j < 4; j++) {
+      if(j == i || ((aliveMask >> j) & 1) == 0)
+        continue;
+      pSum += value[j];
+      numOthers++;
+    }
+    if(numOthers == 0)
+      continue;
+    double lead = 0.0;
+    for(int j = 0; j < 4; j++) {
+      if(j == i || ((aliveMask >> j) & 1) == 0)
+        continue;
+      double weight = (pSum < 1e-6) ? 1.0 / (double)numOthers : value[j] / pSum;
+      lead += weight * (dist[j] - dist[i]);
+    }
+    leadOut[i] = lead;
+  }
+}
+
+// L1b: q4LeadWeightEps (docs/q4/Q4Lead.md §2, RLeadEps.md). eps = 0 is the old code bit for bit; with eps = 0.02 the
+// lead is continuous in the win probability of a second place (bound stated below), the hopeless seat keeps its
+// weight on the likely winner, a terminal is consistent with a leaf of the same p, and a dead seat is no opponent.
+void testL1bLeadWeightEps() {
+  cout << "Running L1b lead weight smoothing tests..." << endl;
+  const double eps = 1e-9;
+  const double smoothEps = 0.02;
+  double lead[4];
+  double reference[4];
+
+  // eps = 0: identical to the old weights, every alive mask and a grid of win probabilities including the 1e-6 fallback
+  const double grid[7] = {0.0, 1e-7, 1e-4, 0.003, 0.2, 0.5, 0.97};
+  const double gridDist[4] = {0.0, 7.0, 13.0, 4.0};
+  for(int mask = 0; mask < 16; mask++) {
+    for(int a = 0; a < 7; a++)
+      for(int b = 0; b < 7; b++)
+        for(int c = 0; c < 7; c++)
+          for(int d = 0; d < 7; d++) {
+            double value[5] = {grid[a], grid[b], grid[c], grid[d], 0.0};
+            Q4S::Search::computeSeatLeads(value, gridDist, (uint8_t)mask, 0.0, lead);
+            referenceSeatLeadsBeforeEps(value, gridDist, (uint8_t)mask, reference);
+            for(int s = 0; s < 4; s++)
+              testAssert(lead[s] == reference[s]);
+          }
+  }
+
+  // Continuity: mover seat 0 (distance 0), second place seat 1 with p = x in [0, 0.2], seats 2 and 3 at p = 0.
+  // Distances 0, 10, 20, 30 (spread S = 30). With the weights (p + eps) / sum, the derivative of the lead in x is
+  // eps * (2 a - B) / (x + 3 eps)^2 with a = D_1 - D_0 and B = (D_2 - D_0) + (D_3 - D_0), so |d lead / dx| <= 4 S / (9 eps).
+  // Bound for a step h in x: |lead(x + h) - lead(x)| <= 4 S h / (9 eps) = 0.67 cells for h = 0.001 at eps = 0.02.
+  const double sweepDist[4] = {0.0, 10.0, 20.0, 30.0};
+  const double spread = 30.0;
+  const double h = 0.0005;
+  double prevLead = 0.0;
+  double maxStep = 0.0;
+  for(int k = 0; k <= 400; k++) {
+    double x = k * h;
+    double sweepValue[5] = {0.0, x, 0.0, 0.0, 0.0};
+    Q4S::Search::computeSeatLeads(sweepValue, sweepDist, 0x0f, smoothEps, lead);
+    if(k > 0) {
+      double step = fabs(lead[0] - prevLead);
+      if(step > maxStep)
+        maxStep = step;
+      testAssert(step <= 4.0 * spread * h / (9.0 * smoothEps) + 1e-12);
+    }
+    prevLead = lead[0];
+  }
+  // The old weights jump by 10 cells between p = 0 and p = 1e-4 (the uniform fallback to the winner's whole weight)
+  double jumpValue0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+  double jumpValue1[5] = {0.0, 1e-4, 0.0, 0.0, 0.0};
+  double leadJump0[4];
+  double leadJump1[4];
+  Q4S::Search::computeSeatLeads(jumpValue0, sweepDist, 0x0f, 0.0, leadJump0);
+  Q4S::Search::computeSeatLeads(jumpValue1, sweepDist, 0x0f, 0.0, leadJump1);
+  testAssert(fabs(leadJump1[0] - leadJump0[0]) > 5.0);
+  cout << "  continuity: max step per 0.0005 in p = " << maxStep << " cells (bound " << 4.0 * spread * h / (9.0 * smoothEps)
+       << "); eps = 0 jump between p = 0 and 1e-4: " << fabs(leadJump1[0] - leadJump0[0]) << " cells" << endl;
+
+  // Hopeless seat: mover 0 (p = 0.01), the winner seat 1 (p = 0.97), seats 2 and 3 (p = 0.01) at the mover's distance,
+  // so the lead is w_1 * (D_1 - D_0) and w_1 is the weight on the winner. Old: 0.9798, eps = 0.02: 0.9429.
+  double hopelessValue[5] = {0.01, 0.97, 0.01, 0.01, 0.0};
+  double hopelessDist[4] = {5.0, 15.0, 5.0, 5.0};
+  Q4S::Search::computeSeatLeads(hopelessValue, hopelessDist, 0x0f, 0.0, lead);
+  double weightOld = lead[0] / 10.0;
+  Q4S::Search::computeSeatLeads(hopelessValue, hopelessDist, 0x0f, smoothEps, lead);
+  double weightNew = lead[0] / 10.0;
+  testAssert(weightOld > 0.979 && weightOld < 0.981);
+  testAssert(weightNew > 0.94 && weightNew < 0.945);
+  testAssert(fabs(weightNew - weightOld) < 0.04);
+
+  // Terminal vs leaf: the same p gives the same lead (one function). A leaf near the terminal (winner 0.999, the rest
+  // 0.0003) is within 0.05 cells of it.
+  double termValue[5] = {0.0, 1.0, 0.0, 0.0, 0.0};
+  double termDist[4] = {5.0, 0.0, 3.0, 7.0};
+  double leafValue[5] = {0.0, 1.0, 0.0, 0.0, 0.0};
+  double leadTerm[4];
+  double leadLeaf[4];
+  Q4S::Search::computeSeatLeads(termValue, termDist, 0x0f, smoothEps, leadTerm);
+  Q4S::Search::computeSeatLeads(leafValue, termDist, 0x0f, smoothEps, leadLeaf);
+  for(int s = 0; s < 4; s++)
+    testAssert(leadTerm[s] == leadLeaf[s]);
+  double nearValue[5] = {0.0003, 0.999, 0.0003, 0.0003, 0.0};
+  double leadNear[4];
+  Q4S::Search::computeSeatLeads(nearValue, termDist, 0x0f, smoothEps, leadNear);
+  for(int s = 0; s < 4; s++)
+    testAssert(fabs(leadNear[s] - leadTerm[s]) < 0.05);
+
+  // Eliminated seat: its p and distance are no opponent, with eps as well
+  double elimA[5] = {0.6, 0.2, 0.2, 0.5, 0.0};
+  double elimB[5] = {0.6, 0.2, 0.2, 0.0, 0.0};
+  double elimDist[4] = {0.0, 4.0, 2.0, 9.0};
+  double leadA[4];
+  double leadB[4];
+  Q4S::Search::computeSeatLeads(elimA, elimDist, 0x07, smoothEps, leadA);
+  Q4S::Search::computeSeatLeads(elimB, elimDist, 0x07, smoothEps, leadB);
+  for(int s = 0; s < 4; s++)
+    testAssert(fabs(leadA[s] - leadB[s]) < eps);
+  testAssert(leadA[3] == 0.0);
+
+  cout << "L1b lead weight smoothing tests passed" << endl;
 }
 
 // L2: the utility with the score terms, the dynamic centres and the range of the utility (docs/q4/Q4Lead.md), on the NN.
@@ -1574,6 +1703,9 @@ void Tests::runQ4SearchTests() {
   cout << "========================================" << endl;
 
   testT27ConfigGuard();
+  // The lead formula tests need no net: run them before the evaluator is built
+  testL1LeadFormula();
+  testL1bLeadWeightEps();
 
   string modelPath = getTestModelPath();
   Logger logger;
@@ -1595,7 +1727,6 @@ void Tests::runQ4SearchTests() {
   testO2SelectionRules(nnEval, logger);
   testO3ExpectSharesFollowStylePrior(nnEval, logger);
   testO4MaxnUnchanged(nnEval, logger);
-  testL1LeadFormula();
   testL2LeadUtilityAndCentres(nnEval, logger);
 
   delete nnEval;
