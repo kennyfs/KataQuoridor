@@ -16,12 +16,20 @@
 #include "../search/q4search.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using json = nlohmann::json;
@@ -35,6 +43,68 @@ void respondSuccess(const std::string& msg = "") {
 void respondError(const std::string& msg) {
   std::cout << "? " << msg << "\n\n" << std::flush;
 }
+
+// Reads stdin on its own thread, so that a line sent while a search runs is seen at once (it cancels
+// q4-search_analyze_cancellable) and is not hidden in the stdio buffer. Lines are queued in order.
+class StdinLines {
+public:
+  StdinLines() : st(std::make_shared<State>()) {
+    std::shared_ptr<State> s = st;
+    std::thread([s]() {
+      std::string l;
+      while(std::getline(std::cin, l)) {
+        std::lock_guard<std::mutex> lock(s->mutex);
+        s->lines.push_back(l);
+        s->cv.notify_all();
+      }
+      std::lock_guard<std::mutex> lock(s->mutex);
+      s->eof = true;
+      s->cv.notify_all();
+    }).detach();
+  }
+
+  // Blocks until a line is queued; false at the end of input with nothing queued.
+  bool next(std::string& out) {
+    std::unique_lock<std::mutex> lock(st->mutex);
+    st->cv.wait(lock, [this]() { return !st->lines.empty() || st->eof; });
+    if(st->lines.empty())
+      return false;
+    out = st->lines.front();
+    st->lines.pop_front();
+    return true;
+  }
+
+  // Waits up to timeoutMs for a line or the end of input; true if one of them came (nothing is consumed).
+  bool arrivedWithin(int timeoutMs) {
+    std::unique_lock<std::mutex> lock(st->mutex);
+    st->cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]() { return !st->lines.empty() || st->eof; });
+    return !st->lines.empty() || st->eof;
+  }
+
+private:
+  struct State {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::string> lines;
+    bool eof = false;
+  };
+  std::shared_ptr<State> st;
+};
+
+const char* SEAT_LETTERS = "SWNE";
+
+std::string joinDoubles(const double* v, int n, int prec) {
+  std::ostringstream ss;
+  for(int i = 0; i < n; i++) {
+    if(i > 0) ss << ",";
+    ss << std::fixed << std::setprecision(prec) << v[i];
+  }
+  return ss.str();
+}
+
+// The keys q4-set-param accepts.
+const char* SET_PARAM_KEYS = "maxVisits, q4OpponentMode, q4OwnSeats, dynamicScoreUtilityFactor, "
+                             "q4LeadWeightEps, cpuctExploration, rootPolicyTemperature";
 
 }  // namespace
 
@@ -171,8 +241,12 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
     bot = Q4Bots::makeBot(botType, seed);
   }
 
+  // Bots other than the one of -bot (q4-genmove-bot), made on first use and kept, so a grudge bot keeps its memory.
+  std::map<std::string, std::unique_ptr<Q4Bot>> botCache;
+
+  StdinLines input;
   std::string line;
-  while(std::getline(std::cin, line)) {
+  while(input.next(line)) {
     line = Global::trim(line);
     if(line.empty() || line[0] == '#')
       continue;
@@ -218,7 +292,9 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
                         c == "to_move" || c == "get_rules" || c == "set_rule" ||
                         c == "set_rules" || c == "printrecord" || c == "loadrecord" ||
                         c == "genmove" || c == "q4-rawnn" || c == "q4-set-temperature" ||
-                        c == "q4-analyze" || c == "q4-search-params");
+                        c == "q4-analyze" || c == "q4-search-params" ||
+                        c == "q4-search_analyze_cancellable" || c == "q4-set-param" ||
+                        c == "q4-genmove-bot" || c == "q4-position");
           respondSuccess(known ? "true" : "false");
         }
       }
@@ -227,7 +303,8 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
                            "clear_board\nplay\nlegal_moves\neliminate\nundo\nshowboard\n"
                            "winner\nwalls\ndist\nto_move\nget_rules\nset_rule\nset_rules\n"
                            "printrecord\nloadrecord\ngenmove\nq4-rawnn\nq4-set-temperature\n"
-                           "q4-analyze\nq4-search-params";
+                           "q4-analyze\nq4-search-params\nq4-search_analyze_cancellable\n"
+                           "q4-set-param\nq4-genmove-bot\nq4-position";
         respondSuccess(list);
       }
       else if(cmd == "quit") {
@@ -522,6 +599,201 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
         }
         respondSuccess(ss.str());
       }
+      else if(cmd == "q4-position") {
+        // The whole position as one JSON object (seats 0..3 = S W N E; cells and walls in QTP notation).
+        const Q4Board& b = history.currentBoard;
+        json j;
+        j["plies"] = history.plies;
+        j["toMove"] = b.toMove;
+        j["finished"] = history.isFinished;
+        j["winner"] = history.winnerSeat;
+        j["draw"] = history.isDraw;
+        j["alive"] = json::array();
+        j["pawns"] = json::array();
+        j["wallsLeft"] = json::array();
+        j["dist"] = json::array();
+        for(int s = 0; s < Q4Board::NUM_SEATS; s++) {
+          j["alive"].push_back(b.isAlive(s));
+          j["pawns"].push_back(b.pawn[s] >= 0 ? Q4Notation::cellToString(b.pawn[s]) : "");
+          j["wallsLeft"].push_back((int)b.wallsLeft[s]);
+          j["dist"].push_back(b.isAlive(s) && b.pawn[s] >= 0 ? (int)b.distToCenter[b.pawn[s]] : 255);
+        }
+        j["walls"] = json::array();
+        for(int a = 0; a < Q4Board::NUM_WALL_ANCHORS; a++) {
+          int ax = Q4Board::anchorX(a), ay = Q4Board::anchorY(a);
+          if(b.hWalls[a])
+            j["walls"].push_back(Q4Notation::wallToString(ax, ay, true));
+          if(b.vWalls[a])
+            j["walls"].push_back(Q4Notation::wallToString(ax, ay, false));
+        }
+        respondSuccess(j.dump());
+      }
+      else if(cmd == "q4-set-param") {
+        // Changing a value clears the tree (the stored values depend on it), as the setters of Q4S::Search do.
+        if(search == nullptr)
+          throw StringError("Search not enabled (bot must be search and model provided)");
+        if(cmdArgs.size() < 2)
+          throw StringError(std::string("Usage: q4-set-param <key> <value>; keys: ") + SET_PARAM_KEYS);
+        const std::string& key = cmdArgs[0];
+        const std::string& value = cmdArgs[1];
+        if(key == "maxVisits") {
+          SearchParams p = search->searchParams;
+          p.maxVisits = Global::stringToInt64(value);
+          search->setParams(p);
+        }
+        else if(key == "dynamicScoreUtilityFactor" || key == "cpuctExploration" || key == "rootPolicyTemperature") {
+          SearchParams p = search->searchParams;
+          double v = Global::stringToDouble(value);
+          if(key == "dynamicScoreUtilityFactor") p.dynamicScoreUtilityFactor = v;
+          else if(key == "cpuctExploration") p.cpuctExploration = v;
+          else p.rootPolicyTemperature = v;
+          search->setParams(p);
+        }
+        else if(key == "q4OpponentMode") {
+          search->setOpponentModel(Q4S::parseOpponentMode(value), search->ownSeatMask);
+        }
+        else if(key == "q4OwnSeats") {
+          int64_t mask = Global::stringToInt64(value);
+          if(mask < 0 || mask > 15)
+            throw StringError("q4OwnSeats must be a bit mask 0..15 (bit s = seat s+1 is own)");
+          search->setOpponentModel(search->opponentMode, (uint8_t)mask);
+        }
+        else if(key == "q4LeadWeightEps") {
+          double eps = Global::stringToDouble(value);
+          if(!(eps >= 0.0 && eps <= 1.0))
+            throw StringError("q4LeadWeightEps must be in [0, 1]");
+          search->setLeadWeightEps(eps);
+        }
+        else {
+          throw StringError("Unknown key: " + key + " (keys: " + SET_PARAM_KEYS + ")");
+        }
+        respondSuccess();
+      }
+      else if(cmd == "q4-genmove-bot") {
+        // The move of a bot for the seat to move (the -bot of the process is the seat-independent default only).
+        if(history.isFinished)
+          throw StringError("Game is already finished");
+        if(cmdArgs.empty())
+          throw StringError("Usage: q4-genmove-bot <bot> [target seat]");
+        std::string type = cmdArgs[0];
+        int target = -1;
+        if(cmdArgs.size() >= 2)
+          target = Q4Notation::stringToSeat(cmdArgs[1]);
+        if(Global::toLower(type) == "grudge" && target < 0)
+          throw StringError("grudge needs a target seat: q4-genmove-bot grudge <seat>");
+        std::string key = Global::toLower(type) + "/" + std::to_string(target);
+        auto it = botCache.find(key);
+        if(it == botCache.end())
+          it = botCache.emplace(key, Q4Bots::makeBot(type, seed, target)).first;
+        int action = it->second->getMove(history.currentBoard);
+        if(action == Q4Board::NULL_ACTION)
+          throw StringError("No legal move available");
+        history.play(action);   // throws on an illegal move
+        if(search) search->makeMove(action);
+        respondSuccess(Q4Notation::actionToString(action));
+      }
+      else if(cmd == "q4-search_analyze_cancellable") {
+        // q4-search_analyze_cancellable [interval centis, default 25] [visit cap, default maxVisits]: searches the seat to
+        // move's position and streams "info root ..." and "info move ..." lines every interval until a line arrives on
+        // stdin (the answer line is "play cancelled") or the cap is reached ("done"). No move is made and the tree is kept
+        // for the next search (no clearing). Output: "=", info lines, the answer line, an empty line.
+        if(search == nullptr)
+          throw StringError("Search not enabled (bot must be search and model provided)");
+        if(history.isFinished)
+          throw StringError("Game is already finished");
+        int intervalCs = 25;
+        if(!cmdArgs.empty())
+          intervalCs = Global::stringToInt(cmdArgs[0]);
+        if(intervalCs < 1)
+          throw StringError("Interval must be at least 1 centisecond");
+        const int intervalMs = intervalCs * 10;
+        // The visit cap of this search (default: maxVisits); the parameters are restored afterwards, without clearing the tree.
+        const SearchParams origParams = search->searchParams;
+        SearchParams cappedParams = origParams;
+        if(cmdArgs.size() >= 2)
+          cappedParams.maxVisits = Global::stringToInt64(cmdArgs[1]);
+        search->setParamsNoClearing(cappedParams);
+
+        auto printAnalysis = [&]() {
+          Q4S::ReportedSearchValues rootVals;
+          std::ostringstream ss;
+          if(search->getRootValues(rootVals)) {
+            ss << "info root visits " << search->getRootVisits()
+               << " value " << joinDoubles(rootVals.value, 5, 4)
+               << " utility " << joinDoubles(rootVals.utility, 4, 4)
+               << " lead " << joinDoubles(rootVals.lead, 4, 4) << "\n";
+          }
+          else {
+            ss << "info root visits " << search->getRootVisits() << "\n";
+          }
+          std::vector<Q4S::AnalysisData> analysis;
+          search->getAnalysisData(analysis);
+          for(const auto& ad : analysis) {
+            if(ad.numVisits <= 0)
+              continue;   // a candidate without a visit yet says nothing
+            // The PV with the seat of each move: "S f2 W b6 ...". The first move is the candidate itself.
+            std::ostringstream pv;
+            Q4PlayState s = search->getRootState();
+            for(size_t i = 0; i < ad.pv.size() && !s.isFinished; i++) {
+              if(i > 0) pv << " ";
+              pv << SEAT_LETTERS[s.board.toMove] << " " << Q4Notation::actionToString(ad.pv[i]);
+              s.playAssumeLegal(ad.pv[i]);
+            }
+            ss << "info move " << Q4Notation::actionToString(ad.move)
+               << " visits " << ad.numVisits
+               << " prior " << std::fixed << std::setprecision(4) << ad.policyPrior
+               << " utility " << std::fixed << std::setprecision(4) << ad.utility
+               << " lcb " << std::fixed << std::setprecision(4) << ad.lcb
+               << " value " << joinDoubles(ad.valueAvg, 5, 4)
+               << " pv " << pv.str() << "\n";
+          }
+          std::cout << ss.str() << std::flush;
+        };
+
+        // As Duel's kata-search_analyze_cancellable: the "=" header first, the "info" lines, then the answer line
+        // (no second "="), so that a client that streams the info lines sees them inside the response.
+        std::cout << "=\n" << std::flush;
+
+        std::atomic<bool> stopNow(false);
+        std::atomic<bool> finished(false);
+        std::exception_ptr workerError = nullptr;
+        std::thread worker([&]() {
+          try {
+            search->runWholeSearch(&stopNow);
+          }
+          catch(...) {
+            workerError = std::current_exception();
+          }
+          finished.store(true);
+        });
+
+        bool cancelled = false;
+        while(true) {
+          if(input.arrivedWithin(intervalMs)) {
+            cancelled = true;   // the line stays queued: it is the next command
+            break;
+          }
+          if(finished.load())
+            break;
+          printAnalysis();
+        }
+        stopNow.store(true);
+        worker.join();
+        search->setParamsNoClearing(origParams);
+        if(workerError) {
+          std::string what = "search failed";
+          try {
+            std::rethrow_exception(workerError);
+          }
+          catch(const std::exception& e) {
+            what = e.what();
+          }
+          std::cout << "error: " << what << "\n\n" << std::flush;
+          continue;
+        }
+        printAnalysis();
+        std::cout << (cancelled ? "play cancelled" : "done") << "\n\n" << std::flush;
+      }
       else if(cmd == "q4-search-params") {
         if(search == nullptr)
           throw StringError("Search not enabled (bot must be search and model provided)");
@@ -541,7 +813,11 @@ int MainCmds::q4qtp(const std::vector<std::string>& args) {
         ss << "rootDirichletNoiseTotalConcentration = " << search->searchParams.rootDirichletNoiseTotalConcentration << "\n";
         ss << "rootDirichletNoiseWeight = " << search->searchParams.rootDirichletNoiseWeight << "\n";
         ss << "rootPolicyTemperature = " << search->searchParams.rootPolicyTemperature << "\n";
-        ss << "chosenMoveTemperature = " << search->searchParams.chosenMoveTemperature;
+        ss << "chosenMoveTemperature = " << search->searchParams.chosenMoveTemperature << "\n";
+        ss << "dynamicScoreUtilityFactor = " << search->searchParams.dynamicScoreUtilityFactor << "\n";
+        ss << "q4OpponentMode = " << Q4S::opponentModeName(search->opponentMode) << "\n";
+        ss << "q4OwnSeats = " << (int)search->ownSeatMask << "\n";
+        ss << "q4LeadWeightEps = " << search->leadWeightEps;
         respondSuccess(ss.str());
       }
       else {
