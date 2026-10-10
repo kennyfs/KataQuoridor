@@ -70,10 +70,11 @@ Press **Start analysis** (Space). While it runs, the engine searches the positio
 - **Root line**: the five win probabilities (S W N E draw) as a bar under the board (`search`), the root visits, utilities
   and leads (in cells). When analysis is off, the stored value of this position or the raw net is shown.
 - **Raw net**: `net, no search`: the net's own value of the position and the plies to the end (`q4-rawnn`).
-- **Candidates**: the table lists every searched move: visits, the mover's win probability, prior, utility, LCB (sort by
-  clicking a header), and the five win probabilities after the move as a stacked bar. Click a line to play it; hover to
-  see its principal variation on the board (numbered, with the seat letters under the table). The 12 best by LCB are
-  drawn on the board: the best in light blue, the others green, fading with visits, each with the mover's win chance.
+- **Candidates**: at most **5** moves, on the board and in the table: those whose visits are **more than 1%** of all
+  searched children's visits, best LCB first. The table shows the mover's win probability, prior, utility, LCB (sort by
+  clicking a header) and the five win probabilities after the move as a stacked bar. Click a line to play it; hover to
+  see its principal variation on the board (numbered, with the seat letters under the table). On the board the best is
+  light blue and the others green, fading with visits, each with the mover's win chance.
 - **Max visits** (empty = unlimited) caps the search; at the cap the analysis reports *done*. The **interval** is in
   centiseconds (25 = a report every 0.25 s).
 - The search keeps its tree while the position stays the same: a second search on the same position starts from the

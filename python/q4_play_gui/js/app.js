@@ -17,7 +17,10 @@
   const SEAT = C.SEAT_LETTERS;
   const KINDS = [["human", "Human"], ["net", "AI net"], ["bot", "Bot"]];
   const BOTS = ["greedy", "basher", "randomPawn", "random", "grudge"];
-  const BOARD_CANDIDATES = 12;      // the best candidates (by LCB) drawn on the board; the table has them all
+  // The candidates shown on the board and in the table: at most SHOWN_CANDIDATES searched moves whose visits are more
+  // than MIN_VISIT_SHARE of all searched children's visits, best LCB first (see shownCandidates).
+  const SHOWN_CANDIDATES = 5;
+  const MIN_VISIT_SHARE = 0.01;
 
   let state = null;
   let rot = 0;
@@ -123,6 +126,17 @@
   }
 
   // -- the view of the board ----------------------------------------------------------------------------
+  function shownCandidates(moves, mover) {
+    const total = moves.reduce((t, m) => t + (m.visits > 0 ? m.visits : 0), 0) || 1;
+    return moves.filter(m => m.visits > 0 && m.visits / total > MIN_VISIT_SHARE)
+      .map(m => ({
+        move: m.move, visits: m.visits, lcb: m.lcb, prior: m.prior, utility: m.utility,
+        win: m.value ? m.value[mover] : null, value: m.value, pv: m.pv,
+      }))
+      .sort((a, b) => (b.lcb - a.lcb) || (b.visits - a.visits))
+      .slice(0, SHOWN_CANDIDATES);
+  }
+
   function buildView() {
     const pos = state.position;
     const events = state.events.slice(0, state.cursor);
@@ -141,12 +155,7 @@
     const legalWalls = new Set(dotSeat === pos.toMove ? (pos.legal || []).filter(m => m.endsWith("h") || m.endsWith("v")) : []);
     const an = state.analysis;
     let candidates = [];
-    if (an.on && an.moves && an.moves.length && an.ply === state.cursor) {
-      candidates = an.moves.map(m => ({
-        move: m.move, visits: m.visits, lcb: m.lcb, prior: m.prior, utility: m.utility,
-        win: m.value ? m.value[pos.toMove] : null, value: m.value, pv: m.pv,
-      })).sort((a, b) => (b.lcb - a.lcb) || (b.visits - a.visits));
-    }
+    if (an.on && an.moves && an.moves.length && an.ply === state.cursor) candidates = shownCandidates(an.moves, pos.toMove);
     const colors = C.SEAT_COLORS;
     return {
       position: pos,
@@ -157,7 +166,7 @@
       legalDots: [...legalPawns],
       legalPawns,
       legalWalls,
-      candidates: candidates.slice(0, BOARD_CANDIDATES),
+      candidates,
       pv: pvOverlay,
       inactive: pos.finished,
     };
@@ -359,13 +368,10 @@
       body.appendChild(tr);
       return;
     }
-    const rows = an.moves.map(m => ({
-      move: m.move, visits: m.visits, lcb: m.lcb, prior: m.prior, utility: m.utility,
-      win: m.value ? m.value[pos.toMove] : null, value: m.value, pv: m.pv,
-    }));
+    const rows = shownCandidates(an.moves, pos.toMove);
     const sorted = C.sortCandidates(rows.map(r => Object.assign({}, r)), sortKey === "win" ? "lcb" : sortKey);
     if (sortKey === "win") sorted.sort((a, b) => (b.win - a.win) || (b.visits - a.visits));
-    const best = rows.slice().sort((a, b) => (b.lcb - a.lcb) || (b.visits - a.visits))[0];
+    const best = rows[0];   // the engine's choice by LCB among the shown moves
     sorted.forEach((r) => {
       const tr = document.createElement("tr");
       if (best && r.move === best.move) tr.className = "best";
