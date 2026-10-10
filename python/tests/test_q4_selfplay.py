@@ -616,7 +616,7 @@ def test_c7_search_policy_target_is_not_one_hot(tmp_path):
         "-models-dir", get_model_dir(),
         "-output-dir", out_dir,
         "-config", get_cfg_path(),
-        "-max-games-total", "2",
+        "-max-games-total", "6",
         "-seed", "c7_entropy_seed",
         "-override-config",
         "numGameThreads=2,maxVisits=100,maxPlies=40,cheapSearchProb=0.0,logToStdout=false"

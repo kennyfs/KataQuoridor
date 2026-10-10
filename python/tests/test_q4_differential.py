@@ -290,6 +290,7 @@ def test_differential_coverage():
             pos.pawn[2] = (2, 4)
             pos.pawn[3] = (9, 9)
             pos.vwalls.add((2, 2))  # blocks East
+            pos.vwalls.update({(2, 3), (1, 3)})  # close the diagonal steps around c4 (rule of 2026-10-10)
             pos.to_move = 0
             init_b = pos_to_json_dict(pos)
             rules = {"maxPlies": 400, "repetitionDrawCount": 0}

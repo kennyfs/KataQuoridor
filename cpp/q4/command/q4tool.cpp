@@ -410,6 +410,58 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
               << (uint64_t)(count / std::max(secs, 1e-6)) << " nps)\n";
     return 0;
   }
+  else if(subcmd == "jumpbench") {
+    // Move-generation cost of the diagonal-jump rule vs the old generator: getPawnMoves / getLegalActions over a fixed
+    // set of 200 positions (random games, 80% pawn moves, 5..80 plies), and perft nodes per second from the start.
+    Rand rand(777);
+    std::vector<Q4Board> boards;
+    while(boards.size() < 200) {
+      Q4History history;
+      int targetPlies = 5 + (int)rand.nextUInt(75);
+      for(int m = 0; m < targetPlies && !history.isFinished; m++) {
+        std::vector<int> actions;
+        history.currentBoard.getLegalActions(history.currentBoard.toMove, actions);
+        std::vector<int> pawnActs;
+        for(int act : actions)
+          if(Q4Board::isPawnAction(act))
+            pawnActs.push_back(act);
+        if(!pawnActs.empty() && rand.nextBool(0.8))
+          history.play(pawnActs[rand.nextUInt((uint32_t)pawnActs.size())]);
+        else
+          history.play(actions[rand.nextUInt((uint32_t)actions.size())]);
+      }
+      if(!history.isFinished)
+        boards.push_back(history.currentBoard);
+    }
+    const int reps = 20000;
+    for(int pass = 0; pass < 3; pass++) {
+      for(int old = 1; old >= 0; old--) {
+        for(Q4Board& b : boards)
+          b.oldJumpRule = old == 1;
+        uint64_t sum = 0;
+        auto t0 = std::chrono::high_resolution_clock::now();
+        int moves[16];
+        for(int r = 0; r < reps; r++)
+          for(const Q4Board& b : boards)
+            for(int s = 0; s < 4; s++)
+              sum += b.getPawnMoves(s, moves);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / ((double)reps * boards.size() * 4);
+        std::cout << (old ? "old" : "new") << " rule: getPawnMoves " << std::fixed << std::setprecision(1) << ns
+                  << " ns/call (" << sum << " moves)\n";
+      }
+    }
+    for(int old = 1; old >= 0; old--) {
+      Q4Board b;
+      b.oldJumpRule = old == 1;
+      auto t0 = std::chrono::high_resolution_clock::now();
+      uint64_t count = runPerft(b, 3);
+      auto t1 = std::chrono::high_resolution_clock::now();
+      double secs = std::chrono::duration<double>(t1 - t0).count();
+      std::cout << (old ? "old" : "new") << " rule: perft 3 from the start " << count << " nodes, " << (uint64_t)(count / secs) << " nps\n";
+    }
+    return 0;
+  }
   else if(subcmd == "wallbench") {
     // 1,000,000 calls each of isLegalWallBruteForce (flood fill) and isLegalWallBruteForceBFS over all
     // non-conflicting (anchor, orientation) pairs of fixed positions from wall-heavy random games.
