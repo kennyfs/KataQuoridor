@@ -141,6 +141,7 @@ void addPopulationKeys(ConfigParser& cfg, const string& mixedProb) {
 void testP2CompositionSampler() {
   cout << "Running P2 composition sampler..." << endl;
   ConfigParser cfg;
+  cfg.overrideKey("q4LeadWeightEps", "0.0");
   addPopulationKeys(cfg, "0.5");
   Q4PopulationSettings pop = Q4PopulationSettings::load(cfg);
   testAssert(pop.mixedProb == 0.5 && pop.snapshotAges == std::vector<int>({2, 8, 32}) && pop.snapshotVisits == 100);
@@ -324,6 +325,7 @@ void testSelfplayIntegration() {
   Logger logger;
 
   ConfigParser cfg;
+  cfg.overrideKey("q4LeadWeightEps", "0.0");
   cfg.overrideKey("nnCacheSizePowerOfTwo", "16");
   cfg.overrideKey("nnMutexPoolSizePowerOfTwo", "12");
   cfg.overrideKey("maxVisits", "16");
@@ -463,6 +465,7 @@ void testR1RandomNet() {
   Logger logger;
 
   ConfigParser cfg;
+  cfg.overrideKey("q4LeadWeightEps", "0.0");
   cfg.overrideKey("nnCacheSizePowerOfTwo", "16");
   cfg.overrideKey("nnMutexPoolSizePowerOfTwo", "12");
   cfg.overrideKey("maxVisits", "100");
