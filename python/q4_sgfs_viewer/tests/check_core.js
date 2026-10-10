@@ -23,6 +23,10 @@ assert.throws(() => A.parseNodes("nothing"), /not an SGF/);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(A.parseKV("a=1, b = x=y ,c"))), { a: "1", b: "x=y" });
 const c = A.parseMoveComment("0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00");
 assert.deepStrictEqual(JSON.parse(JSON.stringify(c)), { p: [0.31, 0.22, 0.27, 0.15, 0.05], visits: 600, weight: 1 });
+// the optional root leads (docs/q4/Q4Lead.md): read when present, absent otherwise, old comments unchanged
+const cl = A.parseMoveComment("0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1.2,-0.4,-0.3,-0.5");
+assert.deepStrictEqual(JSON.parse(JSON.stringify(cl)), { p: [0.31, 0.22, 0.27, 0.15, 0.05], visits: 600, weight: 1, lead: [1.2, -0.4, -0.3, -0.5] });
+assert.deepStrictEqual(JSON.parse(JSON.stringify(A.parseMoveComment("0.31 0.22 0.27 0.15 0.05 v=600 weight=1.00 lead=1,2,3"))), { p: [0.31, 0.22, 0.27, 0.15, 0.05], visits: 600, weight: 1 });
 assert.strictEqual(A.parseMoveComment("elim"), null);
 assert.strictEqual(A.parseMoveComment("0.1 0.2 0.3 0.4 0.5 weight=1"), null, "no visits");
 assert.strictEqual(A.parseMoveComment("0.5 0.2 0.3 0.4 0.5 v=1")?.p[0], 0.5);
@@ -83,7 +87,7 @@ assert.deepStrictEqual(Array.from(A.wilson(0, 0)), [0, 1]);
 const file = process.argv[2] || path.join(__dirname, "fixture.sgfs");
 const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(l => l.startsWith("(;"));
 assert(lines.length > 0, "no games");
-let kinds = new Set();
+let kinds = new Set(), hasLead = false;
 for (const line of lines) {
   const hd = A.headerOf(line), game = A.parseGame(line);
   assert.strictEqual(game.events.filter(e => !e.elim).length, hd.plies, "header ply count = parsed plies");
@@ -100,7 +104,9 @@ for (const line of lines) {
   assert.strictEqual(sm.plies, hd.plies);
   assert.ok(sm.swing >= 0 && sm.swing <= 1);
   for (const e of game.events) if (e.comment) assert.ok(Math.abs(e.comment.p.reduce((a, b) => a + b, 0) - 1) < 0.03, "probabilities sum to 1");
+  for (const e of game.events) if (e.comment && e.comment.lead) { hasLead = true; assert.strictEqual(e.comment.lead.length, 4); }
 }
+assert.ok(hasLead, "fixture lacks lead= comments (games written with docs/q4/Q4Lead.md)");
 console.log(`${lines.length} games ok; seen: ${[...kinds].sort().join(", ")}`);
 for (const need of ["draw-rep", "draw-max", "elim", "match"]) assert.ok(kinds.has(need), "fixture lacks " + need);
 console.log("check_core: all checks passed");

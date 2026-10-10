@@ -338,9 +338,12 @@ function renderCards(dist) {
   }
   $("players").innerHTML = html;
 }
+let chartMode = "win";   // "win": the five win probabilities; "lead": the four leads (docs/q4/Q4Lead.md)
 function renderEval(dist) {
   const ev = ply < cur.events.length ? cur.events[ply] : null, c = ev && ev.comment;
-  const bar = $("evBar"), nums = $("evNums");
+  const bar = $("evBar"), nums = $("evNums"), leadEl = $("evLead");
+  const leadNames = ["S", "W", "N", "E"];
+  leadEl.innerHTML = c && c.lead ? c.lead.map((x, i) => `<span style="--c:${SEAT_COL[i]}">lead ${leadNames[i]} <b>${(x > 0 ? "+" : "") + x.toFixed(1)}</b></span>`).join("") : "";
   if (c) {
     const colors = SEAT_COL.concat([DRAW_COL]), names = ["S", "W", "N", "E", "draw"];
     bar.innerHTML = c.p.map((p, i) => `<div style="flex:${Math.max(p, 0.0001)};background:${colors[i]}"></div>`).join("");
@@ -367,6 +370,7 @@ function renderInfo() {
   for (let s = 0; s < 4; s++) add(`<span class="who ${SEATS[s]}"></span> ${SEATS[s]}`, `${escapeHtml(h.names[s])} · ${escapeHtml(h.types[s] || "?")}${h.visits[s] ? " @" + h.visits[s] : ""}${modelOf(h, s) && modelOf(h, s) !== h.names[s] ? " · " + escapeHtml(modelOf(h, s)) : ""}`);
   if (h.gameHash) add("Hash", `<code>${h.gameHash}</code>`);
   $("info").innerHTML = rows.join("");
+  $("traceH").textContent = chartMode === "lead" ? "Leads in cells (search before each move)" : "Win probabilities (search before each move)";
   $("chartLegend").innerHTML = ["S", "W", "N", "E"].map((n, i) => `<span class="sq" style="--c:${SEAT_COL[i]}">${n}</span>`).join("") + `<span class="sq" style="--c:${DRAW_COL}">draw</span>`;
 }
 function renderMoveList() {
@@ -398,10 +402,17 @@ function update(scroll = true) {
 }
 
 // ---- chart -------------------------------------------------------------------------------
+// The value range of the graph: [0, 1] for win probabilities; for leads, a range around 0 that holds every lead of the game
+function chartDomain() {
+  if (chartMode !== "lead") return { lo: 0, hi: 1 };
+  let lo = -1, hi = 1;
+  for (const e of cur.events) if (e.comment && e.comment.lead) for (const x of e.comment.lead) { lo = Math.min(lo, x); hi = Math.max(hi, x); }
+  return { lo: Math.floor(lo), hi: Math.ceil(hi) };
+}
 function chartGeom() {
   const svg = $("chart"), W = svg.clientWidth || 320, H = 230, L = 34, R = 10, T = 10, B = 22;
-  const n = Math.max(cur.events.length, 1);
-  return { W, H, L, R, T, B, X: i => L + (W - L - R) * i / n, Y: p => T + (H - T - B) * (1 - p), n };
+  const n = Math.max(cur.events.length, 1), { lo, hi } = chartDomain();
+  return { W, H, L, R, T, B, X: i => L + (W - L - R) * i / n, Y: p => T + (H - T - B) * (1 - (p - lo) / (hi - lo)), n, lo, hi };
 }
 function chartPlyAt(e) {
   const r = $("chart").getBoundingClientRect(), g = chartGeom();
@@ -412,21 +423,23 @@ function renderChart() {
   const svg = $("chart"), g = chartGeom();
   svg.setAttribute("viewBox", `0 0 ${g.W} ${g.H}`);
   svg.innerHTML = "";
-  for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-    el("line", { x1: g.L, x2: g.W - g.R, y1: g.Y(t), y2: g.Y(t), stroke: "#e8e4da", "stroke-width": 1 }, svg);
-    txt(svg, g.L - 5, g.Y(t) + 3.5, Math.round(t * 100) + "%", { "text-anchor": "end" });
+  const ticks = chartMode === "lead" ? [g.lo, 0, g.hi] : [0, 0.25, 0.5, 0.75, 1];
+  for (const t of ticks) {
+    el("line", { x1: g.L, x2: g.W - g.R, y1: g.Y(t), y2: g.Y(t), stroke: t === 0 && chartMode === "lead" ? "#9aa5b1" : "#e8e4da", "stroke-width": 1 }, svg);
+    txt(svg, g.L - 5, g.Y(t) + 3.5, chartMode === "lead" ? (t > 0 ? "+" : "") + t : Math.round(t * 100) + "%", { "text-anchor": "end" });
   }
   const step = Math.max(1, Math.ceil(cur.events.length / 8 / 10) * 10);
   for (let i = 0; i <= cur.events.length; i += step) txt(svg, g.X(i), g.H - 6, i, { "text-anchor": "middle" });
   if (cur.h.startTurnIdx > 0) el("rect", { x: g.X(0), y: g.T, width: g.X(Math.min(cur.h.startTurnIdx, cur.events.length)) - g.X(0), height: g.H - g.T - g.B, fill: "#00000008" }, svg);
-  const series = [4, 0, 1, 2, 3];   // draw first so the seats are on top
+  const series = chartMode === "lead" ? [0, 1, 2, 3] : [4, 0, 1, 2, 3];   // draw first so the seats are on top
   const win = cur.h.winner;
   for (const t of series) {
     const col = t === 4 ? DRAW_COL : SEAT_COL[t], emph = t === win;
     let d = "", pen = false;
     cur.events.forEach((e, i) => {
-      if (!e.comment) { pen = false; return; }
-      d += (pen ? "L" : "M") + g.X(i).toFixed(1) + " " + g.Y(e.comment.p[t]).toFixed(1);
+      const v = !e.comment ? null : chartMode === "lead" ? (e.comment.lead ? e.comment.lead[t] : null) : e.comment.p[t];
+      if (v === null) { pen = false; return; }
+      d += (pen ? "L" : "M") + g.X(i).toFixed(1) + " " + g.Y(v).toFixed(1);
       pen = true;
     });
     if (d) el("path", { d, fill: "none", stroke: col, "stroke-width": emph ? 3 : 1.6, opacity: emph ? 1 : (win >= 0 ? 0.7 : 0.9), "stroke-dasharray": t === 4 ? "4 3" : "none", "stroke-linejoin": "round" }, svg);

@@ -77,6 +77,7 @@ $("gameList").addEventListener("click", () => { if (narrow.matches) $("gamesPane
 }
 
 $("chart").addEventListener("click", e => { if (cur) { ply = chartPlyAt(e); update(); } });
+$("chartMode").addEventListener("change", e => { chartMode = e.target.value; if (cur) update(false); });
 $("chart").addEventListener("mousemove", e => {
   if (!cur) return;
   const i = chartPlyAt(e), g = chartGeom(), hv = $("chart")._hover;
@@ -85,7 +86,9 @@ $("chart").addEventListener("mousemove", e => {
   let html = `<b>Position ${i}</b>` + (ev ? ` · next ${SEATS[ev.seat]} ${ev.elim ? "eliminated" : ev.text}` : " · end");
   if (ev && ev.comment) {
     const names = ["S", "W", "N", "E", "draw"], cols = SEAT_COL.concat([DRAW_COL]);
-    html += ev.comment.p.map((p, t) => `<br>${sw(cols[t])}${names[t]} ${pct(p, 1)}`).join("") + `<br>visits ${ev.comment.visits}`;
+    if (chartMode === "lead" && ev.comment.lead) html += ev.comment.lead.map((x, t) => `<br>${sw(cols[t])}lead ${names[t]} ${(x > 0 ? "+" : "") + x.toFixed(1)}`).join("");
+    else html += ev.comment.p.map((p, t) => `<br>${sw(cols[t])}${names[t]} ${pct(p, 1)}`).join("");
+    html += `<br>visits ${ev.comment.visits}`;
   } else html += `<br>${ev && i < cur.h.startTurnIdx ? "opening ply" : ev ? "no search" : resultFull(cur.h)}`;
   showTip(e, html);
 });

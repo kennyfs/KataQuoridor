@@ -56,6 +56,7 @@
         <div class="k" id="evWinK">Win probability · search before this move</div>
         <div class="pbar" id="evBar"></div>
         <div class="pnums" id="evNums"></div>
+        <div class="pnums" id="evLead"></div>
       </div>
       <div class="ev-tile" id="evVis">
         <div class="k">Visits · weight</div>
@@ -84,8 +85,9 @@
   <section class="panel right">
     <h2>Game</h2>
     <dl id="info"></dl>
-    <h2 class="trace-h">Win probabilities (search before each move)</h2>
+    <h2 class="trace-h" id="traceH">Win probabilities (search before each move)</h2>
     <div class="legend" id="chartLegend"></div>
+    <label class="chartmode">graph <select id="chartMode"><option value="win">win probability</option><option value="lead">lead (cells)</option></select></label>
     <svg id="chart"></svg>
     <div id="moveList"></div>
   </section>

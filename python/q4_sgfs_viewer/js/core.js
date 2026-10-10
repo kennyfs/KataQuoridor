@@ -54,14 +54,21 @@ function parseMoveComment(text) {
   if (parts.length < 6) return null;
   const p = parts.slice(0, 5).map(Number);
   if (p.some(x => !isFinite(x) || x < 0 || x > 1.0001)) return null;
-  let visits = null, weight = 0;
+  let visits = null, weight = 0, lead = null;
   for (const part of parts.slice(5)) {
     const e = part.indexOf("=");
     if (e < 0) continue;
     if (part.slice(0, e) === "v") visits = +part.slice(e + 1);
     else if (part.slice(0, e) === "weight") weight = +part.slice(e + 1);
+    else if (part.slice(0, e) === "lead") {   // docs/q4/Q4Lead.md: the root leads of seats S, W, N, E, in cells (optional)
+      const v = part.slice(e + 1).split(",").map(Number);
+      if (v.length === 4 && v.every(isFinite)) lead = v;
+    }
   }
-  return visits === null || !isFinite(visits) ? null : { p, visits, weight };
+  if (visits === null || !isFinite(visits)) return null;
+  const out = { p, visits, weight };
+  if (lead) out.lead = lead;
+  return out;
 }
 
 // ---- header ----------------------------------------------------------------
