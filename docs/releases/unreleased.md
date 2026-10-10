@@ -233,3 +233,15 @@ See [QuoridorIOv3.md §9](../QuoridorIOv3.md#9-λ--0-2026-10-02).
 - **`tf3_b5c256_quoridor_v3`** preset (3.67M parameters, 5 nested-bottleneck blocks of 3 transformer layers, 256 trunk,
   fson normalization, SiLU), KataGo's mainline design scaled to Quoridor.
 - `kq_ladder`: `extra_pairs` for pairs such as two nets at equal search time.
+
+## Q4: play and analysis GUI (new)
+
+- **`python3 python/q4_play_gui/serve.py --katago KATAGO --model NET`**: a local browser app to play Four-at-a-Table
+  with any seats (human, Q4 net with visits, or a bot), eliminate a seat (undo brings it back, with its walls), review
+  and branch, and analyse positions live with the net (candidates, principal variations, five win probabilities, raw
+  net value). Downloads `.sgfs` with the analysis as move comments, and loads `.sgfs` or pasted move lists. See
+  [q4/Q4PlayGUI.md](q4/Q4PlayGUI.md).
+- **Engine (`katago q4qtp`)**: `q4-search_analyze_cancellable` (live analysis, cancelled by a line on stdin, tree kept),
+  `q4-set-param` (search settings, `q4OwnSeats` added), `q4-genmove-bot` (bots for any seat), `q4-position` (the
+  position as JSON). `q4-search-params` prints the opponent mode and the lead settings too.
+- The Duel GUI and the Q4 viewer are unchanged.

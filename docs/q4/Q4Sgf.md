@@ -95,6 +95,14 @@ dicts of `load_records`. `q4tool style` reads SGF lines (and, as a test input on
 `"Draw"` / `"none"`, `events` = `{"a": "f2"}` / `{"elim": seat1to4}`, `comments`, `gameHash`, `match`) plus `gtype`,
 `startTurnIdx`, `drawReason` and `moveComments` (per event `None` or `{"p": [5], "visits", "weight"}`).
 
+## 6a. The play GUI's download
+
+`python/q4_play_gui/` (see [Q4PlayGUI.md](Q4PlayGUI.md)) downloads the game as the engine's `printrecord` line, with two
+additions: the comment of each move is the search values the analysis stored for the position before it (the
+`C[pS pW pN pE pD v=.. weight=1.00 lead=..]` form of §4; `weight` is 1.00 for an analysis, as in q4match), and the root's
+`type<i>` says each seat's kind as set in the GUI (`human`, `search` for an AI net, or the bot's name). The download holds
+the game up to the position shown in the GUI, not the undone moves after it.
+
 ## 7. Viewer
 
 `python3 python/q4_sgfs_viewer/serve.py FILE.sgfs` (`--host 0.0.0.0` for a phone on the LAN) or open

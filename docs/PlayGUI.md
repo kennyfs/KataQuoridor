@@ -92,3 +92,8 @@ by the AI's root search when it has one. A finished game shows the exact result.
 cd python
 python -m pytest -o addopts="" play_gui/tests
 ```
+
+## Q4 (Four at a Table)
+
+The Q4 play and analysis GUI (for the four-seat game, with a Q4 net and the Q4 engine commands) is a separate
+application: `python3 python/q4_play_gui/serve.py`. See [q4/Q4PlayGUI.md](q4/Q4PlayGUI.md). This Duel GUI is unchanged.
