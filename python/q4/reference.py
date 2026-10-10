@@ -161,6 +161,8 @@ class Pos:
         self.repetition_draw_count: int = repetition_draw_count
         self.winner: Optional[int] = None  # 0..3 for seat win
         self.is_draw: bool = False
+        # Reader-only: replay of records written before the diagonal-jump rule (no jump=diag in the root C).
+        self.old_jump_rule: bool = False
         # Repetition history: list of position keys since last wall or elimination
         self.position_history: List[Tuple] = []
         self._record_position()
@@ -176,6 +178,7 @@ class Pos:
         p.plies = self.plies
         p.winner = self.winner
         p.is_draw = self.is_draw
+        p.old_jump_rule = self.old_jump_rule
         p.position_history = list(self.position_history)
         return p
 
@@ -276,6 +279,12 @@ def pawn_moves(pos: Pos, seat: Optional[int] = None) -> List[Tuple[int, int]]:
     ordinary_moves: Set[Tuple[int, int]] = set()
     two_pawn_candidates: Set[Tuple[int, int]] = set()
 
+    def add_diagonals(c1, dx, dy):
+        for sdx, sdy in ((-dy, dx), (dy, -dx)):
+            c_diag = (c1[0] + sdx, c1[1] + sdy)
+            if can_step(h, v, c1, c_diag) and c_diag not in occupied:
+                ordinary_moves.add(c_diag)
+
     for dx, dy in DIRS:
         c1 = (me[0] + dx, me[1] + dy)
         if not can_step(h, v, me, c1):
@@ -294,19 +303,16 @@ def pawn_moves(pos: Pos, seat: Optional[int] = None) -> List[Tuple[int, int]]:
                 ordinary_moves.add(c2)
                 # Diagonal jump is forbidden when straight jump is clear
             else:
-                # c2 is occupied by another pawn!
-                # Diagonal jump is forbidden (blocked by pawn, not wall/edge).
-                # Check two-pawn jump candidate C3
+                # c2 is occupied by another pawn: the two-pawn jump to C3 is a candidate, and the diagonal
+                # steps around c1 are legal (rule of 2026-10-10; not with old_jump_rule).
                 c3 = (c2[0] + dx, c2[1] + dy)
                 if can_step(h, v, c2, c3) and c3 not in occupied:
                     two_pawn_candidates.add(c3)
+                if not pos.old_jump_rule:
+                    add_diagonals(c1, dx, dy)
         else:
-            # Straight step from c1 to c2 is blocked by wall or board edge.
-            # Diagonal jumps are permitted!
-            for sdx, sdy in ((-dy, dx), (dy, -dx)):
-                c_diag = (c1[0] + sdx, c1[1] + sdy)
-                if can_step(h, v, c1, c_diag) and c_diag not in occupied:
-                    ordinary_moves.add(c_diag)
+            # Straight step from c1 to c2 is blocked by wall or board edge: diagonal steps around c1.
+            add_diagonals(c1, dx, dy)
 
     final_moves = set(ordinary_moves)
 

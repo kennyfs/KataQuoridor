@@ -11,7 +11,7 @@ cpp/q4/q4record.cpp.
     gameHash    32 hex digits (only if the root comment has one)
     match       {"table", "opening", "rotation", "openingPlies", "drawReason"} (only for match / gatekeeper games)
 
-plus the keys "gtype", "startTurnIdx", "drawReason" ("" if none) and, when comments exist, "moveComments": one entry
+plus the keys "gtype", "startTurnIdx", "drawReason" ("" if none), "jumpDiag" (False for files without jump=diag) and, when comments exist, "moveComments": one entry
 per event, None or {"p": [pS, pW, pN, pE, pDraw], "visits", "weight"} and, if the comment has it, "lead": [4 floats]
 (docs/q4/Q4Lead.md; old comments have no "lead" key).
 """
@@ -138,7 +138,8 @@ class Q4Record:
                  match: Optional[Dict[str, Any]] = None,
                  gtype: str = "normal",
                  start_turn_idx: int = 0,
-                 draw_reason: str = ""):
+                 draw_reason: str = "",
+                 jump_diag: bool = True):
         self.rules = rules or {
             "maxPlies": 400,
             "repetitionDrawCount": 0,
@@ -155,6 +156,8 @@ class Q4Record:
         self.gtype = gtype
         self.start_turn_idx = start_turn_idx
         self.draw_reason = draw_reason
+        # Rule version: False for files without jump=diag in the root C (played under the old jump rule).
+        self.jump_diag = jump_diag
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -165,6 +168,7 @@ class Q4Record:
             "gtype": self.gtype,
             "startTurnIdx": self.start_turn_idx,
             "drawReason": self.draw_reason,
+            "jumpDiag": self.jump_diag,
         }
         if self.comments:
             d["comments"] = self.comments
@@ -197,6 +201,8 @@ class Q4Record:
         if dr:
             out.append(f"DR[{dr}]")
         c = [f"gtype={self.gtype}"]
+        if self.jump_diag:
+            c.append("jump=diag")
         if self.game_hash:
             c.append(f"gameHash={self.game_hash}")
         c.append(f"startTurnIdx={self.start_turn_idx}")
@@ -213,6 +219,7 @@ class Q4Record:
 
         pos = Pos(max_plies=rules.get("maxPlies", 400), repetition_draw_count=rules.get("repetitionDrawCount", 0),
                   initial_walls=walls)
+        pos.old_jump_rule = not self.jump_diag
         for i, ev in enumerate(self.events):
             if "elim" in ev:
                 seat = ev["elim"] - 1
@@ -247,6 +254,7 @@ class Q4Record:
         rec.draw_reason = root.get("DR", "")
         kv = parse_kv(root.get("C", ""))
         rec.gtype = kv.get("gtype", "normal")
+        rec.jump_diag = kv.get("jump") == "diag"
         rec.start_turn_idx = int(kv.get("startTurnIdx", 0))
         rec.game_hash = kv.get("gameHash")
         for i in range(4):
@@ -280,6 +288,7 @@ class Q4Record:
         rep = self.rules.get("repetitionDrawCount", 0)
         walls = self.rules.get("initialWalls", [7, 7, 7, 7])
         pos = Pos(max_plies=max_plies, repetition_draw_count=rep, initial_walls=walls)
+        pos.old_jump_rule = not self.jump_diag
 
         for ev in self.events:
             if "elim" in ev:
@@ -300,7 +309,8 @@ def record_dict_to_sgf_line(d: Dict[str, Any]) -> str:
     rec = Q4Record(
         rules=d.get("rules"), players=d.get("players"), result=d.get("result", "none"), events=d.get("events", []),
         comments=d.get("comments", []), game_hash=d.get("gameHash"), match=d.get("match"),
-        gtype=d.get("gtype", "normal"), start_turn_idx=d.get("startTurnIdx", 0), draw_reason=d.get("drawReason", ""))
+        gtype=d.get("gtype", "normal"), start_turn_idx=d.get("startTurnIdx", 0), draw_reason=d.get("drawReason", ""),
+        jump_diag=d.get("jumpDiag", True))
     rec.rules = {"maxPlies": 400, "repetitionDrawCount": 0, "initialWalls": [7, 7, 7, 7], **rec.rules}
     return rec.to_sgf_line()
 

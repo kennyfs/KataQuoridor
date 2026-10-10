@@ -326,8 +326,9 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
             }
           }
           Q4History history(rules);
-          if(j.contains("initialBoard")) {
-            Q4Board initB = parseBoardFromJson(j["initialBoard"]);
+          if(j.contains("initialBoard") || j.value("oldJump", false)) {
+            Q4Board initB = j.contains("initialBoard") ? parseBoardFromJson(j["initialBoard"]) : Q4Board(rules);
+            initB.oldJumpRule = j.value("oldJump", false);  // test input: replay with the generator of the old rule
             history.clear(initB, rules);
           }
 
@@ -347,6 +348,7 @@ int MainCmds::q4tool(const std::vector<std::string>& args) {
         }
         else {
           board = parseBoardFromJson(j);
+          board.oldJumpRule = j.value("oldJump", false);
           isFinished = board.isFinished();
           winner = board.getWinner();
           isDraw = false;

@@ -122,6 +122,7 @@ def record_features(record: dict) -> Tuple[List[int], np.ndarray]:
     rules = record.get("rules", {})
     pos = Pos(max_plies=rules.get("maxPlies", 400), repetition_draw_count=rules.get("repetitionDrawCount", 0),
               initial_walls=rules.get("initialWalls", [7, 7, 7, 7]))
+    pos.old_jump_rule = not record.get("jumpDiag", True)
     tracker = StyleTracker()
     perspectives = [pos.to_move]
     feats = [tracker.encode(pos.to_move)]

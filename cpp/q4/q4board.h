@@ -68,6 +68,9 @@ struct Q4Board {
   int8_t wallsLeft[NUM_SEATS];          // Walls remaining for each seat
   uint8_t alive;                        // Bitmask: (1 << seat) if seat is alive
   int8_t toMove;                        // Seat index (0..3)
+  // Reader-only: replay of records written before the diagonal-jump rule (no jump=diag in the root C). Never set
+  // for new games, not part of the position hash.
+  bool oldJumpRule = false;
 
   std::bitset<NUM_WALL_ANCHORS> hWalls; // Placed horizontal walls
   std::bitset<NUM_WALL_ANCHORS> vWalls; // Placed vertical walls

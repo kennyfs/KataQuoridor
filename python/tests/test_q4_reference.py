@@ -140,20 +140,20 @@ def test_diagonal_jump_at_board_edge():
     assert (1, 0) in moves
 
 
-def test_no_diagonal_when_cell_behind_is_pawn():
+def test_diagonal_when_cell_behind_is_pawn():
+    # Rule of 2026-10-10: C2 holds an alive pawn -> the diagonal steps around C1 are legal (the old rule had none).
     pos = Pos()
-    # Pawn 0 at (5, 1), Pawn 1 at (5, 2), Pawn 2 at (5, 3)
     pos.pawn[0] = (5, 1)
     pos.pawn[1] = (5, 2)
     pos.pawn[2] = (5, 3)
     pos.to_move = 0
-    # No wall between (5, 2) and (5, 3)
     moves = pawn_moves(pos, 0)
-    # Straight single jump to (5, 3) is blocked because (5, 3) is occupied.
-    # Diagonal jumps to (4, 2) and (6, 2) MUST NOT be permitted because straight jump
-    # was not blocked by wall or board edge!
-    assert (4, 2) not in moves
-    assert (6, 2) not in moves
+    assert (4, 2) in moves
+    assert (6, 2) in moves
+    # The old generator (reader-only flag for records without jump=diag) has none.
+    pos.old_jump_rule = True
+    assert (4, 2) not in pawn_moves(pos, 0)
+    assert (6, 2) not in pawn_moves(pos, 0)
 
 
 def test_two_pawn_jump_allowed_and_denied_by_distance_restriction():
@@ -172,8 +172,13 @@ def test_two_pawn_jump_allowed_and_denied_by_distance_restriction():
     # (5, 0) dist is 5 > 4.
     # All ordinary moves increase distance from 4 to 5!
     # So without any walls, two-pawn jump to (5, 4) (dist 1) WOULD be allowed!
+    # (new rule: the diagonal steps (4, 2) and (6, 2) around c1 are ordinary moves with distance 4, not larger,
+    # so the two-pawn jump is denied here; with the old generator it is allowed.)
     moves = pawn_moves(pos, 0)
-    assert (5, 4) in moves
+    assert (5, 4) not in moves
+    pos.old_jump_rule = True
+    assert (5, 4) in pawn_moves(pos, 0)
+    pos.old_jump_rule = False
 
     # Case B: Denied because an ordinary move does NOT strictly increase distance.
     # Put pawn 0 at (5, 2) with dist 3.
@@ -223,8 +228,16 @@ def test_two_pawn_jump_landing_on_center_wins():
     pos.pawn[1] = (3, 5)
     pos.pawn[2] = (4, 5)
     pos.to_move = 0
+    # New rule: the diagonal steps (3, 4), (3, 6) around c1 have distance 3, not larger -> the jump is denied,
+    # unless walls close them (hwalls below block (3, 4)-(3, 5) and (3, 5)-(3, 6)).
+    assert (5, 5) not in pawn_moves(pos, 0)
+    pos.hwalls.update({(3, 4), (3, 5)})
     moves = pawn_moves(pos, 0)
+    assert (3, 4) not in moves and (3, 6) not in moves
     assert (5, 5) in moves
+    pos.old_jump_rule = True
+    assert (5, 5) in pawn_moves(pos, 0)
+    pos.old_jump_rule = False
 
     # Play the move
     pos2 = play(pos, ('p', (5, 5)))
@@ -377,15 +390,6 @@ def test_perft_pinned_numbers():
     p2.pawn[3] = (9, 9)
     p2.vwalls.add((2, 2)) # c3v
     p2.to_move = 0
-    assert perft(p2, 1) == 3
-    assert perft(p2, 2) == 9
-    assert perft(p2, 3) == 35
-    assert perft(p2, 4) == 140
-    assert perft(p2, 5) == 564
-    assert perft(p2, 6) == 2088
-    assert perft(p2, 7) == 7776
-    assert perft(p2, 8) == 27216
-
     # Position 3: Two-pawn jump into center a few plies deep
     p3 = Pos()
     p3.walls_left = [0, 0, 0, 0]
@@ -394,11 +398,11 @@ def test_perft_pinned_numbers():
     p3.pawn[2] = (4, 4)
     p3.pawn[3] = (9, 9)
     p3.to_move = 2
-    assert perft(p3, 1) == 4
-    assert perft(p3, 2) == 16
-    assert perft(p3, 3) == 64
-    assert perft(p3, 4) == 244
-    assert perft(p3, 5) == 892
-    assert perft(p3, 6) == 2812
-    assert perft(p3, 7) == 10792
-    assert perft(p3, 8) == 41312
+    # Pinned numbers per rule: the diagonal-jump rule of 2026-10-10 and the old rule (old_jump_rule).
+    new = {'p2': [3, 9, 36, 144, 616, 2212, 8316, 29106], 'p3': [4, 16, 68, 272, 992, 3092, 12052, 46464]}
+    old = {'p2': [3, 9, 35, 140, 564, 2088, 7776, 27216], 'p3': [4, 16, 64, 244, 892, 2812, 10792, 41312]}
+    for name, p in (('p2', p2), ('p3', p3)):
+        p.old_jump_rule = False
+        assert [perft(p, d) for d in range(1, 9)] == new[name]
+        p.old_jump_rule = True
+        assert [perft(p, d) for d in range(1, 9)] == old[name]

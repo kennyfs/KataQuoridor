@@ -409,6 +409,16 @@ int Q4Board::getPawnMoves(int seat, int* outMoves) const {
   int twoPawn[4];
   int numTwoPawn = 0;
 
+  auto addDiagonals = [&](int c1, int d) {
+    for(int dp : {(d + 1) & 3, (d + 3) & 3}) {
+      if(!(blocked[c1] & (1 << dp))) {
+        int cd = c1 + DIR_OFFSET[dp];
+        if(occupant[cd] < 0)
+          ordinary[numOrdinary++] = cd;
+      }
+    }
+  };
+
   for(int d = 0; d < 4; d++) {
     if(blocked[me] & (1 << d))
       continue;
@@ -426,29 +436,20 @@ int Q4Board::getPawnMoves(int seat, int* outMoves) const {
         ordinary[numOrdinary++] = c2;
       }
       else {
-        // c2 is occupied: diagonal jumps forbidden, check two-pawn jump
+        // c2 is occupied by an alive pawn: the diagonal steps around c1 are legal (unless oldJumpRule), and the
+        // two-pawn jump stays a candidate.
         if(!(blocked[c2] & (1 << d))) {
           int c3 = c2 + DIR_OFFSET[d];
-          if(occupant[c3] < 0) {
+          if(occupant[c3] < 0)
             twoPawn[numTwoPawn++] = c3;
-          }
         }
+        if(!oldJumpRule)
+          addDiagonals(c1, d);
       }
     }
     else {
       // Straight step from c1 is blocked by wall or board edge: diagonal jumps permitted
-      int dPerp1 = (d + 1) & 3;
-      int dPerp2 = (d + 3) & 3;
-      if(!(blocked[c1] & (1 << dPerp1))) {
-        int cd1 = c1 + DIR_OFFSET[dPerp1];
-        if(occupant[cd1] < 0)
-          ordinary[numOrdinary++] = cd1;
-      }
-      if(!(blocked[c1] & (1 << dPerp2))) {
-        int cd2 = c1 + DIR_OFFSET[dPerp2];
-        if(occupant[cd2] < 0)
-          ordinary[numOrdinary++] = cd2;
-      }
+      addDiagonals(c1, d);
     }
   }
 

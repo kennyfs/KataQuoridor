@@ -257,6 +257,8 @@ std::string Q4Record::toSgfLine() const {
 
   std::ostringstream c;
   c << "gtype=" << (gtype.empty() ? "normal" : gtype);
+  if(jumpDiag)
+    c << ",jump=diag";
   if(hasGameHash)
     c << ",gameHash=" << Global::strprintf("%016llx%016llx", (unsigned long long)gameHash0, (unsigned long long)gameHash1);
   c << ",startTurnIdx=" << startTurnIdx;
@@ -271,7 +273,9 @@ std::string Q4Record::toSgfLine() const {
     c << ",table=" << matchTable << ",opening=" << matchOpening << ",rotation=" << matchRotation;
   out << "C[" << escapeText(c.str()) << "]";
 
-  Q4History hist(rules);
+  Q4Board startBoard(rules);
+  startBoard.oldJumpRule = !jumpDiag;
+  Q4History hist(startBoard, rules);
   for(size_t i = 0; i < events.size(); i++) {
     const Q4Event& ev = events[i];
     out << ";";
@@ -325,10 +329,12 @@ Q4Record Q4Record::fromSgfLine(const std::string& line) {
     rec.result = letterToResult(*re);
   if(const std::string* dr = findProp(root, "DR"))
     rec.drawReason = *dr;
+  rec.jumpDiag = false;  // set below by jump=diag in the root C
   if(const std::string* c = findProp(root, "C")) {
     auto kv = parseKV(*c);
     if(kv.count("gtype"))
       rec.gtype = kv["gtype"];
+    rec.jumpDiag = kv.count("jump") && kv["jump"] == "diag";
     if(kv.count("startTurnIdx"))
       rec.startTurnIdx = toInt(kv["startTurnIdx"], "startTurnIdx");
     if(kv.count("gameHash")) {
@@ -355,7 +361,9 @@ Q4Record Q4Record::fromSgfLine(const std::string& line) {
     }
   }
 
-  Q4History hist(rec.rules);
+  Q4Board startBoard(rec.rules);
+  startBoard.oldJumpRule = !rec.jumpDiag;
+  Q4History hist(startBoard, rec.rules);
   bool anyComment = false;
   for(size_t k = 1; k < nodes.size(); k++) {
     const Node& node = nodes[k];
@@ -401,7 +409,9 @@ Q4Record Q4Record::fromSgfLine(const std::string& line) {
 }
 
 void Q4Record::replay(Q4History& history) const {
-  history.clear(Q4Board(rules), rules);
+  Q4Board startBoard(rules);
+  startBoard.oldJumpRule = !jumpDiag;
+  history.clear(startBoard, rules);
   for(const auto& ev : events) {
     if(ev.isElimination) {
       history.eliminate(ev.eliminatedSeat);

@@ -39,6 +39,7 @@ def game_stats(rec):
     rules = rec.get("rules", {})
     pos = Pos(max_plies=rules.get("maxPlies", 400), repetition_draw_count=rules.get("repetitionDrawCount", 0),
               initial_walls=rules.get("initialWalls", [7, 7, 7, 7]))
+    pos.old_jump_rule = not rec.get("jumpDiag", True)
     comments = rec.get("moveComments") or [None] * len(rec["events"])
     winner = int(rec["result"][0]) - 1 if rec["result"].endswith("+") else -1
     per_seat = collections.defaultdict(new_bucket)

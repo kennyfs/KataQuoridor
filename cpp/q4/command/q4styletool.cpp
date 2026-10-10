@@ -67,7 +67,9 @@ static int runStyle(const std::vector<std::string>& args) {
     }
     else {
       rec = Q4Record::fromSgfLine(Global::trim(line));
-      hist.clear(Q4Board(rec.rules), rec.rules);
+      Q4Board startBoard(rec.rules);
+      startBoard.oldJumpRule = !rec.jumpDiag;
+      hist.clear(startBoard, rec.rules);
     }
     std::vector<int> perspectives;
     std::string features = "[";

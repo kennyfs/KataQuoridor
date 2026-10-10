@@ -178,6 +178,7 @@ Q4Board applyBoard(const Q4Board& board, int sym) {
   Q4Board b;
   b.alive = board.alive;
   b.toMove = board.toMove;
+  b.oldJumpRule = board.oldJumpRule;
   std::fill(std::begin(b.occupant), std::end(b.occupant), -1);
 
   for(int s = 0; s < Q4Board::NUM_SEATS; s++) {

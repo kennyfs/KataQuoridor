@@ -43,6 +43,9 @@ struct Q4Record {
 
   std::string gtype;                 // "normal", "fork", "mixed" (root C: gtype)
   int startTurnIdx = 0;              // opening plies that were not played by the engines (root C: startTurnIdx)
+  // Rule version: true for records written under the diagonal-jump rule (root C: jump=diag). Files without the key
+  // were played under the old rule and are replayed with the old generator (Q4Board::oldJumpRule).
+  bool jumpDiag = true;
   std::string drawReason;            // "", "maxPlies", "repetition" or "unfinished"
 
   // Optional match metadata (written by q4match and the gatekeeper); matchOpening < 0 means none.

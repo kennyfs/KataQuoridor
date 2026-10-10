@@ -87,6 +87,12 @@ def analyze_pawn_geometry(pos: Pos):
                 c3 = (c2[0] + dx, c2[1] + dy)
                 if can_step(h, v, c2, c3) and c3 not in occupied:
                     two_pawn_cands.add(c3)
+                # c2 holds a pawn: the diagonal steps around c1 are legal too (rule of 2026-10-10)
+                for sdx, sdy in ((-dy, dx), (dy, -dx)):
+                    cd = (c1[0] + sdx, c1[1] + sdy)
+                    if can_step(h, v, c1, cd) and cd not in occupied:
+                        ordinary_moves.add(cd)
+                        diagonal_jump = True
         else:
             # Straight jump blocked by wall or board edge
             for sdx, sdy in ((-dy, dx), (dy, -dx)):

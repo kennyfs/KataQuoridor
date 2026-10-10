@@ -308,6 +308,18 @@ void testTerminalRules() {
     b.toMove = 0;
     vector<int> moves;
     b.getPawnMoves(0, moves);
+    // The diagonal steps (3, 4) and (3, 6) around c1 are ordinary moves of distance 3, not larger: jump denied.
+    testAssert(find(moves.begin(), moves.end(), Q4Board::CENTER_CELL) == moves.end());
+    // Closed by walls ((3, 4)h and (3, 5)h), the jump is legal again; so it is with the old generator.
+    Q4Board old = b;
+    old.oldJumpRule = true;
+    old.getPawnMoves(0, moves);
+    testAssert(find(moves.begin(), moves.end(), Q4Board::CENTER_CELL) != moves.end());
+    b.applyWall(3, 4, true);
+    b.applyWall(3, 5, true);
+    b.toMove = 0;
+    b.getPawnMoves(0, moves);
+    testAssert(find(moves.begin(), moves.end(), Q4Board::cellOf(3, 4)) == moves.end());
     testAssert(find(moves.begin(), moves.end(), Q4Board::CENTER_CELL) != moves.end());
     b.applyAction(Q4Board::actionOfPawn(Q4Board::CENTER_CELL));
     testAssert(b.isFinished());
@@ -483,21 +495,32 @@ void testPerft() {
     b.recomputeDistancesToCenter();
     b.hash = b.getHashFromScratch();
 
-    // Verify two-pawn jump is permitted to (2, 5)
+    // The two-pawn jump to (2, 5) is denied now (the diagonal steps around c4 do not increase the distance) and
+    // permitted for the old generator
     std::vector<int> m0;
     b.getPawnMoves(0, m0);
-    testAssert(std::find(m0.begin(), m0.end(), Q4Board::cellOf(2, 5)) != m0.end());
+    testAssert(std::find(m0.begin(), m0.end(), Q4Board::cellOf(2, 5)) == m0.end());
+    b.oldJumpRule = true;
+    std::vector<int> mOld;
+    b.getPawnMoves(0, mOld);
+    b.oldJumpRule = false;
+    testAssert(std::find(mOld.begin(), mOld.end(), Q4Board::cellOf(2, 5)) != mOld.end());
     // Verify center is not reachable in one move
     testAssert(std::find(m0.begin(), m0.end(), Q4Board::CENTER_CELL) == m0.end());
 
     testAssert(perft(b, 1) == 3);
     testAssert(perft(b, 2) == 9);
+    testAssert(perft(b, 3) == 36);
+    testAssert(perft(b, 4) == 144);
+    testAssert(perft(b, 5) == 616);
+    testAssert(perft(b, 6) == 2212);
+    testAssert(perft(b, 7) == 8316);
+    testAssert(perft(b, 8) == 29106);
+    // The old generator (records without jump=diag): 35, 140, 564, 2088, 7776, 27216
+    b.oldJumpRule = true;
     testAssert(perft(b, 3) == 35);
-    testAssert(perft(b, 4) == 140);
-    testAssert(perft(b, 5) == 564);
-    testAssert(perft(b, 6) == 2088);
-    testAssert(perft(b, 7) == 7776);
     testAssert(perft(b, 8) == 27216);
+    b.oldJumpRule = false;
     legalHash = legalActionsHash(b, 6, legalHash);
   }
 
@@ -525,17 +548,141 @@ void testPerft() {
 
     testAssert(perft(b, 1) == 4);
     testAssert(perft(b, 2) == 16);
+    testAssert(perft(b, 3) == 68);
+    testAssert(perft(b, 4) == 272);
+    testAssert(perft(b, 5) == 992);
+    testAssert(perft(b, 6) == 3092);
+    testAssert(perft(b, 7) == 12052);
+    testAssert(perft(b, 8) == 46464);
+    // The old generator: 64, 244, 892, 2812, 10792, 41312
+    b.oldJumpRule = true;
     testAssert(perft(b, 3) == 64);
-    testAssert(perft(b, 4) == 244);
-    testAssert(perft(b, 5) == 892);
-    testAssert(perft(b, 6) == 2812);
-    testAssert(perft(b, 7) == 10792);
     testAssert(perft(b, 8) == 41312);
+    b.oldJumpRule = false;
     legalHash = legalActionsHash(b, 6, legalHash);
   }
 
   cout << "  getLegalActions hash over the perft trees: " << legalHash << endl;
-  testAssert(legalHash == 13831335297760359281ULL);
+  testAssert(legalHash == 2696291997487159172ULL);
+}
+
+// The diagonal-jump rule (docs/q4/Q4Rules.md 4.3-4.5): one case per row of the table, with walls on C0|C1, C1|C2,
+// C1|D, C2|C3, a pawn on D / C3, an eliminated pawn as C2, the board edge, the centre, the distance condition.
+struct JumpCase {
+  Q4Board b;
+  JumpCase(const int (&xy)[4][2], bool alive0to3[4]) {
+    for(int s = 0; s < 4; s++)
+      b.occupant[b.pawn[s]] = -1;
+    for(int s = 0; s < 4; s++) {
+      if(xy[s][0] < 0) {
+        b.pawn[s] = -1;
+        b.alive &= ~(1 << s);
+      }
+      else {
+        b.pawn[s] = Q4Board::cellOf(xy[s][0], xy[s][1]);
+        b.occupant[b.pawn[s]] = s;
+      }
+      b.wallsLeft[s] = 0;
+    }
+    b.toMove = 0;
+  }
+  void wall(int ax, int ay, bool h) { b.applyWall(ax, ay, h); }
+  std::set<int> moves(bool old = false) {
+    b.toMove = 0;
+    b.recomputeDistancesToCenter();
+    b.hash = b.getHashFromScratch();
+    b.oldJumpRule = old;
+    vector<int> m;
+    b.getPawnMoves(0, m);
+    b.oldJumpRule = false;
+    return std::set<int>(m.begin(), m.end());
+  }
+};
+
+void testJumpRule() {
+  cout << "Running Q4 diagonal-jump rule tests..." << endl;
+  auto C = [](int x, int y) { return Q4Board::cellOf(x, y); };
+  bool dummy[4] = {true, true, true, true};
+  // Mover (2,2) going North: C1 = (2,3), C2 = (2,4), C3 = (2,5), D = (1,3) / (3,3). Seat 3 far away.
+  const int line[4][2] = {{2, 2}, {2, 3}, {2, 4}, {9, 9}};
+
+  {  // C2 occupied, no walls: diagonals legal, two-pawn jump denied by the diagonals (distance 6, not larger)
+    JumpCase t(line, dummy);
+    t.wall(2, 1, false);  // blocks (2,2)-(3,2), so that all other ordinary moves increase the distance
+    auto m = t.moves();
+    testAssert(m.count(C(1, 3)) && m.count(C(3, 3)));
+    testAssert(!m.count(C(2, 5)));
+    auto o = t.moves(true);  // old generator: no diagonals, two-pawn jump
+    testAssert(!o.count(C(1, 3)) && !o.count(C(3, 3)) && o.count(C(2, 5)));
+  }
+  {  // wall C1|D (east of C1): only the west diagonal
+    JumpCase t(line, dummy);
+    t.wall(2, 3, false);  // blocks (2,3)-(3,3)
+    auto m = t.moves();
+    testAssert(m.count(C(1, 3)) && !m.count(C(3, 3)));
+  }
+  {  // pawn on D: no diagonal there
+    const int xy[4][2] = {{2, 2}, {2, 3}, {2, 4}, {1, 3}};
+    JumpCase t(xy, dummy);
+    auto m = t.moves();
+    testAssert(!m.count(C(1, 3)) && m.count(C(3, 3)));
+  }
+  {  // wall C1|C2: diagonals around C1 (as before), no two-pawn jump
+    JumpCase t(line, dummy);
+    t.wall(2, 3, true);  // blocks (2,3)-(2,4)
+    auto m = t.moves();
+    testAssert(m.count(C(1, 3)) && m.count(C(3, 3)) && !m.count(C(2, 5)));
+    testAssert(t.moves(true) == m);
+  }
+  {  // C2 empty: straight jump, no diagonals
+    const int xy[4][2] = {{2, 2}, {2, 3}, {7, 7}, {9, 9}};
+    JumpCase t(xy, dummy);
+    auto m = t.moves();
+    testAssert(m.count(C(2, 4)) && !m.count(C(1, 3)) && !m.count(C(3, 3)));
+    testAssert(t.moves(true) == m);
+  }
+  {  // C2 is an eliminated pawn: neither blocks nor is jumped, straight jump to C2
+    const int xy[4][2] = {{2, 2}, {2, 3}, {-1, -1}, {9, 9}};
+    JumpCase t(xy, dummy);
+    auto m = t.moves();
+    testAssert(m.count(C(2, 4)) && !m.count(C(1, 3)) && !m.count(C(3, 3)));
+  }
+  {  // board edge behind C1: diagonals (as before)
+    const int xy[4][2] = {{2, 9}, {2, 10}, {9, 9}, {8, 8}};
+    JumpCase t(xy, dummy);
+    auto m = t.moves();
+    testAssert(m.count(C(1, 10)) && m.count(C(3, 10)));
+    testAssert(t.moves(true) == m);
+  }
+  {  // third pawn on C3: no two-pawn jump, diagonals still there
+    const int xy[4][2] = {{2, 2}, {2, 3}, {2, 4}, {2, 5}};
+    JumpCase t(xy, dummy);
+    auto m = t.moves();
+    testAssert(!m.count(C(2, 5)) && m.count(C(1, 3)) && m.count(C(3, 3)));
+  }
+  {  // wall C2|C3: no two-pawn jump
+    JumpCase t(line, dummy);
+    t.wall(2, 4, true);  // blocks (2,4)-(2,5)
+    testAssert(!t.moves().count(C(2, 5)));
+  }
+  {  // distance condition with the diagonals closed by walls: the two-pawn jump is legal (all ordinary moves
+     // (1,2) and (2,1) increase the distance, (3,2) is walled off), and denied without those walls
+    JumpCase t(line, dummy);
+    t.wall(2, 1, false);  // blocks (2,2)-(3,2) and (2,1)-(3,1)
+    t.wall(2, 3, false);  // blocks (2,3)-(3,3)
+    t.wall(1, 3, false);  // blocks (1,3)-(2,3)
+    auto m = t.moves();
+    testAssert(!m.count(C(1, 3)) && !m.count(C(3, 3)) && m.count(C(2, 5)));
+  }
+  {  // a diagonal onto the centre wins: mover (4,4) north over (4,5), C2 = (4,6) occupied, D = centre (5,5)
+    const int xy[4][2] = {{4, 4}, {4, 5}, {4, 6}, {9, 9}};
+    JumpCase t(xy, dummy);
+    auto m = t.moves();
+    testAssert(m.count(Q4Board::CENTER_CELL));
+    t.b.toMove = 0;
+    t.b.applyAction(Q4Board::actionOfPawn(Q4Board::CENTER_CELL));
+    testAssert(t.b.isFinished() && t.b.getWinner() == 0);
+  }
 }
 
 bool canMasksMatchBlocked(const Q4Board& b) {
@@ -941,6 +1088,7 @@ void Tests::runQ4BoardTests() {
   testHashingAndUndo();
   testTerminalRules();
   testPerft();
+  testJumpRule();
   testWallFloodFillFuzz();
   testPlayStateConsistency();
   testStyleTracker();
