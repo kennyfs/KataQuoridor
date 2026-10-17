@@ -26,9 +26,10 @@ THREADS = int(os.environ.get("KQ_THREADS", "0"))   # numGameThreads (0 = by GPU,
 BATCH = int(os.environ.get("KQ_BATCH", "0"))       # nnMaxBatchSize (0 = by GPU)
 SYNC_SECONDS = 120
 WORK = "/content/kq" if os.path.isdir("/content") else os.path.expanduser("~/kq_worker")
-# GPU name substring -> (numGameThreads, nnMaxBatchSize); the RTX 3070 at home runs 256 / 256. Starting points from
-# KataCDC's speed tests (same tf3_b5c256 trunk, a smaller board): L4 512 > 256, T4 256 > 128; measure with KQ_BENCH_ROWS.
-TUNING = [("T4", 256, 256), ("L4", 512, 512), ("A100", 512, 512), ("H100", 768, 768), ("RTX PRO 6000", 768, 768),
+# GPU name substring -> (numGameThreads, nnMaxBatchSize); the RTX 3070 at home runs 256 / 256 (2026-10-18, 12 CPUs:
+# 512 game threads was 18% slower than 256). KataCDC's L4 (12 CPUs, a smaller board) was faster at 512; L4 starts at
+# 256 here until measured (KQ_BENCH_ROWS, or KQ_THREADS / KQ_BATCH for a worker).
+TUNING = [("T4", 256, 256), ("L4", 256, 256), ("A100", 512, 512), ("H100", 768, 768), ("RTX PRO 6000", 768, 768),
           ("", 256, 256)]
 
 SSH = f"ssh -i {KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ConnectTimeout=20"
