@@ -226,7 +226,9 @@ def match_config(cfg, bots, game_list, results_file):
               "repetitionDrawCount = %d" % rules["repetitionDrawCount"],
               "blackInitialWalls = %d" % rules["blackInitialWalls"],
               "whiteInitialWalls = %d" % rules["whiteInitialWalls"],
-              "numSearchThreads = 1"]
+              "numSearchThreads = 1",
+              # The exact pawn race solver (docs/QuoridorRaceSolver.md); cfg["race_solver"] = false compares without it.
+              "quoridorRaceSolver = %s" % json.dumps(bool(cfg.get("race_solver", True)))]
     for k, v in cfg.get("search", {}).items():
         lines.append("%s = %s" % (k, json.dumps(v) if isinstance(v, bool) else v))
     for k, v in cfg["match"].items():
