@@ -61,17 +61,45 @@ standard rules with the repetition rule off), relative to the 0.1.0 release net 
   row after the switch (~+75 per 1M rows) is well below run3's late SGD rate (~+220 per 1M rows), val losses are flat
   and lead overfits: b4c192 looks capacity-limited once trained properly.
 
-## 5. run4 (`~/q1_run/run4`): tf3_b5c256 (in progress)
+## 5. run4 (`~/q1_run/run4`): tf3_b5c256
 
 - `tf3_b5c256_quoridor_v3`: KataGo's mainline design (b11c768h12nbt3tflrs-fson-silu) scaled down: 5 nested-bottleneck
   blocks of 3 transformer layers (15 layers), 256 trunk, fson normalization, SiLU; 3.67M params (2.8× b4c192).
 - Bootstrap from scratch with Aurora on run3's newest 2.5M rows (its share of `run3a-s6097408` data swapped for 300
   random held files nobody had trained on), 128k-sample ramp 0.5× → 8×, then ×8; ×8 plateaued by ~3M, so it drops to
-  ×4 at 3.1M and ×2 at 4.3M, 6M total.
-- At 3M samples it matches the b4c192 bootstrap on policy/value losses and is clearly better on lead loss.
-- Next: ladder run4's exports vs run3a's latest; test a ×1 branch from the 6M checkpoint (bigger nets may need a
-  lower final lr; if it helps, consider a per-cycle lr schedule in the loop, e.g. upstream's cyclic LR); if run4 wins,
-  continue the loop as run4.
+  ×4 at 3.1M and ×2 at 4.3M, 6M total. At 3M samples it matched the b4c192 bootstrap on policy / value losses and was
+  clearly better on lead loss.
+- An lr test from the 6.48M checkpoint (×1 vs ×2, same reshuffled data) kept ×2; the loop continued from the ×2
+  branch with Aurora ×2, `MAX_TRAIN_PER_DATA` 6, 1% validation files (md5 of the path).
+- Self-play visits 600/100 → **1000/250** (full / cheap) from 2026-10-04: v1000 is +52 Elo over v600 for
+  run4-s10469632 (`~/arena/visit_scaling_r4`; v256 → v1000 +110).
+- Strength: equal time on the RTX 3070 (run4 v1024 vs run3a v1750, run4 is ~1.7× slower per visit): 56.2% (+43);
+  kq_ladder9 (v256): run4-s20387072 +72 over run3a's latest, about +283 over 0.1.0 in the joint fit of ladders 1-9.
+- **Draw convergence and root exploration** (2026-10-05): standard self-play drifted into drawn lines (standard
+  rule-on draws 25% at s17.11M → 72% at s17.67M). A 1000-visit search rarely visited low-prior winning moves that a
+  10000-visit search found (`e8 e2 e7 e3`: e6; then `e6 e4`: a6h / h6h, prior 1.6%), and cheap searches (75% of the
+  moves) never played them. Forced playouts 2 → 4 and root policy temperature 1.25 / 1.1 → 1.6 / 1.5 (full searches
+  only) raised the policy-target share of those moves from 5% to 20% at no cost (`~/arena/explore`). Within two
+  cycles standard draws fell to 6% (rule on) / 0% (off) and Black's score at the empty board rose to ~0.8; the net
+  learned a6h (raw White win after it 0.58 → 0.39). kq_ladder Elo stayed flat (s17.11M → s20.39M: +7 ± 30): its random
+  4-ply openings rarely reach these lines. Openings collapsed onto one line (95.5% of empty-board games
+  `e8 e2 e7 e3 e6 e4`), and deeper Black blind spots remain (9 of 30 common positions differ between 1k and 10k).
+- The loop stopped after run4-s20387072's self-play (113K rows, not yet trained), 2026-10-05.
+
+### 5.1 Restart (2026-10-18)
+
+- The exploration settings had been left out of the committed config; restored (fa4343da).
+- Self-play: 2 NN server threads, +9% NN evals/s (16.4K → 17.9K; 512 game threads was slower).
+- A cycle is now `ROWS_PER_CYCLE` = 120K new rows instead of 10000 games: all the self-play rows on disk that the last
+  shuffle did not see (`rows_since_shuffle.py`), so remote rows that arrive while the loop shuffles, trains or is
+  stopped count towards the next cycle; local self-play makes up the rest (`selfplay -extra-rows-file`).
+- Remote self-play on Colab (`python/colab`, ported from KataCDC; own key and share `ws4:tmp2/kq_remote`).
+- Measured on run4-s20387072 self-play: both players are out of walls in 35% of the standard games (the last ~14
+  plies, 7.8% of their plies). The rule "A has no walls, B to move, dist(B) <= dist(A) → B wins" fires in 55% of
+  them but is right only 95.8% of the time (11% wrong in equal races with both at 0 walls: pawns block each other and
+  jumps change the race), so the race needs an exact solver, not a distance rule (prompt W).
+- kq_ladder can take a fixed opening suite (`openings: {"file": ...}`); `openings_from_selfplay.py` makes one from
+  the most common standard-game lines (115 lines of 2-8 plies from run4 s18.7M-s20.4M, mirrors merged).
 
 ## Lessons
 
