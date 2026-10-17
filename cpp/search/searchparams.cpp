@@ -39,6 +39,7 @@ SearchParams::SearchParams()
    uncertaintyExponent(1.0),
    uncertaintyMaxWeight(8.0),
    useGraphSearch(false),
+   quoridorRaceSolverOneSided(true),
    quoridorRaceSolver(false),
    graphSearchRepBound(11),
    graphSearchCatchUpLeakProb(0.0),
@@ -167,6 +168,7 @@ bool SearchParams::operator==(const SearchParams& other) const {
 
     useGraphSearch == other.useGraphSearch &&
     quoridorRaceSolver == other.quoridorRaceSolver &&
+    quoridorRaceSolverOneSided == other.quoridorRaceSolverOneSided &&
     graphSearchRepBound == other.graphSearchRepBound &&
     graphSearchCatchUpLeakProb == other.graphSearchCatchUpLeakProb &&
 
@@ -427,6 +429,7 @@ json SearchParams::changeableParametersToJson() const {
 
   ret["useGraphSearch"] = useGraphSearch;
   ret["quoridorRaceSolver"] = quoridorRaceSolver;
+  ret["quoridorRaceSolverOneSided"] = quoridorRaceSolverOneSided;
   ret["graphSearchRepBound"] = graphSearchRepBound;
   ret["graphSearchCatchUpLeakProb"] = graphSearchCatchUpLeakProb;
 
@@ -614,6 +617,7 @@ void SearchParams::printParams(std::ostream& out) const {
 
   PRINTPARAM(useGraphSearch);
   PRINTPARAM(quoridorRaceSolver);
+  PRINTPARAM(quoridorRaceSolverOneSided);
   PRINTPARAM(graphSearchRepBound);
   PRINTPARAM(graphSearchCatchUpLeakProb);
 

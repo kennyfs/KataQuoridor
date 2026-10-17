@@ -1280,6 +1280,8 @@ bool Search::addRaceSolverLeafIfSolved(SearchThread& thread, SearchNode& node) {
   const Board& board = thread.board;
   if(board.blackFences > 0 && board.whiteFences > 0)
     return false;
+  if((board.blackFences > 0 || board.whiteFences > 0) && !searchParams.quoridorRaceSolverOneSided)
+    return false;
   RaceResult rr = RaceSolver::evaluate(board, thread.history, thread.pla);
   if(!rr.solved)
     return false;

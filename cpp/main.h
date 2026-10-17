@@ -19,6 +19,7 @@ namespace MainCmds {
   int dumpnninputs(const std::vector<std::string>& args);
   int evalnnparity(const std::vector<std::string>& args);
 
+  int racecheck(const std::vector<std::string>& args);
   int runtests(const std::vector<std::string>& args);
   int runnnlayertests(const std::vector<std::string>& args);
   int runnnontinyboardtest(const std::vector<std::string>& args);

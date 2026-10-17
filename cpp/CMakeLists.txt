@@ -1118,6 +1118,7 @@ add_executable(katago
   command/gtp.cpp
   command/match.cpp
   command/misc.cpp
+  command/racecheck.cpp
   command/runtests.cpp
   command/sandbox.cpp
   command/selfplay.cpp

@@ -646,6 +646,9 @@ vector<SearchParams> Setup::loadParams(
     if(cfg.contains("quoridorRaceSolver"+idxStr)) params.quoridorRaceSolver = cfg.getBool("quoridorRaceSolver"+idxStr);
     else if(cfg.contains("quoridorRaceSolver"))   params.quoridorRaceSolver = cfg.getBool("quoridorRaceSolver");
     else                                          params.quoridorRaceSolver = false;
+    if(cfg.contains("quoridorRaceSolverOneSided"+idxStr)) params.quoridorRaceSolverOneSided = cfg.getBool("quoridorRaceSolverOneSided"+idxStr);
+    else if(cfg.contains("quoridorRaceSolverOneSided"))   params.quoridorRaceSolverOneSided = cfg.getBool("quoridorRaceSolverOneSided");
+    else                                                  params.quoridorRaceSolverOneSided = true;
     if(cfg.contains("quoridorRaceSolverCacheEntries"))
       RaceSolver::setMaxCacheEntries((size_t)cfg.getInt("quoridorRaceSolverCacheEntries", 1, 1000000));
     if(cfg.contains("graphSearchRepBound"+idxStr)) params.graphSearchRepBound = cfg.getInt("graphSearchRepBound"+idxStr, 3, 50);

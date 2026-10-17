@@ -502,6 +502,59 @@ static void testSearch() {
       delete search;
     }
   }
+  // The chosen move at an exactly solved root is an optimal one (winner fastest, loser slowest), on random races.
+  {
+    Rand rand("testquoridorracesolver chosen");
+    int numChecked = 0;
+    for(int iter = 0; iter < 60 && numChecked < 25; iter++) {
+      Board b2 = randomWallBoard(rand, rand.nextInt(0, 20));
+      int bs = sq(rand.nextInt(0, 8), rand.nextInt(1, 7)), ws = sq(rand.nextInt(0, 8), rand.nextInt(1, 7));
+      if(bs == ws)
+        continue;
+      setPawns(b2, bs, ws);
+      Player pla = rand.nextBool(0.5) ? P_BLACK : P_WHITE;
+      BoardHistory h2 = makeHist(b2, pla);
+      RaceResult rr = RaceSolver::evaluate(b2, h2, pla);
+      if(!rr.solved)
+        continue;
+      vector<Loc> optimal = RaceSolver::optimalMoves(b2, h2, pla);
+      testAssert(!optimal.empty());
+      SearchParams params;
+      params.maxVisits = 60;
+      params.numThreads = 1;
+      params.quoridorRaceSolver = true;
+      Search* search = new Search(params, nnEval, &logger, "quoridorRaceSolverChosen");
+      search->setPosition(pla, b2, h2);
+      Loc chosen = search->runWholeSearchAndGetMove(pla);
+      testAssert(std::find(optimal.begin(), optimal.end(), chosen) != optimal.end());
+      delete search;
+      numChecked++;
+    }
+    testAssert(numChecked >= 10);
+  }
+  // Cache behavior in a 1000-visit search on a one-sided race position (Black still has walls, so wall placements
+  // make new wall configurations).
+  {
+    RaceSolver::clearCache();
+    RaceSolver::resetCacheStats();
+    Board b3;
+    b3.setFencesLeft(0, 0);
+    setPawns(b3, sq(4, 5), sq(4, 4));
+    b3.setFencesLeft(4, 0);
+    BoardHistory h3 = makeHist(b3, P_BLACK);
+    SearchParams params;
+    params.maxVisits = 1000;
+    params.numThreads = 1;
+    params.useGraphSearch = true;
+    params.quoridorRaceSolver = true;
+    Search* search = new Search(params, nnEval, &logger, "quoridorRaceSolverCache");
+    search->setPosition(P_BLACK, b3, h3);
+    search->runWholeSearch(P_BLACK);
+    RaceSolver::CacheStats st = RaceSolver::getCacheStats();
+    cout << "    1000-visit search on a one-sided race: cache " << st.hits << " hits, " << st.misses << " misses, " << st.entries
+         << " entries, " << st.solveMicros / 1000.0 << " ms solving" << endl;
+    delete search;
+  }
   delete nnEval;
 }
 
