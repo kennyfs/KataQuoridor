@@ -1,4 +1,5 @@
 #include "../program/play.h"
+#include "../game/racesolver.h"
 
 #include "../core/global.h"
 #include "../core/fileutils.h"
@@ -1883,6 +1884,79 @@ FinishedGameData* Play::runGame(
       shouldPause->waitUntilFalse();
     if(shouldStop != nullptr && shouldStop())
       break;
+
+    //KataQuoridor: both players are out of walls and the race is solved exactly: finish the game with optimal pawn
+    //moves, without search, NN evals or training rows (docs/QuoridorRaceSolver.md). The per-turn entries keep the exact
+    //values for the value targets of the earlier rows; their target weight is 0.
+    if(recordFullData && playSettings.quoridorRaceSelfplayFinish && board.blackFences == 0 && board.whiteFences == 0) {
+      RaceResult rr = RaceSolver::evaluate(board,hist,pla);
+      vector<Loc> optimal;
+      if(rr.solved && rr.exact)
+        optimal = RaceSolver::optimalMoves(board,hist,pla);
+      if(!optimal.empty()) {
+        Loc loc = optimal[gameRand.nextUInt((uint32_t)optimal.size())];
+        testAssert(hist.isLegal(board,loc,pla));
+        double lead = rr.lead2 / 2.0;
+        double score = lead;
+        if(rr.winner != C_EMPTY) {
+          int64_t endPly = hist.getCurrentTurnNumber() + rr.plies;
+          double bonus = (double)hist.rules.timeBonusPerPly * (double)std::max((int64_t)0, (int64_t)hist.rules.maxPlies - endPly);
+          score = lead > 0 ? lead + bonus : lead - bonus;
+        }
+        ValueTargets vt;
+        vt.win = (float)ScoreValue::whiteWinsOfWinner(rr.winner, gameData->drawEquivalentWinsForWhite);
+        vt.loss = 1.0f - vt.win;
+        vt.noResult = 0.0f;
+        vt.score = (float)ScoreValue::whiteScoreDrawAdjust(score,gameData->drawEquivalentWinsForWhite,hist);
+        vt.hasLead = true;
+        vt.lead = (float)ScoreValue::whiteScoreDrawAdjust(lead,gameData->drawEquivalentWinsForWhite,hist);
+        gameData->whiteValueTargetsByTurn.push_back(vt);
+        gameData->whiteQValueTargetsByTurn.emplace_back();
+        gameData->policyTargetsByTurn.emplace_back(nullptr,0);
+        NNRawStats rawStats;
+        rawStats.whiteWinLoss = vt.win - vt.loss;
+        rawStats.whiteScoreMean = vt.score;
+        rawStats.policyEntropy = 0.0;
+        gameData->nnRawStatsByTurn.push_back(rawStats);
+        gameData->policySurpriseByTurn.push_back(0.0);
+        gameData->policyEntropyByTurn.push_back(0.0);
+        gameData->searchEntropyByTurn.push_back(0.0);
+        ReportedSearchValues raw;
+        raw.winValue = vt.win;
+        raw.lossValue = vt.loss;
+        raw.noResultValue = 0.0;
+        raw.staticScoreValue = raw.dynamicScoreValue = raw.expectedScore = vt.score;
+        raw.expectedScoreStdev = 0.0;
+        raw.lead = vt.lead;
+        raw.winLossValue = vt.win - vt.loss;
+        raw.utility = 0.0;
+        raw.weight = 1.0;
+        raw.visits = 0;
+        rawNNValues.push_back(raw);
+        gameData->targetWeightByTurn.push_back(0.0f);
+        gameData->reanalysisByTurn.emplace_back();
+        wasCheapSearchByTurn.push_back(false);
+        if(playSettings.allowResignation || playSettings.reduceVisits) {
+          historicalMctsWinLossValues.push_back(vt.win - vt.loss);
+          historicalMctsLeads.push_back(vt.lead);
+          historicalMctsScoreStdevs.push_back(0.0);
+        }
+        if(logMoves)
+          logger.write("Move " + Global::uint64ToString(hist.moveHistory.size()) + " made by the race solver: " + Location::toString(loc,board));
+
+        bool suc = botB->makeMove(loc,pla);
+        testAssert(suc);
+        if(botB != botW) {
+          suc = botW->makeMove(loc,pla);
+          testAssert(suc);
+        }
+        hist.makeBoardMoveAssumeLegal(board,loc,pla,NULL);
+        gameData->numRaceSolverPlies += 1;
+        maybeCheckForNewNNEval((int)hist.moveHistory.size());
+        pla = getOpp(pla);
+        continue;
+      }
+    }
 
     Search* toMoveBot = pla == P_BLACK ? botB : botW;
     if(playSettings.dynamicSelfKomiBonusMin != 0.0 || playSettings.dynamicSelfKomiBonusMax != 0.0) {

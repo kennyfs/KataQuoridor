@@ -12,6 +12,9 @@
 #include "../tests/tests.h"
 
 #include "../game/racesolver.h"
+#include "../dataio/trainingwrite.h"
+#include "../neuralnet/quoridornn.h"
+#include "../program/play.h"
 #include "../search/search.h"
 #include "../tests/testsearchcommon.h"
 
@@ -502,6 +505,77 @@ static void testSearch() {
   delete nnEval;
 }
 
+static void testSelfplayFinish() {
+  cout << "  Self-play finish keeps the targets consistent" << endl;
+  Logger logger(nullptr, false, false, false);
+  NNEvaluator* nnEval = TestSearchCommon::startNNEval(
+    "/dev/null", logger, "quoridorRaceSolverSelfplayNN", NNPos::MAX_BOARD_LEN, NNPos::MAX_BOARD_LEN,
+    0, false, false, false, true, false
+  );
+  int totalSolverPlies = 0, totalPlies = 0, totalRows = 0, gamesWithFinish = 0;
+  for(int g = 0; g < 12; g++) {
+    for(bool finish : {false, true}) {
+      SearchParams params;
+      params.maxVisits = 12;
+      params.numThreads = 1;
+      MatchPairer::BotSpec botSpec;
+      botSpec.botIdx = 0;
+      botSpec.botName = "bot";
+      botSpec.nnEval = nnEval;
+      botSpec.baseParams = params;
+      Rules rules = Rules::getQuoridorRules();
+      rules.maxPlies = 120;
+      rules.blackInitialFences = 1;
+      rules.whiteInitialFences = 1;
+      rules.repetitionDrawCount = 3;
+      Board board;
+      board.setFencesLeft(1, 1);
+      setPawns(board, sq(4, 4), sq(4, 3));
+      BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
+      ExtraBlackAndKomi extraBlackAndKomi;
+      extraBlackAndKomi.komiMean = rules.komi;
+      extraBlackAndKomi.komiStdev = 0;
+      PlaySettings playSettings;
+      playSettings.forSelfPlay = true;
+      playSettings.quoridorRaceSelfplayFinish = finish;
+      Rand rand("testquoridorracesolver selfplay " + Global::intToString(g));
+      auto shouldStop = []() noexcept { return false; };
+      FinishedGameData* gameData = Play::runGame(
+        board, P_BLACK, hist, extraBlackAndKomi, botSpec, botSpec, "testquoridorracesolver selfplay search " + Global::intToString(g),
+        false, true, logger, false, false, 120, shouldStop, nullptr, playSettings, OtherGameProperties(), rand, nullptr, nullptr
+      );
+      testAssert(gameData->endHist.isGameFinished);
+      int numMoves = (int)gameData->endHist.moveHistory.size();
+      if(!finish)
+        testAssert(gameData->numRaceSolverPlies == 0);
+      std::ostringstream debugOut;
+      TrainingDataWriter writer(&debugOut, QuoridorNN::TRAINING_IO_VERSION, 1000, 0.0, 9, 9, 1, "testquoridorracesolver writer");
+      writer.writeGame(*gameData);
+      int64_t rows = writer.numRowsWritten();
+      if(finish) {
+        // Rows only for the searched plies, and the game ends by its real moves with a consistent result.
+        testAssert(rows == numMoves - gameData->numRaceSolverPlies);
+        // The last plies of a finished game with solver plies are solver plies, so both sides are out of walls there.
+        if(gameData->numRaceSolverPlies > 0) {
+          gamesWithFinish++;
+          const ValueTargets& last = gameData->whiteValueTargetsByTurn.back();
+          const ValueTargets& beforeLast = gameData->whiteValueTargetsByTurn[numMoves - 1];
+          testAssert(last.win == beforeLast.win && last.loss == beforeLast.loss);
+          testAssert(std::fabs(last.lead - beforeLast.lead) < 1e-4);
+        }
+        totalSolverPlies += gameData->numRaceSolverPlies;
+        totalPlies += numMoves;
+        totalRows += (int)rows;
+      }
+      delete gameData;
+    }
+  }
+  cout << "    " << gamesWithFinish << " of 12 games had solver plies: " << totalSolverPlies << " of " << totalPlies << " plies, "
+       << totalRows << " rows" << endl;
+  testAssert(gamesWithFinish > 0);
+  delete nnEval;
+}
+
 static void testCache() {
   cout << "  Cache" << endl;
   RaceSolver::clearCache();
@@ -544,6 +618,7 @@ void Tests::runQuoridorRaceSolverTests() {
   testEvaluate();
   testSolveCost();
   testSearch();
+  testSelfplayFinish();
   testCache();
   cout << "Quoridor race solver tests passed" << endl;
 }

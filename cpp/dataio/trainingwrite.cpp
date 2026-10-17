@@ -80,6 +80,7 @@ FinishedGameData::FinishedGameData()
    playoutDoublingAdvantage(0.0),
 
    hitTurnLimit(false),
+   numRaceSolverPlies(0),
 
    numExtraBlack(0),
    mode(0),
