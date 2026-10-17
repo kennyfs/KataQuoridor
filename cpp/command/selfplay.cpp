@@ -19,11 +19,15 @@
 
 #include <chrono>
 #include <csignal>
+#include <fstream>
 
 using namespace std;
 
 static std::atomic<bool> sigReceived(false);
 static std::atomic<bool> shouldStop(false);
+//Rows produced elsewhere (remote self-play workers) since this run started, counted towards -max-rows-total
+//(see -extra-rows-file).
+static std::atomic<int64_t> extraRows(0);
 static void signalHandler(int signal)
 {
   if(signal == SIGINT || signal == SIGTERM) {
@@ -46,6 +50,7 @@ int MainCmds::selfplay(const vector<string>& args) {
   int64_t maxGamesTotal = ((int64_t)1) << 62;
   int64_t maxValidGamesTotal = ((int64_t)1) << 62;
   int64_t maxRowsTotal = ((int64_t)1) << 62;
+  string extraRowsFile;
   try {
     KataGoCommandLine cmd("Generate training data via self play.");
     cmd.addConfigFileArg("","");
@@ -60,8 +65,11 @@ int MainCmds::selfplay(const vector<string>& args) {
     cmd.add(outputDirArg);
     cmd.add(maxGamesTotalArg);
     cmd.add(maxValidGamesTotalArg);
+    TCLAP::ValueArg<string> extraRowsFileArg("","extra-rows-file","A file holding a running count of rows produced elsewhere (e.g. remote workers); its increase since the start counts towards -max-rows-total",false,string(),"FILE");
     cmd.add(maxRowsTotalArg);
+    cmd.add(extraRowsFileArg);
     cmd.parseArgs(args);
+    extraRowsFile = extraRowsFileArg.getValue();
 
     modelsDir = modelsDirArg.getValue();
     outputDir = outputDirArg.getValue();
@@ -345,7 +353,7 @@ int MainCmds::selfplay(const vector<string>& args) {
       bool canStart = true;
       if(numValidGamesFinished.load(std::memory_order_relaxed) >= maxValidGamesTotal)
         canStart = false;
-      if(numDataRowsEnqueued.load(std::memory_order_relaxed) >= maxRowsTotal)
+      if(numDataRowsEnqueued.load(std::memory_order_relaxed) + extraRows.load(std::memory_order_relaxed) >= maxRowsTotal)
         canStart = false;
 
       if(maxGamesTotal < ((int64_t)1 << 60)) {
@@ -445,6 +453,35 @@ int MainCmds::selfplay(const vector<string>& args) {
     Logger::logThreadUncaught("model load loop", &logger, modelLoadLoop);
   };
 
+  //-extra-rows-file: re-read every 10 seconds, the increase since the start goes into extraRows
+  std::atomic<bool> extraRowsDone(false);
+  std::thread extraRowsThread;
+  if(extraRowsFile != "") {
+    auto readCount = [extraRowsFile]() -> int64_t {
+      std::ifstream in(extraRowsFile);
+      int64_t n = 0;
+      if(!(in >> n)) return -1;
+      return n;
+    };
+    int64_t base = std::max<int64_t>(readCount(), 0);
+    logger.write("Extra rows file " + extraRowsFile + ", count at start " + Global::int64ToString(base));
+    extraRowsThread = std::thread([&extraRowsDone,&logger,readCount,base,maxRowsTotal]() {
+      int64_t lastLogged = 0;
+      while(!extraRowsDone.load()) {
+        for(int i = 0; i < 100 && !extraRowsDone.load(); i++)
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        int64_t n = readCount();
+        if(n >= base) {
+          extraRows.store(n - base);
+          if(n - base >= lastLogged + 20000) {
+            lastLogged = n - base;
+            logger.write("Extra rows so far: " + Global::int64ToString(n - base) + " (of max rows total " + Global::int64ToString(maxRowsTotal) + ")");
+          }
+        }
+      }
+    });
+  }
+
   vector<std::thread> threads;
   threads.reserve(numGameThreads);
   for(int i = 0; i<numGameThreads; i++) {
@@ -455,6 +492,12 @@ int MainCmds::selfplay(const vector<string>& args) {
   //Wait for all game threads to stop
   for(int i = 0; i<threads.size(); i++)
     threads[i].join();
+
+  extraRowsDone.store(true);
+  if(extraRowsThread.joinable()) {
+    extraRowsThread.join();
+    logger.write("Extra rows counted: " + Global::int64ToString(extraRows.load()));
+  }
 
   //If by now somehow shouldStop is not true, set it to be true since all game threads are toast
   shouldStop.store(true);
