@@ -71,6 +71,9 @@ def setup():
     rsync(f"{HOST}:{ROOT}selfplay_quoridor_v2.cfg {WORK}/")
     os.makedirs("models", exist_ok=True)
     rsync(f"--delete {HOST}:{ROOT}models/ {WORK}/models/")
+    # hint poses (hintPosesDir in the config points at the home run; publish_share.sh copies them to the share)
+    os.makedirs("hintposes", exist_ok=True)
+    rsync(f"--delete {HOST}:{ROOT}hintposes/ {WORK}/hintposes/", tries=2)
     if not os.listdir("models"):
         sys.exit("no net in the share's models/")
 
@@ -104,6 +107,8 @@ def main():
     out = os.path.join(WORK, "out")
     os.makedirs(out, exist_ok=True)
     over = f"numGameThreads={th},nnMaxBatchSize={bt},numNNServerThreadsPerModel=2"
+    if re.search(r"^\s*hintPosesDir\s*=", open(os.path.join(WORK, "selfplay_quoridor_v2.cfg")).read(), re.M):
+        over += f",hintPosesDir={os.path.join(WORK, 'hintposes')}"
     cmd = [os.path.join(WORK, "bin", "run_katago.sh"), "selfplay", "-models-dir", os.path.join(WORK, "models"),
            "-output-dir", out, "-config", os.path.join(WORK, "selfplay_quoridor_v2.cfg"), "-override-config", over,
            "-max-games-total", "100000000"]
