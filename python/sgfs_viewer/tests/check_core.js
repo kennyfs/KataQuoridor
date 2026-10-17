@@ -1,7 +1,7 @@
 // Checks the viewer's pure functions (header parsing, results and draws, scores, the repetition-stretch metric,
 // per-game summaries) on real SGF lines: node python/sgfs_viewer/tests/check_core.js [file.sgfs]
 // Default file: fixture.sgfs next to this script (self-play rule on N = 3 / 4 and off, draws by repetition and by
-// maxPlies, a fork, fence handicaps on each side, komi != -0.5, a gatekeeper and a kq_ladder game).
+// maxPlies, a fork, a hint game (gtype hintpos), fence handicaps on each side, komi != -0.5, a gatekeeper and a kq_ladder game).
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm"), assert = require("assert");
 const js = path.join(__dirname, "..", "js");
@@ -31,7 +31,7 @@ function occurrences(g) {
   return { max, last };
 }
 
-const seen = { ruleOn: 0, ruleOff: 0, n3: 0, n4: 0, repDraw: 0, maxPliesDraw: 0, fork: 0, hcB: 0, hcW: 0, komi: 0, match: 0, decisive: 0 };
+const seen = { ruleOn: 0, ruleOff: 0, n3: 0, n4: 0, repDraw: 0, maxPliesDraw: 0, fork: 0, hint: 0, hcB: 0, hcW: 0, komi: 0, match: 0, decisive: 0 };
 lines.forEach((line, i) => {
   const h = A.headerOf(line, i), g = A.parseGame(line), s = A.summarize(line, h);
   const re = /RE\[([^\]]*)\]/.exec(line)[1];
@@ -78,8 +78,13 @@ lines.forEach((line, i) => {
   if (h.ww < h.wb) seen.hcW++;
   if (h.komi !== -0.5) seen.komi++;
   if (h.pb !== h.pw) seen.match++;
-  // full-search visits are this game's max v
-  if (s.evs.length) assert.strictEqual(s.maxV, Math.max(...s.evs.map(e => e.v)));
+  // full-search visits are this game's max v, except a hint game's first search (the hint move, 4x visits)
+  if (h.gtype === "hintpos") {
+    seen.hint++;
+    const first = s.evs.find(e => e.i === g.startTurnIdx), rest = s.evs.filter(e => e.i !== g.startTurnIdx);
+    assert(first && first.v > s.maxV, "hint search has more visits than the full searches");
+    assert.strictEqual(s.maxV, Math.max(...rest.map(e => e.v)));
+  } else if (s.evs.length) assert.strictEqual(s.maxV, Math.max(...s.evs.map(e => e.v)));
 });
 
 // score with draws as ½

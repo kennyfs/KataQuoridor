@@ -48,7 +48,9 @@ function summarize(line, h) {
   const E = s.evs, has = E.length > 0, hasW = has && decisive;
   const pw = e => s.winner === "W" ? e.p : 1 - e.p;
   const sw = e => s.winner === "W" ? e.score : -e.score;
-  s.maxV = has ? Math.max(...E.map(e => e.v ?? 0)) : 0;   // this game's full-search visits
+  // this game's full-search visits; a hint game's first search (the hint move, 4x visits) is not one of them
+  const Ev = h.gtype === "hintpos" ? E.filter(e => e.i !== g.startTurnIdx) : E;
+  s.maxV = Ev.length ? Math.max(...Ev.map(e => e.v ?? 0)) : 0;
   s.minWinnerP = hasW ? Math.min(...E.map(pw)) : null;
   s.hasLead = has && E.every(e => e.lead);   // margin values below are the predicted lead (else the old score)
   s.minWinnerScore = hasW ? Math.min(...E.map(sw)) : null;
@@ -454,8 +456,11 @@ function renderStats() {
 
   // 14. random init length + first searched wall
   {
-    const c = card("Random init length", "startTurnIdx: moves played randomly before search took over.");
-    const vals = S.map(s => s.start), d = describe(vals);
+    const c = card("Random init length", "startTurnIdx: moves played randomly before search took over. Hint games " +
+      "(gtype hintpos) are left out: their first moves are the hint position, not random.");
+    const R = S.filter(s => s.gtype !== "hintpos"), H = S.filter(s => s.gtype === "hintpos");
+    const vals = R.length ? R.map(s => s.start) : [0], d = describe(vals);
+    if (H.length) mini(c, `${H.length} hint games left out (hint position length: mean ${f1(describe(H.map(s => s.start)).mean)})`);
     const bins = binsFor([vals], niceWidth(d.max - d.min), 0, d.max);
     mini(c, `mean ${f1(d.mean)} · median ${f1(d.median)} · range ${d.min}–${d.max}`);
     barChart(c, [{ name: "Games", color: "var(--neutral)", values: bins.counts[0] }], { labels: bins.labels,

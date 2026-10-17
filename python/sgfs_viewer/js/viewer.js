@@ -110,7 +110,7 @@ function renderEvalStrip() {
   const tiles = ["evWin", "evMar", "evVis"];
   if (!hasEv(mv)) {
     tiles.forEach(t => $(t).classList.add("dim"));
-    const why = ply >= cur.moves.length ? `Game over · ${resultLabel(games[curGameIdx])}` : ply < cur.startTurnIdx ? "Random init move, no search" : "No search data";
+    const why = ply >= cur.moves.length ? `Game over · ${resultLabel(games[curGameIdx])}` : ply < cur.startTurnIdx ? (isHint() ? "Hint position move, no search" : "Random init move, no search") : "No search data";
     $("evWinV").textContent = "—"; $("evMarV").textContent = "—"; $("evVisV").textContent = "—";
     $("evWinBar").style.flexBasis = "50%";
     $("evWinS").textContent = why; $("evMarS").textContent = ""; $("evVisS").textContent = "";
@@ -139,7 +139,7 @@ function renderInfo() {
     ...(h.ruleKnown || h.repetition ? [["Repetition rule", h.repetition ? `on: draw at occurrence ${h.repetition} of a position` : "off"]] : []),
     ...(h.komi !== STANDARD_KOMI ? [["Komi", `${fmtKomi(h.komi)} (standard −0.5)`]] : []),
     ...(h.wb !== STANDARD_WALLS || h.ww !== STANDARD_WALLS ? [["Initial walls", `Black ${h.wb} · White ${h.ww}`]] : []),
-    ["Moves", `${g.moves.length}  (init ${g.startTurnIdx}, searched ${g.moves.length - g.startTurnIdx})`],
+    ["Moves", `${g.moves.length}  (${isHint() ? "hint position" : "init"} ${g.startTurnIdx}, searched ${g.moves.length - g.startTurnIdx})`],
     ["Type", (g.kv.gtype || "—") + (g.kv.usedInitialPosition ? " · initial pos" : "")],
     ["Players", (g.props.PB?.[0] || "—") + (g.props.PW?.[0] && g.props.PW[0] !== g.props.PB?.[0] ? " vs " + g.props.PW[0] : "")],
     ["Hash", g.kv.gameHash || "—"],
@@ -147,11 +147,14 @@ function renderInfo() {
   $("info").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("");
 }
 
+// a hint game (gtype hintpos) starts at a mined hint position: its first moves are that position, not random init
+function isHint() { return games[curGameIdx]?.gtype === "hintpos"; }
+
 function renderMoveList() {
   const parts = [];
   cur.moves.forEach((mv, i) => {
-    if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">Random init · ${cur.startTurnIdx} moves</div>`);
-    if (i === cur.startTurnIdx && i > 0) parts.push(`<div class="sep">Self-play search</div>`);
+    if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">${isHint() ? "Hint position" : "Random init"} · ${cur.startTurnIdx} moves</div>`);
+    if (i === cur.startTurnIdx && i > 0) parts.push(`<div class="sep">Self-play search${isHint() ? " · the first one searches the hint move (4× visits)" : ""}</div>`);
     const e = mv.ev;
     const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}% · ${e.hasLead ? "lead" : "margin"} ${fmtScore(e.wMargin)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
     parts.push(`<div class="m${i < cur.startTurnIdx ? " init" : ""}" data-i="${i + 1}"><span class="n">${i + 1}</span><span class="who ${mv.pla}"></span><span class="mv">${notation(mv)}</span><span class="ev">${ev}</span></div>`);

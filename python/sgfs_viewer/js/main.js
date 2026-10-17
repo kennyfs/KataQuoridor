@@ -129,7 +129,12 @@ const params = new URLSearchParams(location.search);
 const src = params.get("src");
 if (src) {
   $("fileName").textContent = "Loading…";
-  fetch(src).then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
-    .then(t => loadText(t, params.get("name") || src))
+  // serve.py --latest names the file it picked in X-Sgfs-Name
+  fetch(src, { cache: "no-store" }).then(r => {
+    if (!r.ok) throw new Error(r.status);
+    const hdr = r.headers.get("X-Sgfs-Name");
+    return r.text().then(t => [t, hdr ? decodeURIComponent(hdr) : null]);
+  })
+    .then(([t, hdrName]) => loadText(t, hdrName || params.get("name") || src))
     .catch(err => { $("fileName").textContent = `Failed to load ${src}: ${err}`; });
 }

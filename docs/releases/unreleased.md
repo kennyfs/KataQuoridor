@@ -263,3 +263,11 @@ straight and diagonal jumps; see [QuoridorRaceSolver.md](../QuoridorRaceSolver.m
 - Hint and SGF start positions now work for Quoridor games: the walls come from the rules, the repetition rule is
   drawn like for a game from the empty board, a hint game never asks for a fair komi, and a hint that is not legal
   at its position is dropped.
+
+## sgfs viewer: hint games, --latest
+
+- Hint games (`gtype=hintpos`): the first moves are labelled as the hint position (not random init), the first search
+  as the hint search (4× visits); "Full searches" ignores that search, and "Random init length" leaves hint games out.
+- `serve.py --latest [RUN_DIR]` (default `~/q1_run/run4`) serves the newest self-play `.sgfs` of the run, looked up
+  again on every page load, and names it in the page; files are revalidated on each load (no hard refresh needed).
+  Ported from KataCDC.
