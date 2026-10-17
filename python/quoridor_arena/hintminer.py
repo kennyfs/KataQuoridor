@@ -30,7 +30,7 @@ HINT_SUFFIX = ".hintposes.txt"
 def hint_line(moves, hint, weight, metadata):
     """One hint-pose JSON line for Sgf::PositionSample::ofJsonLine. `moves` are 9x9 moves from the empty board."""
     return json.dumps({
-        "xSize": 17, "ySize": 17, "board": "", "nextPla": "B" if len(moves) % 2 == 0 else "W",
+        "xSize": 17, "ySize": 17, "board": "", "nextPla": "B",   # nextPla: who moves at the START of moveLocs (Black)
         "moveLocs": list(moves), "movePlas": ["B" if i % 2 == 0 else "W" for i in range(len(moves))],
         "initialTurnNumber": 0, "hintLoc": hint, "weight": weight, "metadata": json.dumps(metadata, sort_keys=True),
     }, sort_keys=True)
@@ -85,7 +85,7 @@ def make_hint(pos, fresh_children, deep_children, args, net):
     if bs.same_move(fresh_best, deep_best, sym):
         return None
     label = bs.make_label(deep_children, args.deep_visits, net, args.min_child_visits)
-    if not label["clear"]:                    # the deep search is not sure about its own best move
+    if not label["clear"] or label["share"] < args.min_share:   # the deep search is not sure about its own best move
         return None
     kind, margin, fresh = margin_of(deep_children, deep_best, fresh_best, sym, args)
     if kind is None:
@@ -203,6 +203,7 @@ def main(argv=None):
     m.add_argument("--n-swing", type=int, default=150)
     m.add_argument("--min-games", type=int, default=10, help="games that must reach an opening-tree node")
     m.add_argument("--margin", type=float, default=0.05, help="deep winrate of the deep move minus that of the fresh move")
+    m.add_argument("--min-share", type=float, default=0.15, help="visit share the deep best move must have in the deep search")
     m.add_argument("--lead-margin", type=float, default=2.0, help="the same for the lead, in decided positions")
     m.add_argument("--decided", type=float, default=0.95, help="winrate beyond which (either way) a position counts as decided")
     m.add_argument("--keep-runs", type=int, default=4, help="hint files of this many mining runs stay")

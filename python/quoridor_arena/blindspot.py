@@ -481,7 +481,7 @@ def eval_position(eng, pos, visits):
     chosen, agrees, regret = judge(pos, children)
     top = children[0]
     return {"id": pos["id"], "group": pos["group"], "ply": pos["ply"], "count": pos.get("count", 1), "chosen": chosen,
-            "best": pos["label"]["best"], "agree": agrees, "regret": regret, "wr": round(top["wr"], 4),
+            "best": pos["label"]["best"], "forced": pos["label"]["forced"], "agree": agrees, "regret": regret, "wr": round(top["wr"], 4),
             "chosen_share": round(top["visits"] / max(1, sum(c["visits"] for c in children)), 3)}
 
 
@@ -501,7 +501,9 @@ def summarize(rows):
 
 
 def summarize_all(rows):
-    res = {"overall": summarize(rows), "by_group": {}, "by_ply": {}}
+    res = {"overall": summarize(rows), "by_group": {}, "by_ply": {}, "by_kind": {
+        # forced: no other move got a real share of the deep search's visits (an easy position)
+        "forced": summarize([r for r in rows if r.get("forced")]), "contested": summarize([r for r in rows if not r.get("forced")])}}
     for g in GROUPS:
         res["by_group"][g] = summarize([r for r in rows if r["group"] == g])
     for lo, hi in PLY_BINS:
@@ -525,6 +527,9 @@ def print_summary(title, res, out=sys.stdout):
     for g, s in res["by_group"].items():
         if s.get("n"):
             print(fmt_row("group " + g, s), file=out)
+    for k, s in res.get("by_kind", {}).items():
+        if s.get("n"):
+            print(fmt_row(k, s), file=out)
     for b, s in res["by_ply"].items():
         print(fmt_row("ply " + b, s), file=out)
 
@@ -601,15 +606,17 @@ def cmd_report(args):
     for p in args.files:
         with open(p) as f:
             rows.append(json.load(f))
-    print("| net | visits | params | n | agree | regret | known | " + " | ".join("agree " + g for g in GROUPS) + " |")
-    print("|---|---|---|---|---|---|---|" + "---|" * len(GROUPS))
+    print("| net | visits | params | n | agree | regret | known | " + " | ".join("agree " + g for g in GROUPS) + " | agree contested |")
+    print("|---|---|---|---|---|---|---|" + "---|" * (len(GROUPS) + 1))
     for r in rows:
         o = r["overall"]
         gs = " | ".join("%.1f%% (%d)" % (100 * r["by_group"][g]["agree"], r["by_group"][g]["n"]) if r["by_group"].get(g, {}).get("n") else "-"
                         for g in GROUPS)
         rm = "%.3f" % o["regret_mean"] if o["regret_mean"] is not None else "-"
-        print("| %s | %d | %s | %d | %.1f%% ± %.1f | %s | %d | %s |" % (
-            r["net"], r["visits"], r["params"], o["n"], 100 * o["agree"], 100 * o["agree_se"], rm, o["regret_known"], gs))
+        ck = r.get("by_kind", {}).get("contested", {})
+        cs = "%.1f%% (%d)" % (100 * ck["agree"], ck["n"]) if ck.get("n") else "-"
+        print("| %s | %d | %s | %d | %.1f%% ± %.1f | %s | %d | %s | %s |" % (
+            r["net"], r["visits"], r["params"], o["n"], 100 * o["agree"], 100 * o["agree_se"], rm, o["regret_known"], gs, cs))
     print()
     bins = list(rows[0]["by_ply"]) if rows else []
     print("| net | visits | " + " | ".join("ply " + b for b in bins) + " |")

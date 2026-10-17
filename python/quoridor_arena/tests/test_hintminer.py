@@ -10,7 +10,7 @@ def ch(spec):
             for i, (m, v, wr, lead) in enumerate(spec)]
 
 
-ARGS = type("A", (), dict(margin=0.05, lead_margin=2.0, decided=0.95, fresh_visits=1000, deep_visits=10000, min_child_visits=100))()
+ARGS = type("A", (), dict(margin=0.05, lead_margin=2.0, decided=0.95, fresh_visits=1000, deep_visits=10000, min_child_visits=100, min_share=0.15))()
 POS = {"id": "p", "moves": "e8 e2 e7 e3 e6 e4", "symmetric": True, "ply": 6, "group": "opening"}
 
 
@@ -19,7 +19,7 @@ def test_hint_line_is_a_position_sample():
     d = json.loads(line)
     # the keys of Sgf::PositionSample::toJsonLine
     assert set(d) == {"xSize", "ySize", "board", "nextPla", "moveLocs", "movePlas", "initialTurnNumber", "hintLoc", "weight", "metadata"}
-    assert d["nextPla"] == "W" and d["movePlas"] == list("BWBWBWB") and d["xSize"] == d["ySize"] == 17 and d["initialTurnNumber"] == 0
+    assert d["nextPla"] == "B" and d["movePlas"] == list("BWBWBWB") and d["xSize"] == d["ySize"] == 17 and d["initialTurnNumber"] == 0
     back = hm.parse_hint_line(line)
     assert back["moves"][-1] == "a6h" and back["hint"] == "f3h" and back["weight"] == 2.0 and back["metadata"] == {"k": 1}
 
@@ -61,3 +61,10 @@ def test_expiry_keeps_last_runs(tmp_path):
     names = [os.path.basename(f) for f in hm.hint_files(str(tmp_path))]
     assert names == ["mine_20261013-000000_n" + hm.HINT_SUFFIX, "mine_20261014-000000_n" + hm.HINT_SUFFIX]
     assert len(hm.hint_files(str(tmp_path))) == 2       # room for the new run's file
+
+
+def test_deep_move_needs_a_visit_share():
+    fresh = ch([("f7h", 700, 0.5, 0)])
+    deep = ch([("a6h", 1000, 0.60, 1.0), ("f7h", 100, 0.50, 0.5), ("e5", 8900, 0.45, 0)])   # best by order, 10% of the visits
+    deep[0]["order"], deep[2]["order"] = 0, 2
+    assert hm.make_hint(POS, fresh, deep, ARGS, "net") is None

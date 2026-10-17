@@ -346,10 +346,12 @@ static Sgf::PositionSample makeHintSample(const string& moves, const string& hin
   sample.nextPla = P_BLACK;
   Player pla = P_BLACK;
   for(const string& m : Global::split(moves,' ')) {
+    if(m.empty()) continue;
     sample.moves.push_back(Move(Location::ofString(m,sample.board),pla));
     pla = getOpp(pla);
   }
-  sample.nextPla = pla;
+  //Like KataGo's samples: nextPla is the player to move at the start of `moves` (Black, from the empty board), not at the end
+  sample.nextPla = P_BLACK;
   sample.initialTurnNumber = 0;
   sample.hintLoc = hint.empty() ? Board::NULL_LOC : Location::ofString(hint,sample.board);
   sample.weight = weight;
@@ -378,11 +380,11 @@ static void testHintPoseJson() {
   testAssert(nohint.hintLoc == Board::NULL_LOC && nohint.moves.size() == 2);
   //The way python/quoridor_arena/hintminer.py writes a line.
   Sgf::PositionSample py = Sgf::PositionSample::ofJsonLine(
-    "{\"xSize\":17,\"ySize\":17,\"board\":\"\",\"nextPla\":\"W\",\"moveLocs\":[\"e8\",\"d1h\"],\"movePlas\":[\"B\",\"W\"],"
+    "{\"xSize\":17,\"ySize\":17,\"board\":\"\",\"nextPla\":\"B\",\"moveLocs\":[\"e8\",\"d1h\"],\"movePlas\":[\"B\",\"W\"],"
     "\"initialTurnNumber\":0,\"hintLoc\":\"e2\",\"weight\":1.5}"
   );
   testAssert(py.moves.size() == 2 && py.moves[1].loc == Location::ofString("d1h",py.board) && py.hintLoc == Location::ofString("e2",py.board));
-  testAssert(py.nextPla == P_BLACK || py.nextPla == P_WHITE);
+  testAssert(py.nextPla == P_BLACK);
 }
 
 static void testHintPosGame() {
@@ -415,7 +417,7 @@ static void testHintPosGame() {
     //The 10 moves were replayed, and 3 + 3 walls are placed
     testAssert(hist.moveHistory.size() == sample.moves.size());
     testAssert(board.blackFences + board.whiteFences == 20 - 4);
-    testAssert(pla == sample.nextPla && pla == hist.presumedNextMovePla);
+    testAssert(pla == P_BLACK && pla == hist.presumedNextMovePla);   // an even number of moves
     testAssert(otherGameProps.isHintPos && !otherGameProps.isSgfPos && !otherGameProps.allowPolicyInit);
     testAssert(otherGameProps.hintLoc == sample.hintLoc && otherGameProps.hintTurn == (int)sample.moves.size());
     testAssert(otherGameProps.hintPosHash == board.pos_hash);
@@ -430,6 +432,19 @@ static void testHintPosGame() {
   checkFraction("hint games with the repetition rule", ruleOn, n, 0.75, 0.03);
   testAssert(ruleOff > 0);
 
+  //An odd number of moves: White is to move and the hint is White's
+  {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    Sgf::PositionSample odd = makeHintSample("e8 e2 e7 e3 e6", "e4", 1.0);
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &odd, BoardHistoryModes());
+    testAssert(otherGameProps.isHintPos && otherGameProps.hintLoc == odd.hintLoc);
+    testAssert(hist.moveHistory.size() == 5 && pla == P_WHITE && hist.presumedNextMovePla == P_WHITE);
+  }
   //A hint that is not legal at the position (here: a wall on an occupied anchor) is dropped: a plain start position
   {
     Board board;

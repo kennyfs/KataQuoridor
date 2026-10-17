@@ -121,4 +121,5 @@ def test_summaries_by_group_and_ply():
     assert r["overall"]["n"] == 4 and r["overall"]["agree"] == 0.5 and r["overall"]["regret_unknown"] == 1
     assert r["overall"]["regret_mean"] == round(0.1 / 3, 4)
     assert r["by_group"]["opening"]["agree_weighted"] == round(100 / 101, 4)
+    assert r["by_kind"]["contested"]["n"] == 4 and r["by_kind"]["forced"]["n"] == 0
     assert r["by_ply"]["0-8"]["n"] == 1 and r["by_ply"]["81+"]["n"] == 1 and "25-40" not in r["by_ply"]
