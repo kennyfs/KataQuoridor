@@ -591,6 +591,13 @@ class Ladder:
     def openings(self):
         o = self.cfg["openings"]
         count = max(g[3] for g in self.schedule) + 1
+        if "file" in o:
+            # A fixed suite (e.g. openings_from_selfplay.py): opening k is the suite's k mod its size, so a pair with
+            # more games than the suite has openings plays it again (the nets are near-deterministic: mostly repeats).
+            with open(expand(o["file"])) as f:
+                data = json.load(f)
+            suite = data["openings"] if isinstance(data, dict) else data
+            return [suite[k % len(suite)] for k in range(count)]
         arbiter_argv = [self.katago(), "gtp", "-model", "/dev/null", "-config", expand(self.cfg["gtp_config"]),
                         "-override-config", "debugSkipNeuralNet=true,logAllGTPCommunication=false,logSearchInfo=false,"
                         "logDir=%s" % os.path.join(self.out, "gtp_logs")]

@@ -223,3 +223,16 @@ def test_extra_pairs():
     with pytest.raises(SystemExit):
         cfg["extra_pairs"] = [{"a": "run3:123@256", "b": "q0:latest@256", "games": 2}]
         roster(cfg)
+
+
+def test_openings_from_file(tmp_path):
+    import types
+    suite = [["e8", "e2"], ["e8", "e2", "e7", "e3"], ["f7h", "e2"]]
+    path = tmp_path / "suite.json"
+    path.write_text(json.dumps({"params": {}, "openings": suite}))
+    fake = types.SimpleNamespace(cfg={"openings": {"file": str(path)}},
+                                 schedule=[("g%d" % k, "a", "b", k, "a", "b") for k in range(5)])
+    got = kq_ladder.Ladder.openings(fake)
+    assert got == [suite[k % 3] for k in range(5)]
+    path.write_text(json.dumps(suite))  # a bare list works too
+    assert kq_ladder.Ladder.openings(fake)[:3] == suite
