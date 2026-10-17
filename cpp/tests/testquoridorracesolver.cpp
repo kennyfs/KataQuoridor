@@ -12,6 +12,8 @@
 #include "../tests/tests.h"
 
 #include "../game/racesolver.h"
+#include "../search/search.h"
+#include "../tests/testsearchcommon.h"
 
 #include <chrono>
 
@@ -458,6 +460,48 @@ static void testSolveCost() {
        << numBoardsWithDraws << " have draw states (" << numDrawStates / numBoards << " per configuration on average)" << endl;
 }
 
+static void testSearch() {
+  cout << "  Search uses the solver (root is never terminal; the best move keeps the win)" << endl;
+  Logger logger(nullptr, false, false, false);
+  NNEvaluator* nnEval = TestSearchCommon::startNNEval(
+    "/dev/null", logger, "quoridorRaceSolverNN", NNPos::MAX_BOARD_LEN, NNPos::MAX_BOARD_LEN,
+    0, false, false, false, true, false
+  );
+  Board board;
+  board.setFencesLeft(0, 0);
+  setPawns(board, sq(4, 5), sq(4, 4));
+  BoardHistory hist = makeHist(board, P_BLACK);
+  Loc jump = RaceSolution::locOfSq(sq(4, 3));
+  for(bool useGraphSearch : {false, true}) {
+    for(bool solver : {false, true}) {
+      SearchParams params;
+      params.maxVisits = 400;
+      params.numThreads = 1;
+      params.useGraphSearch = useGraphSearch;
+      params.quoridorRaceSolver = solver;
+      Search* search = new Search(params, nnEval, &logger, "quoridorRaceSolverSearch");
+      search->setPosition(P_BLACK, board, hist);
+      search->runWholeSearch(P_BLACK);
+      vector<AnalysisData> data;
+      search->getAnalysisData(data, 1, false, 2, false);
+      testAssert(!data.empty());
+      if(solver) {
+        // The jump wins; the solved children give exact values: Black wins by 0.5 (White's view lead -0.5).
+        const AnalysisData* jd = NULL;
+        for(const AnalysisData& d : data)
+          if(d.move == jump)
+            jd = &d;
+        testAssert(jd != NULL && jd->numVisits > 0);
+        testAssert(std::fabs(std::fabs(jd->winLossValue) - 1.0) < 1e-6);
+        testAssert(std::fabs(std::fabs(jd->lead) - 0.5) < 1e-6);
+        testAssert(data[0].move == jump);
+      }
+      delete search;
+    }
+  }
+  delete nnEval;
+}
+
 static void testCache() {
   cout << "  Cache" << endl;
   RaceSolver::clearCache();
@@ -499,6 +543,7 @@ void Tests::runQuoridorRaceSolverTests() {
   testOptimalPlay();
   testEvaluate();
   testSolveCost();
+  testSearch();
   testCache();
   cout << "Quoridor race solver tests passed" << endl;
 }
