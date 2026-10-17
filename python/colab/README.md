@@ -49,9 +49,14 @@ With enough remote workers the local self-play gets short or is skipped, and a c
 Once (and after changing the C++ code or the selfplay config):
 
 ```bash
-# on ws4 (rootless docker): build the binary for Colab (CUDA 13.0, Colab's cuBLAS / cuDNN / NVRTC are used)
-rsync -a --delete cpp/ ws4:tmp2/kq_remote/src/cpp/          # at home, from the repo
-cd ~/tmp2/kq_remote && ./build_portable.sh src/cpp build    # on ws4 (build_portable.sh copied there)
+# sources on ws4: src/cpp came from a clone of github.com/kennyfs/KataQuoridor (the home uplink is slow); refresh it
+# with the tracked files only, so rsync sends just the changes (seconds), at home:
+git ls-files cpp | sed 's#^cpp/##' > /tmp/cppfiles.txt && rsync -a --files-from=/tmp/cppfiles.txt cpp/ ws4:tmp2/kq_remote/src/cpp/
+rsync -a python/colab/build_portable.sh ws4:tmp2/kq_remote/
+rsync -a python/colab/{colab_launch.sh,colab_job.sh,job_runner.py,kq_worker.py} ws4:tmp2/kq_remote/launch/
+# on ws4 (rootless docker, PATH=~/bin:$PATH): build the binary for Colab (CUDA 13.0, Colab's cuBLAS / cuDNN / NVRTC
+# are used); ws4 is shared: at most 32 make jobs (JOBS, default 32); ~2 minutes
+cd ~/tmp2/kq_remote && ./build_portable.sh src/cpp build
 # at home: binary + selfplay config to the share
 python/colab/publish_share.sh
 ```
