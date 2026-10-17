@@ -527,6 +527,16 @@ Rules GameInitializer::createRules() {
   return createRulesUnsynchronized();
 }
 
+void GameInitializer::randomizeRepetitionRuleUnsynchronized(Rules& rules) {
+  if(!quoridorRepetitionDrawRandom)
+    return;
+  if(rand.nextBool(quoridorRepetitionDrawProb))
+    rules.repetitionDrawCount = quoridorRepetitionDrawCounts[
+      rand.nextUInt(quoridorRepetitionDrawCountWeights.data(),quoridorRepetitionDrawCountWeights.size())];
+  else
+    rules.repetitionDrawCount = 0;
+}
+
 Rules GameInitializer::createRulesUnsynchronized() {
   Rules rules = baseRules;
   rules.koRule = allowedKoRules[rand.nextUInt((uint32_t)allowedKoRules.size())];
@@ -613,6 +623,14 @@ void GameInitializer::createGameSharedUnsynchronized(
     const Sgf::PositionSample& startPos = *posSample;
     board = startPos.board;
     pla = startPos.nextPla;
+    //A hint position's JSON holds no walls (Board::parseBoard returns the initial board; the position is its move
+    //list), so the board has the default walls: give it the rules' walls, as for a game from the empty board. A
+    //start position from an SGF (in memory, with the walls it had) keeps its own.
+    const bool isInitialBoard = board.isEqualForTesting(Board(board.x_size,board.y_size));
+    if(isInitialBoard)
+      board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
+    //The repetition rule mix of the games from the empty board (the position is replayed under it).
+    randomizeRepetitionRuleUnsynchronized(rules);
     hist.clear(board,pla,rules,0);
     hist.setInitialTurnNumber(startPos.initialTurnNumber);
     Loc hintLoc = startPos.hintLoc;
@@ -629,6 +647,9 @@ void GameInitializer::createGameSharedUnsynchronized(
       hist.makeBoardMoveAssumeLegal(board,startPos.moves[i].loc,startPos.moves[i].pla,NULL);
       pla = getOpp(startPos.moves[i].pla);
     }
+    //A hint that is not a legal move of the position (a stale or mismatched hint file) is dropped.
+    if(hintLoc != Board::NULL_LOC && (hist.isGameFinished || !hist.isLegal(board,hintLoc,pla)))
+      hintLoc = Board::NULL_LOC;
 
     //No handicap when starting from a sampled position.
     double thisHandicapProb = 0.0;
@@ -650,7 +671,9 @@ void GameInitializer::createGameSharedUnsynchronized(
     otherGameProps.hintTurn = (int)hist.moveHistory.size();
     otherGameProps.hintPosHash = board.pos_hash;
     otherGameProps.trainingWeight = startPos.trainingWeight;
-    makeGameFairProb = sgfCompensateKomiProb;
+    //A hint move was found by a deep search at the standard komi: keep it (no fair-komi search, which would move the
+    //komi away from the one the hint is for).
+    makeGameFairProb = hintLoc == Board::NULL_LOC ? sgfCompensateKomiProb : 0.0;
     extraBlackAndKomi.interpZero = sgfKomiInterpZeroProb > 0 ? rand.nextBool(sgfKomiInterpZeroProb) : false;
   }
   else {
@@ -670,13 +693,7 @@ void GameInitializer::createGameSharedUnsynchronized(
     }
 
     //Repetition draw rule per game, independent of the fence handicap and komi.
-    if(quoridorRepetitionDrawRandom) {
-      if(rand.nextBool(quoridorRepetitionDrawProb))
-        rules.repetitionDrawCount = quoridorRepetitionDrawCounts[
-          rand.nextUInt(quoridorRepetitionDrawCountWeights.data(),quoridorRepetitionDrawCountWeights.size())];
-      else
-        rules.repetitionDrawCount = 0;
-    }
+    randomizeRepetitionRuleUnsynchronized(rules);
 
     board = Board(xSize,ySize);
     board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);

@@ -138,6 +138,8 @@ class GameInitializer {
     const BoardHistoryModes& gameHistoryModes
   );
   Rules createRulesUnsynchronized();
+  //Draws the per-game repetition draw rule (quoridorRepetitionDrawProb), if configured.
+  void randomizeRepetitionRuleUnsynchronized(Rules& rules);
 
   std::mutex createGameMutex;
   Rand rand;
