@@ -4,6 +4,7 @@
 //-------------------------------------------------------------------------------------
 
 #include "../search/search.h"
+#include "../game/racesolver.h"
 
 #include <algorithm>
 #include <numeric>
@@ -1274,6 +1275,33 @@ bool Search::runSinglePlayout(SearchThread& thread, double upperBoundVisitsLeft)
   return thread.shouldCountPlayout;
 }
 
+//KataQuoridor: a position whose pawn race is solved exactly (docs/QuoridorRaceSolver.md) is a leaf with the solved result.
+bool Search::addRaceSolverLeafIfSolved(SearchThread& thread, SearchNode& node) {
+  const Board& board = thread.board;
+  if(board.blackFences > 0 && board.whiteFences > 0)
+    return false;
+  if((board.blackFences > 0 || board.whiteFences > 0) && !searchParams.quoridorRaceSolverOneSided)
+    return false;
+  RaceResult rr = RaceSolver::evaluate(board, thread.history, thread.pla);
+  if(!rr.solved)
+    return false;
+  nnEvaluator->waitForNextNNEvalIfAny();
+  const double lead = rr.lead2 / 2.0;
+  double score = lead;
+  if(rr.winner != C_EMPTY) {
+    int64_t endPly = thread.history.getCurrentTurnNumber() + rr.plies;
+    double bonus = (double)thread.history.rules.timeBonusPerPly * (double)std::max((int64_t)0, (int64_t)thread.history.rules.maxPlies - endPly);
+    score = lead > 0 ? lead + bonus : lead - bonus;
+  }
+  double winLossValue = 2.0 * ScoreValue::whiteWinsOfWinner(rr.winner, searchParams.drawEquivalentWinsForWhite) - 1;
+  double scoreMean = ScoreValue::whiteScoreDrawAdjust(score,searchParams.drawEquivalentWinsForWhite,thread.history);
+  double scoreMeanSq = ScoreValue::whiteScoreMeanSqOfScoreGridded(score,searchParams.drawEquivalentWinsForWhite);
+  double leadVal = ScoreValue::whiteScoreDrawAdjust(lead,searchParams.drawEquivalentWinsForWhite,thread.history);
+  double weight = (searchParams.useUncertainty && nnEvaluator->supportsShorttermError()) ? searchParams.uncertaintyMaxWeight : 1.0;
+  addLeafValue(node, winLossValue, 0.0, scoreMean, scoreMeanSq, leadVal, weight, true, false);
+  return true;
+}
+
 bool Search::playoutDescend(
   SearchThread& thread, SearchNode& node,
   bool isRoot
@@ -1311,6 +1339,10 @@ bool Search::playoutDescend(
       return true;
     }
   }
+
+  //KataQuoridor race solver: never at the root (the search must still pick a move there).
+  if(searchParams.quoridorRaceSolver && !isRoot && !node.forceNonTerminal && addRaceSolverLeafIfSolved(thread,node))
+    return true;
 
   SearchNodeState nodeState = node.state.load(std::memory_order_acquire);
   if(nodeState == SearchNode::STATE_UNEVALUATED) {

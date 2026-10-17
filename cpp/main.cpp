@@ -63,6 +63,7 @@ dumponnx : (TensorRT/ONNX only) Write out the ONNX graph KataGo builds for a mod
 dumpnninputs : Dump Quoridor NN input rows for random positions (NN parity test).
 evalnnparity : Evaluate the NN parity positions with a model (NN parity test).
 
+racecheck : Compare self-play SGFs with the exact pawn race solver.
 runtests : Test important board algorithms and datastructures
 runnnlayertests : Test a few subcomponents of the current neural net backend
 runonnxmodelfiletests : (TensorRT/ONNX only) Test the .onnx model file reader
@@ -116,6 +117,8 @@ static int handleSubcommand(const string& subcommand, const vector<string>& args
     return MainCmds::dumpnninputs(subArgs);
   else if(subcommand == "evalnnparity")
     return MainCmds::evalnnparity(subArgs);
+  else if(subcommand == "racecheck")
+    return MainCmds::racecheck(subArgs);
   else if(subcommand == "runtests")
     return MainCmds::runtests(subArgs);
   else if(subcommand == "runnnlayertests")

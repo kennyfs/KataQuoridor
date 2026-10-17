@@ -1,4 +1,5 @@
 #include "../program/setup.h"
+#include "../game/racesolver.h"
 
 #include "../core/datetime.h"
 #include "../core/test.h"
@@ -642,6 +643,14 @@ vector<SearchParams> Setup::loadParams(
     if(cfg.contains("useGraphSearch"+idxStr)) params.useGraphSearch = cfg.getBool("useGraphSearch"+idxStr);
     else if(cfg.contains("useGraphSearch"))   params.useGraphSearch = cfg.getBool("useGraphSearch");
     else                                      params.useGraphSearch = (setupFor != SETUP_FOR_DISTRIBUTED);
+    if(cfg.contains("quoridorRaceSolver"+idxStr)) params.quoridorRaceSolver = cfg.getBool("quoridorRaceSolver"+idxStr);
+    else if(cfg.contains("quoridorRaceSolver"))   params.quoridorRaceSolver = cfg.getBool("quoridorRaceSolver");
+    else                                          params.quoridorRaceSolver = false;
+    if(cfg.contains("quoridorRaceSolverOneSided"+idxStr)) params.quoridorRaceSolverOneSided = cfg.getBool("quoridorRaceSolverOneSided"+idxStr);
+    else if(cfg.contains("quoridorRaceSolverOneSided"))   params.quoridorRaceSolverOneSided = cfg.getBool("quoridorRaceSolverOneSided");
+    else                                                  params.quoridorRaceSolverOneSided = true;
+    if(cfg.contains("quoridorRaceSolverCacheEntries"))
+      RaceSolver::setMaxCacheEntries((size_t)cfg.getInt("quoridorRaceSolverCacheEntries", 1, 1000000));
     if(cfg.contains("graphSearchRepBound"+idxStr)) params.graphSearchRepBound = cfg.getInt("graphSearchRepBound"+idxStr, 3, 50);
     else if(cfg.contains("graphSearchRepBound"))   params.graphSearchRepBound = cfg.getInt("graphSearchRepBound",        3, 50);
     else                                           params.graphSearchRepBound = 11;

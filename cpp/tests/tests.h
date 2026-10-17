@@ -42,6 +42,8 @@ namespace Tests {
   void runQuoridorIOv3Tests();
   //testquoridorselfplay.cpp
   void runQuoridorSelfplayTests();
+  //testquoridorracesolver.cpp
+  void runQuoridorRaceSolverTests();
 
   //testpassalivesuicide.cpp
   void runPassAliveSuicideModeTests();

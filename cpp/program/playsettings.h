@@ -46,6 +46,10 @@ struct PlaySettings {
   int cheapSearchVisits;
   float cheapSearchTargetWeight;
 
+  //KataQuoridor: once both players have no walls left, finish the game with exact race-solver moves (no search, no rows
+  //written for those plies; docs/QuoridorRaceSolver.md)
+  bool quoridorRaceSelfplayFinish;
+
   //Attenuate the number of visits used in positions where one player or the other is extremely winning
   bool reduceVisits;
   double reduceVisitsThreshold; //When mcts value is more extreme than this

@@ -104,6 +104,8 @@ struct FinishedGameData {
   Player playoutDoublingAdvantagePla;
   double playoutDoublingAdvantage;
   bool hitTurnLimit;
+  //KataQuoridor: plies played by the race solver instead of search (Play::runGame, quoridorRaceSelfplayFinish)
+  int numRaceSolverPlies;
 
   //Metadata about how the game was initialized
   int numExtraBlack;

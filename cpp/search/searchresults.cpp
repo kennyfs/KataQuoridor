@@ -4,6 +4,7 @@
 //-------------------------------------------------------------------------------------
 
 #include "../search/search.h"
+#include "../game/racesolver.h"
 
 #include <cinttypes>
 
@@ -581,6 +582,23 @@ Loc Search::getChosenMoveLoc() {
     return Board::NULL_LOC;
 
   testAssert(locs.size() == playSelectionValues.size());
+
+  //KataQuoridor race solver: at an exactly solved root only the optimal moves are played (the winner finishes as fast as
+  //possible, the loser delays as long as possible, all keep the exact value), chosen among them by the search.
+  if(searchParams.quoridorRaceSolver && rootBoard.blackFences == 0 && rootBoard.whiteFences == 0) {
+    vector<Loc> optimal = RaceSolver::optimalMoves(rootBoard, rootHistory, rootPla);
+    if(!optimal.empty()) {
+      double sum = 0.0;
+      for(size_t i = 0; i < locs.size(); i++) {
+        if(std::find(optimal.begin(), optimal.end(), locs[i]) == optimal.end())
+          playSelectionValues[i] = 0.0;
+        else
+          sum += playSelectionValues[i];
+      }
+      if(sum <= 0.0)
+        return optimal[nonSearchRand.nextUInt((uint32_t)optimal.size())];
+    }
+  }
 
   double temperature = interpolateEarly(
     searchParams.chosenMoveTemperatureHalflife, searchParams.chosenMoveTemperatureEarly, searchParams.chosenMoveTemperature

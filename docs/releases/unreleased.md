@@ -233,3 +233,21 @@ See [QuoridorIOv3.md §9](../QuoridorIOv3.md#9-λ--0-2026-10-02).
 - **`tf3_b5c256_quoridor_v3`** preset (3.67M parameters, 5 nested-bottleneck blocks of 3 transformer layers, 256 trunk,
   fson normalization, SiLU), KataGo's mainline design scaled to Quoridor.
 - `kq_ladder`: `extra_pairs` for pairs such as two nets at equal search time.
+
+
+## Pawn race solver
+
+Once a player has no walls, the rest of the game is a pawn race that is now solved exactly (retrograde analysis over
+the pawn squares for the fixed walls, about 0.8 ms per wall configuration, cached; the real pawn rules including
+straight and diagonal jumps; see [QuoridorRaceSolver.md](../QuoridorRaceSolver.md)).
+
+- **Search** (`quoridorRaceSolver`, off by default): a position with no walls on either side, or a pure-race win of
+  the only player with walls, is a solved leaf with the exact result. A solved root plays an optimal move (the winner
+  finishes fastest, the loser delays). `quoridorRaceSolverOneSided` and `quoridorRaceSolverCacheEntries` tune it.
+- **Self-play** (`quoridorRaceSelfplayFinish`, off by default): once both players have no walls the game is finished with
+  solver moves, without search and without training rows; the end-of-game targets are unchanged. On run4-s20387072 this
+  is 9.9% of the plies.
+- On in `selfplay_quoridor_v2.cfg`, `gatekeeper_quoridor_v2.cfg`, `gtp_quoridor.cfg`; `kq_ladder.py` turns it on
+  (`"race_solver": false` to compare without it).
+- New command `katago racecheck FILE.sgfs` compares self-play SGFs with the exact values (run4-s20387072: no move lost a
+  result in 63595 exact positions, 14 lost a little lead).

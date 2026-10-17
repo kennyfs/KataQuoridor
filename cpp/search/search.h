@@ -714,6 +714,7 @@ private:
   // Key to look up or store a node in the eval cache so that distinct params never share cached search results.
   Hash128 getEvalCacheKey(Hash128 graphHash) const { return graphHash ^ evalCacheParamsHash; }
 
+  bool addRaceSolverLeafIfSolved(SearchThread& thread, SearchNode& node);
   SearchNode* allocateOrFindNode(SearchThread& thread, Player nextPla, Loc bestChildMoveLoc, bool forceNonTerminal, Hash128 graphHash);
   void clearOldNNOutputs();
   void transferOldNNOutputs(SearchThread& thread);

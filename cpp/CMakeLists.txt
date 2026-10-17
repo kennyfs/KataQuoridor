@@ -1019,6 +1019,7 @@ add_executable(katago
   game/rules.cpp
   game/boardhistory.cpp
   game/graphhash.cpp
+  game/racesolver.cpp
   dataio/sgf.cpp
   dataio/numpywrite.cpp
   dataio/poswriter.cpp
@@ -1083,6 +1084,7 @@ add_executable(katago
   tests/testquoridorrepetition.cpp
   tests/testquoridoriov3.cpp
   tests/testquoridorselfplay.cpp
+  tests/testquoridorracesolver.cpp
   tests/testscore.cpp
   tests/testsgf.cpp
   tests/testsymmetries.cpp
@@ -1116,6 +1118,7 @@ add_executable(katago
   command/gtp.cpp
   command/match.cpp
   command/misc.cpp
+  command/racecheck.cpp
   command/runtests.cpp
   command/sandbox.cpp
   command/selfplay.cpp
