@@ -251,3 +251,15 @@ straight and diagonal jumps; see [QuoridorRaceSolver.md](../QuoridorRaceSolver.m
   (`"race_solver": false` to compare without it).
 - New command `katago racecheck FILE.sgfs` compares self-play SGFs with the exact values (run4-s20387072: no move lost a
   result in 63595 exact positions, 14 lost a little lead).
+
+## Blind-spot suite and deep-search hints (self-play)
+
+- `python/quoridor_arena/blindspot.py`: a fixed suite of ~400 positions from standard self-play games (opening-tree
+  nodes, random positions, value swings), labelled by a 50k-visit search, and an evaluation that reports a net's
+  top-move agreement and regret against those labels at v256 / v1000. See [BlindSpots.md](../BlindSpots.md).
+- `python/quoridor_arena/hintminer.py`: mines hint poses (positions where a deep search finds a better move than
+  the self-play search) for KataGo's `hintPosesDir` / `hintPosesProb`. The self-play config has commented-out
+  lines for it.
+- Hint and SGF start positions now work for Quoridor games: the walls come from the rules, the repetition rule is
+  drawn like for a game from the empty board, a hint game never asks for a fair komi, and a hint that is not legal
+  at its position is dropped.

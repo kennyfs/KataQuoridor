@@ -10,6 +10,7 @@
 #include "../tests/tests.h"
 
 #include "../core/config_parser.h"
+#include "../dataio/sgf.h"
 #include "../program/play.h"
 #include "../program/playutils.h"
 #include "../tests/testsearchcommon.h"
@@ -336,6 +337,262 @@ static void testCompensationNeedsKomiInput() {
 
 //------------------------------------------------------------------------------------------------
 
+//Hint positions (docs/BlindSpots.md): a position is the move list from the empty board (the JSON has no walls),
+//plus the deep search's move. A Quoridor sample with walls round-trips through JSON, and starts a game with the
+//standard komi, the repetition rule mix and the hint move forced into the first search.
+static Sgf::PositionSample makeHintSample(const string& moves, const string& hint, double weight) {
+  Sgf::PositionSample sample;
+  sample.board = Board();
+  sample.nextPla = P_BLACK;
+  Player pla = P_BLACK;
+  for(const string& m : Global::split(moves,' ')) {
+    if(m.empty()) continue;
+    sample.moves.push_back(Move(Location::ofString(m,sample.board),pla));
+    pla = getOpp(pla);
+  }
+  //Like KataGo's samples: nextPla is the player to move at the start of `moves` (Black, from the empty board), not at the end
+  sample.nextPla = P_BLACK;
+  sample.initialTurnNumber = 0;
+  sample.hintLoc = hint.empty() ? Board::NULL_LOC : Location::ofString(hint,sample.board);
+  sample.weight = weight;
+  sample.metadata = "test";
+  return sample;
+}
+
+static const string HINT_MOVES = "e8 e2 e7 e3 e6 e4 a6h f3h f6h d6v";
+
+static void testHintPoseJson() {
+  cout << "  Hint pose JSON round trip with walls" << endl;
+  Sgf::PositionSample sample = makeHintSample(HINT_MOVES, "d4v", 2.5);
+  string line = Sgf::PositionSample::toJsonLine(sample);
+  cout << "    " << line << endl;
+  testAssert(line.find("\"hintLoc\":\"d4v\"") != string::npos);
+  testAssert(line.find("\"a6h\"") != string::npos && line.find("\"d6v\"") != string::npos);
+  Sgf::PositionSample back = Sgf::PositionSample::ofJsonLine(line);
+  testAssert(back.moves.size() == sample.moves.size());
+  for(size_t i = 0; i < sample.moves.size(); i++)
+    testAssert(back.moves[i].loc == sample.moves[i].loc && back.moves[i].pla == sample.moves[i].pla);
+  testAssert(back.hintLoc == sample.hintLoc && back.nextPla == sample.nextPla);
+  testAssert(back.weight == 2.5 && back.metadata == "test" && back.initialTurnNumber == 0);
+  testAssert(back.board.x_size == 17 && back.board.y_size == 17);
+  //A line without a hint
+  Sgf::PositionSample nohint = Sgf::PositionSample::ofJsonLine(Sgf::PositionSample::toJsonLine(makeHintSample("e8 e2", "", 1.0)));
+  testAssert(nohint.hintLoc == Board::NULL_LOC && nohint.moves.size() == 2);
+  //The way python/quoridor_arena/hintminer.py writes a line.
+  Sgf::PositionSample py = Sgf::PositionSample::ofJsonLine(
+    "{\"xSize\":17,\"ySize\":17,\"board\":\"\",\"nextPla\":\"B\",\"moveLocs\":[\"e8\",\"d1h\"],\"movePlas\":[\"B\",\"W\"],"
+    "\"initialTurnNumber\":0,\"hintLoc\":\"e2\",\"weight\":1.5}"
+  );
+  testAssert(py.moves.size() == 2 && py.moves[1].loc == Location::ofString("d1h",py.board) && py.hintLoc == Location::ofString("e2",py.board));
+  testAssert(py.nextPla == P_BLACK);
+}
+
+static void testHintPosGame() {
+  cout << "  Hint position games: komi, rules, replay" << endl;
+  //Every empty-board game would get a random komi and every fork or SGF position a fair-komi search; a hint game
+  //keeps the standard komi, and gets the repetition rule mix.
+  std::unique_ptr<GameInitializer> gameInit(makeGameInit(
+    "quoridorKomiRandomProb = 1.0\n"
+    "forkCompensateKomiProb = 1.0\n"
+    "repetitionDrawCount = 3\n"
+    "quoridorRepetitionDrawProb = 0.75\n"
+    "quoridorRepetitionDrawCounts = 3,4\n"
+    "quoridorRepetitionDrawCountWeights = 0.9,0.1\n",
+    "testquoridorselfplay hintpos"
+  ));
+  Sgf::PositionSample sample = makeHintSample(HINT_MOVES, "d4v", 1.0);
+  const int n = 4000;
+  int ruleOn = 0, ruleOff = 0;
+  for(int i = 0; i < n; i++) {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &sample, BoardHistoryModes());
+    testAssert(hist.rules.komi == Rules::DEFAULT_KOMI && extraBlackAndKomi.komiMean == Rules::DEFAULT_KOMI);
+    testAssert(!extraBlackAndKomi.makeGameFair);
+    testAssert(hist.rules.blackInitialFences == 10 && hist.rules.whiteInitialFences == 10);
+    //The 10 moves were replayed, and 3 + 3 walls are placed
+    testAssert(hist.moveHistory.size() == sample.moves.size());
+    testAssert(board.blackFences + board.whiteFences == 20 - 4);
+    testAssert(pla == P_BLACK && pla == hist.presumedNextMovePla);   // an even number of moves
+    testAssert(otherGameProps.isHintPos && !otherGameProps.isSgfPos && !otherGameProps.allowPolicyInit);
+    testAssert(otherGameProps.hintLoc == sample.hintLoc && otherGameProps.hintTurn == (int)sample.moves.size());
+    testAssert(otherGameProps.hintPosHash == board.pos_hash);
+    testAssert(hist.isLegal(board, sample.hintLoc, pla));
+    if(hist.rules.repetitionDrawCount > 0) {
+      testAssert(hist.rules.repetitionDrawCount == 3 || hist.rules.repetitionDrawCount == 4);
+      ruleOn++;
+    }
+    else
+      ruleOff++;
+  }
+  checkFraction("hint games with the repetition rule", ruleOn, n, 0.75, 0.03);
+  testAssert(ruleOff > 0);
+
+  //An odd number of moves: White is to move and the hint is White's
+  {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    Sgf::PositionSample odd = makeHintSample("e8 e2 e7 e3 e6", "e4", 1.0);
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &odd, BoardHistoryModes());
+    testAssert(otherGameProps.isHintPos && otherGameProps.hintLoc == odd.hintLoc);
+    testAssert(hist.moveHistory.size() == 5 && pla == P_WHITE && hist.presumedNextMovePla == P_WHITE);
+  }
+  //A hint that is not legal at the position (here: a wall on an occupied anchor) is dropped: a plain start position
+  {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    Sgf::PositionSample bad = makeHintSample(HINT_MOVES, "a6h", 1.0);
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &bad, BoardHistoryModes());
+    testAssert(otherGameProps.hintLoc == Board::NULL_LOC && !otherGameProps.isHintPos && otherGameProps.isSgfPos);
+    testAssert(hist.moveHistory.size() == bad.moves.size());
+  }
+  //An unplayable move list stops at the bad move and drops the hint (e8 twice in a row is not a Black move)
+  {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    Sgf::PositionSample bad = makeHintSample("e8 e2 e8 e3 e6", "d4v", 1.0);
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &bad, BoardHistoryModes());
+    testAssert(otherGameProps.hintLoc == Board::NULL_LOC);
+    testAssert(hist.moveHistory.size() < bad.moves.size());
+  }
+}
+
+//A short game from a hint position with a random net: the first search is the hint search (4x visits, hint
+//forced), the later ones are plain.
+static void testHintPosSelfplay() {
+  cout << "  Self-play from a hint position" << endl;
+  std::unique_ptr<GameInitializer> gameInit(makeGameInit("repetitionDrawCount = 0\n", "testquoridorselfplay hint selfplay"));
+  Sgf::PositionSample sample = makeHintSample("e8 e2 e7 e3", "e6", 1.0);
+
+  Logger logger(nullptr, false, false, false);
+  ostringstream logOut;
+  logger.addOStream(logOut);
+  NNEvaluator* nnEval = TestSearchCommon::startNNEval(
+    "/dev/null", logger, "testquoridorselfplay hint net", NNPos::MAX_BOARD_LEN, NNPos::MAX_BOARD_LEN,
+    0, false, false, false, true, false
+  );
+  const int64_t visits = 12;
+  SearchParams params;
+  params.maxVisits = visits;
+  params.numThreads = 1;
+  params.rootNoiseEnabled = true;
+  MatchPairer::BotSpec botSpec;
+  botSpec.botIdx = 0;
+  botSpec.botName = "bot";
+  botSpec.nnEval = nnEval;
+  botSpec.baseParams = params;
+
+  for(int useHint = 0; useHint < 2; useHint++) {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    Sgf::PositionSample s = sample;
+    if(!useHint)
+      s.hintLoc = Board::NULL_LOC;
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &s, BoardHistoryModes());
+    testAssert(otherGameProps.isHintPos == (useHint == 1));
+    Rand rand("testquoridorselfplay hint game");
+    auto shouldStop = []() noexcept { return false; };
+    logOut.str("");
+    FinishedGameData* gameData = Play::runGame(
+      board, pla, hist, extraBlackAndKomi, botSpec, botSpec, "testquoridorselfplay hint search",
+      false, true, logger, true, false, (int)hist.moveHistory.size() + 3, shouldStop, nullptr, playSettings, otherGameProps, rand,
+      nullptr, nullptr
+    );
+    string log = logOut.str();
+    size_t numHintLines = 0;
+    for(size_t pos = log.find("HintLoc e6"); pos != string::npos; pos = log.find("HintLoc e6", pos + 1))
+      numHintLines++;
+    cout << "    hint " << useHint << ": moves played " << gameData->endHist.moveHistory.size() - gameData->startHist.moveHistory.size()
+         << ", first search visits " << gameData->policyTargetsByTurn[0].unreducedNumVisits
+         << ", HintLoc lines in the search log " << numHintLines << endl;
+    testAssert(gameData->startHist.moveHistory.size() == sample.moves.size());
+    testAssert(gameData->mode == (useHint ? FinishedGameData::MODE_HINTPOS : FinishedGameData::MODE_SGFPOS));
+    testAssert(gameData->endHist.moveHistory.size() > gameData->startHist.moveHistory.size());
+    testAssert(gameData->startHist.rules.komi == Rules::DEFAULT_KOMI);
+    if(useHint) {
+      testAssert(numHintLines == 1);
+      testAssert(gameData->policyTargetsByTurn[0].unreducedNumVisits == 4 * visits);
+      if(gameData->policyTargetsByTurn.size() > 1)
+        testAssert(gameData->policyTargetsByTurn[1].unreducedNumVisits == visits);
+    }
+    else {
+      testAssert(numHintLines == 0);
+      testAssert(gameData->policyTargetsByTurn[0].unreducedNumVisits == visits);
+    }
+    delete gameData;
+  }
+  delete nnEval;
+}
+
+//Start positions from SGF files (startPosesFromSgfDir) with Quoridor games.
+static void testStartPosFromSgf() {
+  cout << "  Start positions from a Quoridor SGF" << endl;
+  const string sgfText =
+    "(;FF[4]GM[1]SZ[17]KM[-0.5]WB[10]WW[10]RU[Quoridor]AB[iq]AW[ia];B[io];W[ic];B[im];W[ie];B[ik];W[ig];B[bl];W[ff];B[fl];W[jk];B[je];W[ii];B[ig];W[ik])";
+  std::unique_ptr<Sgf> sgf = Sgf::parse(sgfText);
+  std::set<Hash128> uniqueHashes;
+  vector<Sgf::PositionSample> samples;
+  sgf->loadAllUniquePositions(uniqueHashes, false, false, true, false, NULL, samples);
+  cout << "    " << samples.size() << " positions from a 14-move game" << endl;
+  testAssert(samples.size() >= 12);
+  //The position after each ply of the game, by straight replay
+  vector<Hash128> truth;
+  {
+    std::unique_ptr<CompactSgf> csgf = CompactSgf::parse(sgfText);
+    Board b;
+    Player p = P_BLACK;
+    BoardHistory h;
+    csgf->setupInitialBoardAndHist(Rules::getQuoridorRules(), b, p, h, BoardHistoryModes());
+    truth.push_back(b.pos_hash);
+    for(const Move& m : csgf->moves) {
+      h.makeBoardMoveAssumeLegal(b, m.loc, m.pla, NULL);
+      truth.push_back(b.pos_hash);
+    }
+    testAssert(truth.size() == 15);
+  }
+  std::unique_ptr<GameInitializer> gameInit(makeGameInit("repetitionDrawCount = 0\n", "testquoridorselfplay startpos"));
+  for(size_t i = 0; i < samples.size(); i++) {
+    Board board;
+    Player pla;
+    BoardHistory hist;
+    ExtraBlackAndKomi extraBlackAndKomi;
+    OtherGameProperties otherGameProps;
+    PlaySettings playSettings;
+    gameInit->createGame(board, pla, hist, extraBlackAndKomi, NULL, playSettings, otherGameProps, &samples[i], BoardHistoryModes());
+    testAssert(otherGameProps.isSgfPos);
+    //The position after the replayed moves is the one of the SGF at that ply: i moves played, 5 or fewer replayed
+    testAssert(hist.moveHistory.size() <= 5);
+    testAssert(hist.presumedNextMovePla == pla);
+    //...and it is the position of the game at that ply, with its walls
+    const int64_t ply = hist.initialTurnNumber + (int64_t)hist.moveHistory.size();
+    testAssert(ply >= 0 && ply < (int64_t)truth.size() && board.pos_hash == truth[ply]);
+    cout << "    sample " << i << ": ply " << ply << ", " << hist.moveHistory.size() << " moves replayed, walls left "
+         << board.blackFences << "/" << board.whiteFences << endl;
+  }
+}
+
+//------------------------------------------------------------------------------------------------
+
 static Board boardWithPawns(const string& white, const string& black) {
   Board start;
   nlohmann::json j = Board::toJson(start);
@@ -403,5 +660,9 @@ void Tests::runQuoridorSelfplayTests() {
   testDistributions();
   testFindEvenKomi();
   testCompensationNeedsKomiInput();
+  testHintPoseJson();
+  testHintPosGame();
+  testHintPosSelfplay();
+  testStartPosFromSgf();
   testGatekeeperScoring();
 }
