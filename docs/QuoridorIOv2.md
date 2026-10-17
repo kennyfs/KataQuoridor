@@ -36,7 +36,7 @@ KataQuoridor 0.1.0 has three problems that come from the game's objective rather
 We prefer to fix these through **rules and objectives** that the search and the net can learn from, not through
 hand-coded endgame logic:
 
-- no analytic endgame solver ("if the race is won, play the shortest path");
+- no analytic endgame solver ("if the race is won, play the shortest path"); *since 2026-10-18 an exact pawn race solver exists, see [QuoridorRaceSolver.md](QuoridorRaceSolver.md); it plays the real pawn rules instead of a distance heuristic*;
 - no move pruning ("never step back", "always take an immediate win").
 
 Such rules are hard to get right with walls and jumps, they would only fix the symptoms we have seen, and they
