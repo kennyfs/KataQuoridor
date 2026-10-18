@@ -1282,8 +1282,10 @@ bool Search::addRaceSolverLeafIfSolved(SearchThread& thread, SearchNode& node) {
     return false;
   if((board.blackFences > 0 || board.whiteFences > 0) && !searchParams.quoridorRaceSolverOneSided)
     return false;
-  //A wall placed since the root makes a new wall configuration, a solve of its own: left to the net
-  if(searchParams.quoridorRaceSolverRootWallsOnly &&
+  //One-sided proofs: the player with walls places more in the tree, each a new wall configuration and a solve (~1 ms)
+  //of its own; only the root's configuration is solved, the rest is left to the net. Exact races (both out of walls)
+  //are solved at every node: there the last walls placed in the tree are what the solver tells apart.
+  if(searchParams.quoridorRaceSolverOneSidedRootWallsOnly && (board.blackFences > 0 || board.whiteFences > 0) &&
      (board.blackFences != rootBoard.blackFences || board.whiteFences != rootBoard.whiteFences))
     return false;
   RaceResult rr = RaceSolver::evaluate(board, thread.history, thread.pla);
