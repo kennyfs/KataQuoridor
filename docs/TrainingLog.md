@@ -144,6 +144,19 @@ removed before the loop switched (code in git history, `cb0b5ed7`). The loop's s
 - **Training in bf16** (`-use-bf16`, from the next cycle): 25,600 samples in 16–21 s vs 49–54 s in fp32/TF32 on the
   3070 (~2.7×), same losses (`~/q1_run/bench_bf16`).
 
+- **Self-play changes** (from the next cycle; smoke run of 43k rows with s33.97M, kept in run4's data):
+  `reduceVisitsThreshold` 0.9 → 0.97; random komi 30% → 12% (weights 70/25/5); `compensateAfterPolicyInitProb` 0.3
+  (the fair komi after the policy init moves); fence handicap 10% → 12% with 80% compensation; hints re-mined with
+  s33.97M (26 of the 62 old hints now found by the fresh search and dropped, 26 new) and `hintPosesProb` 0.03 → 0.05.
+  Smoke vs s33.1M's self-play: 1000-visit searches 7.7% → 14.2% of positions, mean row weight 0.140 → 0.174,
+  positions beyond 90 / 10% 92% → 85%, komi +0.5 games 90/9 → 68/29 (W/B); NN rows per data row 518 → 462.
+- **Search-parameter A/B** (`~/arena/kq_search1`, s33.97M vs itself, v512, 300 games each): cpuct 0.8 +25 [−3, 53],
+  cpuct 1.4 −23, fpuReductionMax 0.4 −18 / 0.1 +5, dynamicScoreUtilityFactor 0.5 −12, policyOptimism 0.5 +13,
+  subtreeValueBiasFactor 0 +5. Nothing significant; nothing changed (cpuct 0.8 is worth a longer test).
+- **Race solver CPU:** every wall placed in the tree was a new configuration and a ~1 ms solve (1024-entry cache), so
+  match used all cores. `quoridorRaceSolverRootWallsOnly` (default on) solves only nodes with the root's walls.
+  460 games at v256: CPU 800 s (old) vs 478 s (root walls only) vs 482 s (solver off).
+
 ## Lessons
 
 - Long games were mostly game-theoretic draws, not bugs; give the net the rules and inputs to see them.
