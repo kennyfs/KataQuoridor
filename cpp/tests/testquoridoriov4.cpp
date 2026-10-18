@@ -12,6 +12,7 @@
 
 #include "../dataio/trainingwrite.h"
 #include "../neuralnet/quoridornn.h"
+#include "../search/search.h"
 #include "../tests/testsearchcommon.h"
 
 #include <chrono>
@@ -220,6 +221,61 @@ static void testRowAndMirror() {
   testAssert(checked > 500);
 }
 
+static void testDrawOutcome() {
+  cout << "  Draw as the noResult outcome" << endl;
+  //Targets of a finished game by winner.
+  {
+    ValueTargets t;
+    t.setOutcomeOfWinner(P_WHITE);
+    testAssert(t.win == 1.0f && t.loss == 0.0f && t.noResult == 0.0f);
+    t.setOutcomeOfWinner(P_BLACK);
+    testAssert(t.win == 0.0f && t.loss == 1.0f && t.noResult == 0.0f);
+    t.setOutcomeOfWinner(C_EMPTY);
+    testAssert(t.win == 0.0f && t.loss == 0.0f && t.noResult == 1.0f);
+  }
+  //A search where every move draws (maxPlies reached by the next ply): the search reports a certain draw, with utility 0
+  //(noResultUtilityForWhite = 0, the utility of the old win 0.5 / loss 0.5), whichever net.
+  Logger logger(nullptr, false, false, false);
+  NNEvaluator* nnEval = TestSearchCommon::startNNEval(
+    "/dev/null", logger, "quoridorIOv4DrawNN", NNPos::MAX_BOARD_LEN, NNPos::MAX_BOARD_LEN, 0, false, false, false, true, false
+  );
+  Rules rules = Rules::getQuoridorRules();
+  rules.maxPlies = 6;
+  Board board;
+  board.setFencesLeft(rules.blackInitialFences, rules.whiteInitialFences);
+  BoardHistory hist(board, P_BLACK, rules, 0, BoardHistoryModes());
+  Player pla = P_BLACK;
+  for(const char* m : {"e8", "e2", "e7", "e3", "e8"}) {
+    Loc loc = Location::ofString(m, board);
+    testAssert(hist.isLegal(board, loc, pla));
+    hist.makeBoardMoveAssumeLegal(board, loc, pla, NULL);
+    pla = getOpp(pla);
+  }
+  testAssert(!hist.isGameFinished && hist.pliesUntilDraw() == 1);
+  SearchParams params;
+  params.maxVisits = 100;
+  params.numThreads = 1;
+  testAssert(params.noResultUtilityForWhite == 0.0 && params.drawEquivalentWinsForWhite == 0.5);
+  Search search(params, nnEval, &logger, "quoridorIOv4DrawSearch");
+  search.setPosition(pla, board, hist);
+  search.runWholeSearchAndGetMove(pla);
+  ReportedSearchValues rootVals = search.getRootValuesRequireSuccess();
+  cout << "    root: noResult " << rootVals.noResultValue << " winLoss " << rootVals.winLossValue << " utility " << rootVals.utility
+       << " win " << rootVals.winValue << " loss " << rootVals.lossValue << endl;
+  testAssert(rootVals.noResultValue > 0.95);
+  testAssert(std::fabs(rootVals.winLossValue) < 0.05);
+  testAssert(std::fabs(rootVals.winValue - rootVals.lossValue) < 0.05);
+  //The draw is valued by noResultUtilityForWhite: change it and the root's utility follows (white perspective)
+  SearchParams params2 = params;
+  params2.noResultUtilityForWhite = 0.4;
+  Search search2(params2, nnEval, &logger, "quoridorIOv4DrawSearch2");
+  search2.setPosition(pla, board, hist);
+  search2.runWholeSearchAndGetMove(pla);
+  ReportedSearchValues rootVals2 = search2.getRootValuesRequireSuccess();
+  testAssert(rootVals2.utility > rootVals.utility + 0.3);
+  delete nnEval;
+}
+
 static void testCost() {
   cout << "  Cost per row" << endl;
   Rand rand("quoridoriov4 cost");
@@ -278,6 +334,7 @@ void Tests::runQuoridorIOv4Tests() {
   cout << "Running Quoridor I/O v4 tests" << endl;
   testBruteForce();
   testRowAndMirror();
+  testDrawOutcome();
   testCost();
   cout << "Quoridor I/O v4 tests passed" << endl;
 }
