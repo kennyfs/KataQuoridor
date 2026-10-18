@@ -101,6 +101,14 @@ standard rules with the repetition rule off), relative to the 0.1.0 release net 
 - kq_ladder can take a fixed opening suite (`openings: {"file": ...}`); `openings_from_selfplay.py` makes one from
   the most common standard-game lines (115 lines of 2-8 plies from run4 s18.7M-s20.4M, mirrors merged).
 
+### 5.2 I/O v4 A/B (2026-10-18)
+
+[QuoridorIOv4.md](QuoridorIOv4.md). From run4-s28602368 (migrated to v4), one fresh shuffle of the window (1.91M rows, 16% draw
+rows), 2.33M samples per arm: A control (v3 inputs, draws as ½) +65 Elo [43, 89] over the start net (kq_std2-style ladder, v256);
+B wall-effect inputs +66 [43, 89]; C draw outcome +52 [30, 74]. Held-out policy KL and `vhalf` equal across arms, blind-spot
+agreement within noise (B nominally best). Wall effects do not help at this stage; the draw outcome costs nothing and gives a
+draw probability. Not run: a seed-noise arm.
+
 ## Lessons
 
 - Long games were mostly game-theoretic draws, not bugs; give the net the rules and inputs to see them.

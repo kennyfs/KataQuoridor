@@ -13,7 +13,7 @@
 # Usage: scripts/run_ab_io_v4.sh [STEP ...]     (default: prep A B C eval)
 #   prep            shuffle, convert, migrate (a few minutes, CPU)
 #   A | B | C | D   train that arm (both parts, ~80 min) and export its SWA net to ab_v4/models
-#   A1 A2 ...       one part of an arm (~40 min)
+#   A1 A2 ...       one part of an arm (~40 min); X_A ... exports an arm after its two parts
 #   eval            held-out losses (S = the start net, A, B, C, D) + blind-spot suite
 #   ladder          kq_ladder with the standard openings (v256), arms + the start net
 # Run from anywhere; needs the venv's python and a CUDA katago (KATAGO_BIN, default cpp/build-cuda/katago).
@@ -74,13 +74,14 @@ part() {  # $1 = arm, $2 = part (1|2)
   log "$arm part $2 start"
   cd "$PY"
   ./selfplay/train.sh "$B" $N $MODELKIND 256 main -samples-per-epoch 100000 \
-    -swa-period-samples 80000 -quit-if-no-data -export-only-at-end -max-epochs-this-instance 10 -max-val-samples 10000 \
+    -swa-period-samples 80000 -quit-if-no-data -export-only-at-end -max-epochs-this-instance ${EPOCHS:-10} -max-val-samples 10000 \
     -use-aurora -wd-floor-frac 0.5 -lr-scale 2 -no-lr-warmup $(arm_flags $arm) > "$B"/logs/train_part$2.txt 2>&1
   log "$arm part $2 done"
 }
 
-arm() {  # both parts and the export
-  part $1 1; part $1 2
+arm() { part $1 1; part $1 2; export_arm $1; }  # both parts and the export
+
+export_arm() {
   local B=$A/$1
   cd "$PY"
   ./selfplay/export_model_for_selfplay.sh abv4-$1 "$B" 0 >> "$B"/logs/export.txt 2>&1
@@ -112,7 +113,7 @@ blindspot() {  # the newest labelled suite, v256 / v1000, gtp params, one net at
   cd "$PY"
   local S=$HOME/arena/blindspot2/job_eval/out/suite_v2.jsonl O=$A/blindspot; mkdir -p $O
   local nets="start:$R4/models/run4-s28602368-d9798994"
-  for arm in A B C D; do for m in "$A"/$arm/models/*; do [ -d "$m" ] && nets="$nets $arm:$m"; done; done
+  for arm in A B C D; do m=$(ls -dt "$A"/$arm/models/* 2>/dev/null | head -1); [ -n "$m" ] && nets="$nets $arm:$m"; done  # the newest export of each arm
   for nm in $nets; do
     python -m quoridor_arena.blindspot eval --suite "$S" --model "${nm#*:}/model.bin.gz" --net "${nm%%:*}" \
       --config "$REPO"/cpp/configs/gtp_quoridor.cfg --katago "$KATAGO_BIN" --visits 256,1000 --params gtp \
@@ -129,7 +130,7 @@ c = json.load(open('$HOME/arena/kq_std2/config.json'))
 A = '$A'
 ser = [{"name": "start", "prefix": "s", "models": ["$R4/models/run4-s28602368-d9798994"]}]
 for arm in "ABCD":
-    ms = sorted(glob.glob(f'{A}/{arm}/models/*'))
+    ms = sorted(glob.glob(f'{A}/{arm}/models/*'), key=os.path.getmtime)[-1:]  # the newest export
     if ms: ser.append({"name": arm, "prefix": arm.lower(), "models": ms})
 c['series'] = ser
 c['reference'] = "s-s28602368-v256"
@@ -148,7 +149,7 @@ PYEOF
 
 for s in "${STEPS[@]}"; do
   case $s in
-    prep) prep ;; A|B|C|D) arm $s ;; A1|B1|C1|D1) part ${s:0:1} 1 ;; A2|B2|C2|D2) part ${s:0:1} 2 ;;
-    eval) evals; blindspot ;; ladder) ladder ;; *) echo "unknown step $s"; exit 1 ;;
+    prep) prep ;; A|B|C|D) arm $s ;; X_A|X_B|X_C|X_D) export_arm ${s:2:1} ;; A1|B1|C1|D1) part ${s:0:1} 1 ;; A2|B2|C2|D2|A3|B3|C3|D3) part ${s:0:1} ${s:1:1} ;;
+    losses) evals ;; blindspot) blindspot ;; eval) evals; blindspot ;; ladder) ladder ;; *) echo "unknown step $s"; exit 1 ;;
   esac
 done

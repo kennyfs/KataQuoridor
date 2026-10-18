@@ -271,3 +271,13 @@ straight and diagonal jumps; see [QuoridorRaceSolver.md](../QuoridorRaceSolver.m
 - `serve.py --latest [RUN_DIR]` (default `~/q1_run/run4`) serves the newest self-play `.sgfs` of the run, looked up
   again on every page load, and names it in the page; files are revalidated on each load (no hard refresh needed).
   Ported from KataCDC.
+
+## Quoridor I/O v4: wall-effect inputs and the draw as its own outcome
+
+See [docs/QuoridorIOv4.md](../QuoridorIOv4.md). I/O v4 adds spatial inputs 21-24 and globals 19-20 (per anchor, orientation and
+player: how much a wall placed now would lengthen the shortest path; 8 µs per row), and trains draws as the noResult value
+outcome (a third value logit). Self-play writes v4 rows (`wallEffectNCHW`), `kata-analyze` / the analysis engine report the
+search's draw probability as `rootInfo noResultValue`, SGF comments keep win / loss with a draw worth ½ each, and
+`reduceVisitsDrawThreshold` (off by default) reduces visits in settled draws. Tools: `quoridor_convert_tdata_v3_to_v4.py`,
+`quoridor_upgrade_v3_to_v4.py`, `katago quoridorwalleffects`. A/B on run4 (2.3M samples): wall effects +1 Elo, draw target -13 Elo,
+both within noise; recommendation: switch for the draw outcome.
