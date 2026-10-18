@@ -60,7 +60,7 @@ namespace QuoridorNN {
   // policy / optimistic-policy variants, each with {pawn, vertical wall, horizontal wall} planes.
   constexpr int NUM_POLICY_PLANES = 3;
   // I/O versions (model option D): 1 = KataQuoridor 0.1.0 nets, 2 = docs/QuoridorIOv2.md, 3 = v2 + the
-  // repetition inputs (docs/QuoridorIOv3.md), 4 = v3 + the wall-effect inputs and a draw (noResult) value outcome
+  // repetition inputs (docs/QuoridorIOv3.md), 4 = v3 inputs + a draw (noResult) value outcome
   // (docs/QuoridorIOv4.md). All are supported for inference; training data is only written for TRAINING_IO_VERSION.
   constexpr int MAX_SUPPORTED_IO_VERSION = 4;
   constexpr int TRAINING_IO_VERSION = 4;
@@ -85,14 +85,10 @@ namespace QuoridorNN {
   constexpr int SPATIAL_DRAWING_MOVE_V3 = 20;
   constexpr int GLOBAL_REPETITION_ON_V3 = 17;
   constexpr int GLOBAL_REPETITION_COUNT_V3 = 18;
-  // Quoridor I/O v4 = v3 + these channels, appended (see fillRow, fillCanonicalWallEffectU8).
-  constexpr int NUM_FEATURES_SPATIAL_V4 = 25;
-  constexpr int NUM_FEATURES_GLOBAL_V4 = 21;
-  constexpr int SPATIAL_WALL_EFFECT_V4 = 21;   // 21..24: see NUM_WALL_EFFECT_CHANNELS
-  constexpr int GLOBAL_MAX_OPP_WALL_EFFECT_V4 = 19;
-  constexpr int GLOBAL_NUM_OPP_WALL_EFFECT2_V4 = 20;
-  constexpr int MAX_NUM_FEATURES_SPATIAL = NUM_FEATURES_SPATIAL_V4;
-  constexpr int MAX_NUM_FEATURES_GLOBAL = NUM_FEATURES_GLOBAL_V4;
+  // Quoridor I/O v4 has exactly the v3 inputs; it differs from v3 only in the value targets (a draw is the
+  // noResult outcome, see docs/QuoridorIOv4.md).
+  constexpr int MAX_NUM_FEATURES_SPATIAL = NUM_FEATURES_SPATIAL_V3;
+  constexpr int MAX_NUM_FEATURES_GLOBAL = NUM_FEATURES_GLOBAL_V3;
 
   // Global 18 of v3: how close the current position (occurred `count` times) is to "one more occurrence draws":
   // (count - 1) / (N - 2), with N = rules.repetitionDrawCount, so 0 the first time and 1.0 at count N - 1 (for
@@ -105,35 +101,6 @@ namespace QuoridorNN {
   // Everything the v3 repetition inputs read beyond Board / rules / ply (the current count and repeatingPawnMoves),
   // hashed; Hash128() when the rule is off. NNEvaluator folds it into the NN cache hash for v3 nets.
   Hash128 repetitionInputsHash(const Board& board, const BoardHistory& hist, Player pla);
-
-  // ---------------------------------------------------------------------------------------------
-  // I/O v4 wall effects (docs/QuoridorIOv4.md). For every wall placement (anchor (c, r) on the 8x8 anchor grid,
-  // vertical / horizontal) and for each player, the increase of that player's shortest distance to the goal row
-  // (walls only, pawns ignored, like the distance channels) if the wall were placed now.
-  //   channel k = SPATIAL_WALL_EFFECT_V4 + k:  0 vertical wall, side to move ("me");  1 horizontal, me;
-  //                                            2 vertical, opponent;                   3 horizontal, opponent.
-  // Raw (training data key wallEffectNCHW, uint8 [N,4,9,9], canonical orientation like fillRow, anchors in
-  // [0..7]x[0..7], 0 elsewhere): the increase (0, 1, 2, ... capped at WALL_EFFECT_RAW_MAX) for a geometrically
-  // legal placement (Board::isGeometricallyLegalWallPlacement: no overlap, no full block), WALL_EFFECT_ILLEGAL_U8
-  // for an illegal one. Input value: legal -> min(increase, WALL_EFFECT_CAP) / WALL_EFFECT_CAP, illegal ->
-  // WALL_EFFECT_ILLEGAL_VALUE. Stored raw because packed bit planes can't hold them (the S8-S11 lesson).
-  // Globals 19 / 20 are functions of the two opponent planes (wallEffectGlobals).
-  // ---------------------------------------------------------------------------------------------
-  constexpr int NUM_WALL_EFFECT_CHANNELS = 4;
-  constexpr int WALL_EFFECT_CAP = 8;
-  constexpr int WALL_EFFECT_RAW_MAX = 254;
-  constexpr uint8_t WALL_EFFECT_ILLEGAL_U8 = 255;
-  constexpr float WALL_EFFECT_ILLEGAL_VALUE = -1.0f;
-  // Global 20 counts the opponent walls with an increase >= this, divided by NUM_OPP_WALL_EFFECT_SCALE (clipped to 1).
-  constexpr int WALL_EFFECT_GLOBAL_MIN_COUNT_INCREASE = 2;
-  constexpr float NUM_OPP_WALL_EFFECT_SCALE = 16.0f;
-
-  void fillCanonicalWallEffectU8(const Board& board, Player nextPlayer, uint8_t* out);
-  float wallEffectInputValue(uint8_t raw);
-  // Global 19: the largest opponent increase (min(., WALL_EFFECT_CAP) / WALL_EFFECT_CAP); global 20: the number of
-  // placements that cost the opponent at least WALL_EFFECT_GLOBAL_MIN_COUNT_INCREASE steps / NUM_OPP_WALL_EFFECT_SCALE
-  // (clipped to 1). `raw` is the 4x81 array of fillCanonicalWallEffectU8.
-  void wallEffectGlobals(const uint8_t* raw, float& maxOppEffect, float& numOppBigEffects);
 
   int numSpatialFeatures(int ioVersion);
   int numGlobalFeatures(int ioVersion);
@@ -170,8 +137,7 @@ namespace QuoridorNN {
   //   global 17: 1 if the repetition rule is on (rules.repetitionDrawCount > 0);
   //   global 18: repetitionProgress(current position's occurrence count): 1.0 = one more occurrence of this
   //     position draws.
-  // v4 adds, after the 21 v3 spatial / 19 v3 global features, the wall-effect planes 21..24 and globals 19, 20
-  // (see fillCanonicalWallEffectU8, wallEffectGlobals).
+  // v4 fills the same inputs as v3.
   void fillRow(
     const Board& board,
     const BoardHistory& boardHistory,

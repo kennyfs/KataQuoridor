@@ -188,7 +188,6 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   const int packedArea = (X * Y + 7) / 8;
   NumpyBuffer<uint8_t> trainPacked({numRows, C, packedArea});
   NumpyBuffer<uint8_t> trainDist({numRows, QuoridorNN::NUM_DIST_CHANNELS, Y, X});
-  NumpyBuffer<uint8_t> trainWallEffect({numRows, QuoridorNN::NUM_WALL_EFFECT_CHANNELS, Y, X});
   NumpyBuffer<float> trainGlobal({numRows, G});
   vector<float> trainScratch((size_t)C * X * Y);
 
@@ -202,7 +201,6 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
         b, p.hist, p.pla, nnInputParams, trainScratch.data(),
         trainPacked.data + (size_t)i * C * packedArea,
         trainDist.data + (size_t)i * QuoridorNN::NUM_DIST_CHANNELS * X * Y,
-        trainWallEffect.data + (size_t)i * QuoridorNN::NUM_WALL_EFFECT_CHANNELS * X * Y,
         trainGlobal.data + (size_t)i * G
       );
     }
@@ -257,7 +255,6 @@ int MainCmds::dumpnninputs(const vector<string>& args) {
   if(writeTrainRows) {
     writeArray(zip, "trainBinaryInputNCHWPacked", trainPacked, numRows);
     writeArray(zip, "trainSpatialDistNCHW", trainDist, numRows);
-    writeArray(zip, "trainWallEffectNCHW", trainWallEffect, numRows);
     writeArray(zip, "trainGlobalInputNC", trainGlobal, numRows);
   }
   zip.close();

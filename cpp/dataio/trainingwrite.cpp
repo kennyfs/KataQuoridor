@@ -308,7 +308,6 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    binaryInputNCHWUnpacked(NULL),
    binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
    spatialDistNCHW({maxRws, QuoridorNN::NUM_DIST_CHANNELS, yLen, xLen}),
-   wallEffectNCHW({maxRws, QuoridorNN::NUM_WALL_EFFECT_CHANNELS, yLen, xLen}),
    globalInputNC({maxRws, numFChannels}),
    policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN}),
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
@@ -457,7 +456,6 @@ void TrainingWriteBuffers::fillQuoridorInputRow(
   float* rowBinScratch,
   uint8_t* rowBinPacked,
   uint8_t* rowDist,
-  uint8_t* rowWallEffect,
   float* rowGlobal
 ) {
   const int ioVersion = QuoridorNN::TRAINING_IO_VERSION;
@@ -471,13 +469,6 @@ void TrainingWriteBuffers::fillQuoridorInputRow(
   std::fill(
     rowBinScratch + QuoridorNN::FIRST_DIST_CHANNEL * posArea,
     rowBinScratch + (QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS) * posArea,
-    0.0f
-  );
-  //Likewise the wall-effect channels (the raw array is filled below from the same function fillRow used).
-  QuoridorNN::fillCanonicalWallEffectU8(board, nextPlayer, rowWallEffect);
-  std::fill(
-    rowBinScratch + QuoridorNN::SPATIAL_WALL_EFFECT_V4 * posArea,
-    rowBinScratch + (QuoridorNN::SPATIAL_WALL_EFFECT_V4 + QuoridorNN::NUM_WALL_EFFECT_CHANNELS) * posArea,
     0.0f
   );
 
@@ -556,7 +547,6 @@ void TrainingWriteBuffers::addRow(
       board, hist, nextPlayer, nnInputParams, binaryInputNCHWUnpacked,
       binaryInputNCHWPacked.data + curRows * numBinaryChannels * packedBoardArea,
       spatialDistNCHW.data + curRows * QuoridorNN::NUM_DIST_CHANNELS * posArea,
-      wallEffectNCHW.data + curRows * QuoridorNN::NUM_WALL_EFFECT_CHANNELS * posArea,
       globalInputNC.data + curRows * numGlobalChannels
     );
   }
@@ -833,6 +823,9 @@ void TrainingWriteBuffers::addRow(
 }
 
 void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
+  //Declared before the zip file: it must outlive the buffered writes
+  NumpyBuffer<int32_t> ioVersionStamp({1, 1});
+  ioVersionStamp.data[0] = QuoridorNN::TRAINING_IO_VERSION;
   ZipFile zipFile(fileName);
 
   uint64_t numBytes;
@@ -843,8 +836,10 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
   numBytes = spatialDistNCHW.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("spatialDistNCHW", spatialDistNCHW.dataIncludingHeader, numBytes);
 
-  numBytes = wallEffectNCHW.prepareHeaderWithNumRows(curRows);
-  zipFile.writeBuffer("wallEffectNCHW", wallEffectNCHW.dataIncludingHeader, numBytes);
+  //Stamp: the Quoridor I/O version of the data. v3 and v4 rows have the same arrays and differ only in the draw
+  //targets, so the shuffler and loader refuse files without this key (docs/QuoridorIOv4.md).
+  numBytes = ioVersionStamp.prepareHeaderWithNumRows(1);
+  zipFile.writeBuffer("quoridorIOVersion", ioVersionStamp.dataIncludingHeader, numBytes);
 
   numBytes = globalInputNC.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("globalInputNC", globalInputNC.dataIncludingHeader, numBytes);
@@ -902,16 +897,6 @@ void TrainingWriteBuffers::writeToTextOstream(ostream& out) {
   len = spatialDistNCHW.getActualDataLen(curRows);
   for(int i = 0; i<len; i++) {
     out << (int)spatialDistNCHW.data[i] << " ";
-    if((i+1) % (len/curRows) == 0) out << endl;
-  }
-  out << endl;
-
-  out << "wallEffectNCHW" << endl;
-  wallEffectNCHW.prepareHeaderWithNumRows(curRows);
-  printHeader((const char*)wallEffectNCHW.dataIncludingHeader);
-  len = wallEffectNCHW.getActualDataLen(curRows);
-  for(int i = 0; i<len; i++) {
-    out << (int)wallEffectNCHW.data[i] << " ";
     if((i+1) % (len/curRows) == 0) out << endl;
   }
   out << endl;
