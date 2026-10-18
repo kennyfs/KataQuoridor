@@ -93,6 +93,18 @@ def push_finished(out_dir, dest, all_files=False):
     return len(files) if ok else 0
 
 
+def end_selfplay(proc, grace=60):
+    """SIGTERM makes selfplay finish its running games, which can take minutes while it still starts new ones' worth of
+    work; after `grace` seconds kill it. Unfinished games are lost, the finished files are sent by the caller."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        print(f"selfplay still running {grace} s after SIGTERM: killing it", flush=True)
+        proc.kill()
+        proc.wait()
+
+
 def main():
     # SIGTERM (colab_launch.sh stopping the worker) ends like Ctrl-C: selfplay stops, the last files are sent
     signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
@@ -134,12 +146,10 @@ def main():
         while proc.poll() is None:
             time.sleep(10)
             if MINUTES and time.time() - t0 > MINUTES * 60:
-                proc.terminate()   # unfinished games are lost; finished files stay and are sent below
-                proc.wait(timeout=120)
+                end_selfplay(proc)   # unfinished games are lost; finished files stay and are sent below
     except KeyboardInterrupt:
         print("stopping", flush=True)
-        proc.terminate()
-        proc.wait(timeout=120)
+        end_selfplay(proc)
     stop.set()
     if not BENCH_ROWS:
         # selfplay has ended: every file is finished
