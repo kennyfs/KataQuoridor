@@ -107,7 +107,9 @@ standard rules with the repetition rule off), relative to the 0.1.0 release net 
 rows), 2.33M samples per arm: A control (v3 inputs, draws as ½) +65 Elo [43, 89] over the start net (kq_std2-style ladder, v256);
 B wall-effect inputs +66 [43, 89]; C draw outcome +52 [30, 74]. Held-out policy KL and `vhalf` equal across arms, blind-spot
 agreement within noise (B nominally best). Wall effects do not help at this stage; the draw outcome costs nothing and gives a
-draw probability. Not run: a seed-noise arm.
+draw probability. Not run: a seed-noise arm. Decision: v4 = the v3 inputs + the draw outcome; the wall-effect inputs were
+removed before the loop switched (code in git history, `cb0b5ed7`). The loop's switch to v4 converts old data by stamp
+(`quoridorIOVersion`) and draw targets only.
 
 ## Lessons
 

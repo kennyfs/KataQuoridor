@@ -272,12 +272,16 @@ straight and diagonal jumps; see [QuoridorRaceSolver.md](../QuoridorRaceSolver.m
   again on every page load, and names it in the page; files are revalidated on each load (no hard refresh needed).
   Ported from KataCDC.
 
-## Quoridor I/O v4: wall-effect inputs and the draw as its own outcome
+## Quoridor I/O v4: the draw as its own outcome
 
-See [docs/QuoridorIOv4.md](../QuoridorIOv4.md). I/O v4 adds spatial inputs 21-24 and globals 19-20 (per anchor, orientation and
-player: how much a wall placed now would lengthen the shortest path; 8 µs per row), and trains draws as the noResult value
-outcome (a third value logit). Self-play writes v4 rows (`wallEffectNCHW`), `kata-analyze` / the analysis engine report the
-search's draw probability as `rootInfo noResultValue`, SGF comments keep win / loss with a draw worth ½ each, and
-`reduceVisitsDrawThreshold` (off by default) reduces visits in settled draws. Tools: `quoridor_convert_tdata_v3_to_v4.py`,
-`quoridor_upgrade_v3_to_v4.py`, `katago quoridorwalleffects`. A/B on run4 (2.3M samples): wall effects +1 Elo, draw target -13 Elo,
-both within noise; recommendation: switch for the draw outcome.
+See [docs/QuoridorIOv4.md](../QuoridorIOv4.md). I/O v4 has the v3 inputs (21 spatial / 19 global channels) and trains draws as
+the noResult value outcome (a third value logit, also in the TD horizons). Self-play writes v4 rows; every training npz carries
+a `quoridorIOVersion` stamp, `shuffle.py` and `train.py` refuse unstamped (v3) data, and
+`quoridor_convert_tdata_v3_to_v4.py` converts old data (draw targets + stamp; no binary needed). `quoridor_upgrade_v3_to_v4.py`
+migrates a v3 checkpoint (new noResult rows only). `kata-analyze` / the analysis engine report the search's draw probability as
+`rootInfo noResultValue`, SGF comments keep win / loss with a draw worth ½ each, and `reduceVisitsDrawThreshold` (off by
+default) reduces visits in settled draws. `train.py -quoridor-draw-target {noresult|half}` and the new
+`-stop-at-samples N` (stop at a total sample count, mid-epoch, with checkpoint and export). A/B on run4 (2.3M samples): the
+draw target costs -13 Elo against the control, within noise. A first v4 draft also had wall-effect inputs (how much a wall
+would lengthen each player's path); they gave +1 Elo in the A/B and were removed before any v4 data existed (code in git
+history, `cb0b5ed7`).

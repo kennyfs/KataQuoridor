@@ -1,50 +1,48 @@
-# Quoridor I/O v4: wall-effect inputs and the draw as its own outcome
+# Quoridor I/O v4: the draw as its own outcome
 
-*Design and A/B document, 2026-10-18. I/O v4 = [I/O v3](QuoridorIOv3.md) + two independent parts: (1) inputs that
-say how much each wall placement would lengthen each player's shortest path, (2) the draw as the noResult value
-outcome. The two parts can be used separately (the A/B tests each alone).*
+*Design and A/B document, 2026-10-18; updated the same day (wall-effect inputs removed). I/O v4 = the [I/O v3](QuoridorIOv3.md)
+inputs (21 spatial / 19 global channels, unchanged) + the draw as the noResult value outcome. v4 was first built with a
+second part, wall-effect inputs; the A/B (§7-§9) showed no gain from them, so they were removed before any v4 data or net
+existed (§2.2). The A/B tables below are the first A/B, with the wall-effect inputs as one of its arms.*
 
 ## 1. Why
 
-- run4's weak spots are wall moves with low prior that a deep search finds ([BlindSpots.md](BlindSpots.md)). The net sees
-  walls and BFS distances; "how much would this wall cost the opponent" is a non-local computation it has to learn
-  through 15 attention layers. v4 hands it over.
 - Draws were trained as win 0.5 / loss 0.5 (noResult forced off), so the value head could not tell a certain draw from a
   coin flip. 16% of run4's current window rows belong to drawn games. As its own outcome, a draw gives the search and the
   GUI a draw probability and lets self-play reduce visits in settled draws (`reduceVisitsDrawThreshold`).
-- Caution: KataCDC's extra features sped up only the first 1M samples there. Hence the A/B before any switch.
+- (Removed, see §2.2) run4's weak spots are wall moves with low prior that a deep search finds ([BlindSpots.md](BlindSpots.md)).
+  The net sees walls and BFS distances; "how much would this wall cost the opponent" is a non-local computation it has to
+  learn through 15 attention layers, so v4 first handed it over as inputs. KataCDC's extra features had sped up only the first
+  1M samples there, hence the A/B before any switch.
 
 ## 2. Inputs
 
-`QuoridorNN` (`cpp/neuralnet/quoridornn.{h,cpp}`) is still the one module that knows the layout.
+### 2.1 v4 inputs = v3 inputs
 
-| Index | Kind | Feature | Symmetry |
-|---:|---|---|---|
-| spatial **21** | anchor plane | vertical wall: increase of the **side to move's** shortest distance if placed now | c → 7 − c |
-| spatial **22** | anchor plane | horizontal wall, side to move | c → 7 − c |
-| spatial **23** | anchor plane | vertical wall, the **opponent's** increase | c → 7 − c |
-| spatial **24** | anchor plane | horizontal wall, opponent | c → 7 − c |
-| global **19** | float | largest increase for the opponent over all legal placements, `min(·, 8) / 8` | |
-| global **20** | float | number of legal placements costing the opponent ≥ 2 steps, `/ 16`, clipped to 1 | |
+`QuoridorNN` (`cpp/neuralnet/quoridornn.{h,cpp}`) is still the one module that knows the layout. v4 has **21 spatial / 19
+global** input channels, exactly the v3 channels and values (`fillRow` fills the same row for I/O 3 and 4; tested row for
+row, with and without the mirror). So:
 
-- Distances are the same as channels 8-13: walls only, pawns ignored. Planes sit on the 8×8 anchor grid inside the 9×9
-  plane (row and column 8 are 0), canonical orientation (side to move heads for row 0), like channels 14-18.
-- Value: legal placement → `min(Δ, 8) / 8`; illegal (overlap, crossing, or it would fully block a player) → **−1**
-  (the sentinel; a legal placement with Δ = 0 reads 0). Legality is exactly `Board::isGeometricallyLegalWallPlacement`
-  (tested). The globals: why these two: they are what a player would look at first ("is there a damaging wall for me to
-  place", "how many are there"), a conv net can only get them by pooling through the trunk; both are cheap given the planes.
-- **Stored raw** (packed bit planes can't hold them; the S8-S11 lesson): npz key `wallEffectNCHW`, `uint8 [N,4,9,9]`, the
-  increase capped at 254, 255 = illegal, 0 outside the anchors. The packed planes 21-24 are written as 0, the globals are
-  floats in `globalInputNC`.
-- **Computation** (`fillCanonicalWallEffectU8`): per player, BFS fields from the pawn and from the goal row and the number
-  of shortest paths through each edge. A wall closes two edges; if the two together carry fewer shortest paths than exist,
-  Δ = 0 and the wall is legal for that player. Otherwise one bit-parallel early-exit BFS (an 81-bit board, 4 shifts per
-  step) with the two edges closed gives the new distance, or "unreachable" = illegal. About 19 BFS per row on average.
-- **Cost** (RelWithDebInfo, one core, 579 positions of random wall-heavy games): `fillCanonicalWallEffectU8` **8 µs**
-  per row; `fillRow` v3 29 µs → v4 39 µs (+10 µs: the BFS plus writing 4 planes). The first version with per-cell BFS was
-  19 µs. For scale, a b5c256 forward pass on the RTX 3070 is ~100 µs per row at batch 128 (the NN server also batches).
-- NN cache hash: unchanged. The planes depend only on the board (pawns and walls), which `NNInputs::getHash` covers; the
-  v3 repetition hash is folded in for I/O ≥ 3 nets as before.
+- a v3 net and a v4 net are told apart by `quoridor_io_version` in the model config (Python) / the model file's I/O version
+  (C++, model option D), **not** by channel counts. The loader checks the version of the data against the version of the net;
+- v3 and v4 *training rows* also have the same arrays; they differ only in the draw targets. §4.1 says how the two kinds of
+  data are told apart.
+
+### 2.2 The wall-effect inputs (removed)
+
+The first v4 added, after the v3 channels, spatial planes 21-24 (for each of vertical / horizontal walls and for the side
+to move / the opponent, the increase of that player's shortest distance if the wall were placed now; 255-sentinel / −1 for
+an illegal or fully blocking placement) and globals 19, 20 (largest opponent increase, number of opponent walls costing
+≥ 2), stored raw as `wallEffectNCHW` (`uint8 [N,4,9,9]`). They were computed by `QuoridorNN::fillCanonicalWallEffectU8`
+(shortest-path counting per edge, then a bit-parallel early-exit BFS), cost 8 µs per row (`fillRow` 29 → 39 µs), and were
+verified bit for bit against two independent brute forces. In the A/B they gave **no measurable gain** (§8, §9), so they
+were taken out again before the loop switched to v4: no spatial planes 21-24, no globals 19-20, no `wallEffectNCHW` array,
+no `-zero-wall-effect`, no `katago quoridorwalleffects`, no wall-effect parts in the converter and migration.
+
+The code is in git history: the last commit that has it is `cb0b5ed7` (`afecf570` C++, `38fe6c49` Python, `c1369f89` /
+`cb0b5ed7` A/B script and docs; e.g. `git show cb0b5ed7:cpp/neuralnet/quoridornn.cpp`, `git show
+cb0b5ed7:docs/QuoridorIOv4.md` for the full wall-effect description, and reverting the removal commits brings it back).
+It could be tried again for a net trained from scratch (§9).
 
 ## 3. The draw outcome
 
@@ -75,41 +73,72 @@ outcome. The two parts can be used separately (the A/B tests each alone).*
 ## 4. Plumbing
 
 - `TRAINING_IO_VERSION = 4`, `MAX_SUPPORTED_IO_VERSION = 4`; Python `QUORIDOR_TRAINING_IO_VERSION = 4`, channels
-  `{…, 4: 25 / 21}`; presets `tf2_b4c192_quoridor_v4`, `tf3_b5c256_quoridor_v4`, `b2c64_quoridor_v4`. Self-play writes v4
-  rows whatever the net's I/O version.
-- `train.py -quoridor-draw-target {noresult|half}` (default noresult; `half` maps draws back to ½ before the value loss),
-  `-zero-wall-effect` (zero planes 21-24 and globals 19, 20 in the loader: the net sees the v3 inputs). New metrics:
-  `vhalfloss` (the value loss with draws mapped back to ½ on both sides: comparable between all v4 nets), `pdraw` / `tdraw`.
-- `shuffle.py` carries `wallEffectNCHW` (optional: v3 data passes through without it).
-- `katago quoridorwalleffects`: the writer's own function on rows of canonical planes (used by the converter).
+  `{…, 3: 21 / 19, 4: 21 / 19}`; presets `tf2_b4c192_quoridor_v4`, `tf3_b5c256_quoridor_v4`, `b2c64_quoridor_v4` (3 value
+  logits). Self-play writes v4 rows whatever the net's I/O version.
+- `train.py -quoridor-draw-target {noresult|half}` (default noresult; `half` maps draws back to ½ before the value loss; the
+  A/B control). New metrics: `vhalfloss` (the value loss with draws mapped back to ½ on both sides: comparable between all
+  v4 nets), `pdraw` / `tdraw`.
+- `train.py -stop-at-samples N` (§4.2).
 - Tools: `dumpnninputs -io-version 4`, `evalnnparity` (v4 nets), `writesampletrainquoridor` (v4 rows).
+
+### 4.1 Telling v3 data from v4 data: the `quoridorIOVersion` stamp
+
+v3 and v4 rows have the same arrays, so shape can't tell them apart, and training a v4 net on unconverted v3 rows would teach
+it that a draw is a coin flip. Every v4 npz therefore carries one extra key, **`quoridorIOVersion`** (`int32 [1,1]`, value 4):
+
+| Who | What |
+|---|---|
+| C++ writer (`TrainingWriteBuffers::writeToZipFile`) | writes the stamp into every training npz |
+| `shuffle.py` | refuses any input npz without the stamp (or with another value) with a message pointing to the converter; its output npz files (shards and final) carry the stamp. `-allow-unstamped-v3` accepts v3 data and writes unstamped output (used only to prepare a v3 shuffle for conversion, the A/B script) |
+| `train.py` / `read_npz_training_data` | for a Quoridor model, the data's I/O version (the stamp, or 3 if absent) must equal the model's `quoridor_io_version`, else a `ValueError` naming the file |
+| `quoridor_convert_tdata_v3_to_v4.py` | converts the draw targets and adds the stamp; stamped files are skipped, so it is idempotent and can be re-run on a directory that keeps receiving old-binary data |
+
+Files the old binary writes (a Colab worker that was not updated) are unstamped, so the shuffle fails loudly on the first one
+instead of silently mixing in coin-flip draws; run the converter on the self-play directory again and restart the shuffle.
+(Not covered: someone stamping a v3 file by hand. A content check, e.g. a row with C0 = C1 = 0.5 and outcome weight on, would
+catch that, but a v4 row legitimately has such cells in no case, so the stamp is the single source of truth.)
+
+### 4.2 `train.py -stop-at-samples N`
+
+`-max-epochs-this-instance` and `-max-training-samples` act at epoch boundaries, so arms with the same epochs ended at
+different samples (the A/B needed top-ups). `-stop-at-samples N` (K/M/B suffixes ok) stops the run when its total trained
+samples (`train_state["global_step_samples"]`, over all instances) reach N, even in the middle of an epoch: it ends the
+epoch at the first batch boundary at or after N (exactly N when N is a multiple of batch size × world size), then does what
+an epoch end does (validation, SWA, checkpoint) and **forces an export** (even with `-export-only-at-end`'s end export or an
+`epochs_per_export` > 1). A later instance resumes from that checkpoint; an instance that starts at or past N exits at once
+without touching the data. Without the option nothing changes. Tested on the CPU (`tests/test_train_stop_at_samples.py`:
+300, then resume to 450, then a no-op).
 
 ## 5. Old data and old nets
 
-- `python/quoridor_convert_tdata_v3_to_v4.py [-out-dir OUT] DIRS`: **exact** for the wall effects (computed from pawns and
-  walls in the stored planes with the writer's C++ function; bit-identical to a writer row in the test) and the 2 globals.
-  Draw rows (C0 = C1 = 0.5, C2 = 0, outcome weight on, C27 = 1) become C0 = C1 = 0, C2 = 1. **Not converted:** the TD
-  value targets C4-C19 of draw games (a mix of later search values and the final outcome that can't be separated; they
-  keep their win / loss form; weight 0.05 of the loss).
-- `python/quoridor_upgrade_v3_to_v4.py`: zero columns for the new inputs, zero weights and bias −8 for the new
-  noResult rows (value head and the four TD horizons), in the model, the SWA model and the optimizer state. The net
-  is the v3 net up to P(noResult) ≈ 3e-4 on v3-equivalent inputs. The −8 is so that the logit can be learned; the initial
-  noResult share is a few ‰, not exactly 0.
+- `python/quoridor_convert_tdata_v3_to_v4.py [-out-dir OUT] DIRS`: needs no katago binary. For every unstamped npz with 21 / 19
+  channels: draw rows (C0 = C1 = 0.5, C2 = 0, outcome weight on, C27 = 1) become C0 = C1 = 0, C2 = 1; the stamp is added;
+  everything else is bit-identical (tested against what the C++ writer writes for the same games, and on real run4 rows).
+  **Not converted:** the TD value targets C4-C19 of draw games (a mix of later search values and the final outcome that can't
+  be separated; they keep their win / loss form; weight 0.05 of the loss).
+- `python/quoridor_upgrade_v3_to_v4.py`: only the value head changes: zero weights and bias −8 for the new noResult rows (value
+  head and the four TD horizons), in the model, the SWA model and the optimizer state. The inputs are the v3 inputs, so the
+  net is the v3 net up to P(noResult) ≈ 3e-4. The −8 is so that the logit can be learned; the initial noResult share is a
+  few ‰, not exactly 0. `config["quoridor_io_version"]` becomes 4, so the net is a v4 net from then on.
 
 ## 6. Tests
 
 | Test | What |
 |---|---|
-| `runtests quoridorv4` | wall effects vs a brute force (place every wall on a copy, recompute both distances; 10,615 rows, 171k non-zero effects, max 16, 917k illegal cells), the row, globals and mirror (applyInputSymmetry of a game = the mirrored game's row), training-row encoding, draw search (noResult 0.99, utility 0.0003), cost per row |
-| `python/tests/test_nn_parity.py` | v4: an independent Python brute force of planes 21-24 and globals 19, 20 vs the C++ rows (200 positions); v4 nets (conv and transformer) through the exported net and `NNEvaluator`, symmetries 0 and 1: policy / value (incl. noResult) within 5e-7, score outputs with the (1 − noResult) factor |
-| `python/tests/test_quoridor_v4.py` | converter == writer rows bit for bit (all arrays, draws included); converter on real run4 rows vs a Python brute force; mirror (loader symmetry vs the brute force of the mirrored position); `-zero-wall-effect`; v3 → v4 migration (same outputs, optimizer state loads and steps, refused twice); shuffler |
+| `runtests quoridorv4` | v4 rows equal v3 rows (feature counts, values, mirror, 1666 rows of wall-heavy games with the repetition rule on), draw targets, a search of a certain draw (noResult 0.99, utility 0.0003; follows `noResultUtilityForWhite`) |
+| `runtests` (others) | the writer's draw target and stamp (`testquoridorscore`, `testquoridoriov3`: training row = v3 row) |
+| `python/tests/test_nn_parity.py` | v3 and v4 nets (conv and transformer) through the exported net and `NNEvaluator`, symmetries 0 and 1: policy / value (incl. noResult) within tolerance, score outputs with the (1 − noResult) factor. Use the Eigen build (`KATAGO_BIN=cpp/build-eigen/katago`); the CUDA build's TF32 and fp32 kernels exceed the 1e-4 tolerance on v3 nets too |
+| `python/tests/test_quoridor_v4.py` | the writer stamps and writes 21 / 19 channels; converter == writer rows bit for bit (all arrays, draws included; idempotent; wrong channel counts refused); converter on real run4 rows (only the draw targets change); the loader refuses unstamped data for a v4 net (and v4 data for a v3 net); the shuffler stamps, refuses unstamped input, and with `-allow-unstamped-v3` stays unstamped; v3 → v4 migration (same outputs, optimizer state loads and steps, refused twice) |
 | `python/tests/test_quoridor_model.py` | draw-target round trip (a converted draw row trains in `half` mode exactly like the unconverted one), draw rows have no u / lead loss in `noresult` mode, symmetries, ONNX |
+| `python/tests/test_train_stop_at_samples.py` | `-stop-at-samples` mid-epoch, resume, no-op |
+| smoke | a v4 net (run4's checkpoint migrated and exported) plays self-play on the Eigen build (6 games, 47 rows, stamped, 21 / 19 channels, `reduceVisitsDrawThreshold = 0.5` accepted) |
 
 
 ## 7. A/B design (home RTX 3070, 2026-10-18)
 
-`scripts/run_ab_io_v4.sh` (steps `prep A B C [D] losses blindspot ladder`; every train.py instance is ≤ 10 epochs of 100k
-samples, ~40 min, so no process runs more than an hour).
+Run with `scripts/run_ab_io_v4.sh` as of commit `cb0b5ed7` (steps `prep A B C [D] losses blindspot ladder`; every train.py
+instance was ≤ 10 epochs of 100k samples, ~40 min, so no process ran more than an hour). The script in the tree now is the
+draw-target-only version (two arms, `-stop-at-samples`, §7.1); the wall-effect arms and the `-zero-wall-effect` flag are gone.
 
 - **Start:** run4's checkpoint `run4-s28602368` (the newest net in `models/`), migrated to v4 (`quoridor_upgrade_v3_to_v4.py`).
 - **Data:** one fresh shuffle of the loop's window with its settings, run on `~/q1_run/run4/selfplay` (so the 1% md5
@@ -124,6 +153,16 @@ samples, ~40 min, so no process runs more than an hour).
   blind-spot suite v2 (labelled by the start net's lineage `run4-s28602368`; v256 / v1000, gtp params, 212 clear positions),
   and a kq_ladder like `kq_std2` (standard openings `std_run4_s187-s204_p2468.json`, v256, 230 games per pair, 1380 games).
 - **Not done:** a noise estimate (a second control arm with another seed). Differences below are single runs.
+
+### 7.1 The script today
+
+`scripts/run_ab_io_v4.sh [prep A B eval | ladder]`: arm **A** `-quoridor-draw-target half` (the v3 net), arm **B**
+`-quoridor-draw-target noresult`, both from the migrated start checkpoint on the converted shuffle of the loop's window.
+Each arm trains `SAMPLES` (default 2,000,000) samples as parts of `PART` (default 1,000,000, ~40 min) with
+`-stop-at-samples k × PART`, so both arms end at exactly the same sample count and no top-ups are needed. `prep` shuffles
+the old data with `-allow-unstamped-v3`, then converts it (draw targets + stamp) with the converter. The first A/B's arms
+A and C are this script's A and B. It was run after the change only as far as `bash -n` and the CPU `-stop-at-samples` test
+(the GPU was not used for this change); the first A/B's results do not depend on it.
 
 ## 8. A/B results
 
@@ -185,52 +224,56 @@ Head to head (first listed bot's score, 230 games): A-B 50%, A-C 53%, B-C 51%. A
 - **Wall-effect inputs (B): do not switch for strength.** After 2.3M samples from a strong checkpoint they give nothing
   measurable: not in the held-out losses, the blind-spot agreement (within noise, nominally +1 pt at v1000), or the ladder
   (+66 vs +65). This matches KataCDC's experience (extra features only helped the first 1M samples). It costs +10 µs per NN input row.
-  The code stays (it is exact, tested, 8 µs), and `-zero-wall-effect` trains without it. It might still help a net trained from scratch or
-  the very early samples of a new run; this test cannot say. A second control arm (seed noise) would be needed to resolve differences below ~±20 Elo.
+  **Decision: removed** (§2.2; the code is in git history). It might still help a net trained from scratch or the very early
+  samples of a new run; this test cannot say. A second control arm (seed noise) would be needed to resolve differences below ~±20 Elo.
 - **Draw outcome (C): switch.** Neutral to strength within the noise (+52 [30, 74] vs +65 [43, 89]; A-C head to head 53%, which is
   within 1 σ), and it gives what v3 cannot: a draw probability for the search, GUI and kata-analyze (`noResultValue`),
   and `reduceVisitsDrawThreshold` for self-play, where 16% of the rows are draw games. Its cost is nothing at inference.
   Turn `reduceVisitsDrawThreshold` on (0.9) only after the first v4 net exists and look at the draw stats.
-- Practically: v4 is one I/O version, so "C" means switching the loop to v4 and training with `-zero-wall-effect`, or leaving the wall-effect
-  inputs on (equal in this test; B and A are indistinguishable) at a +10 µs/row self-play cost. I would **switch to v4 with the
-  draw target and keep the wall-effect inputs off in training** (`-zero-wall-effect`), unless an extra arm shows B > A; a switch to
-  turn the computation off in self-play and inference would then save the 10 µs (not implemented).
+- Practically: **v4 = the v3 inputs + the draw outcome**. The loop switches to it with the draw target on and no wall-effect
+  inputs (they no longer exist in the tree).
 
 ## 10. Switch-over procedure for the running loop (`synchronous_loop.sh`, run4)
 
-Do it between cycles. `BASEDIR=~/q1_run/run4`, `TRAININGNAME=run4`; `PY=~/ml_venv/bin/python`.
+Do it between cycles. `BASEDIR=~/q1_run/run4`, `TRAININGNAME=run4`; `PY=~/ml_venv/bin/python`. Same as the v3 switch
+([QuoridorIOv3.md](QuoridorIOv3.md) §6), but the inputs do not change: **no new input channels, no wall-effect flag, and the data
+conversion rewrites targets only (no katago binary needed).**
 
 1. **Stop** the loop after a cycle's export (`torchmodels_toexport/` empty).
 2. **Binary and code:** merge this branch into the checkout the loop runs from, build `cpp/katago` (the loop uses
-   `$GITROOTDIR/cpp/katago` or `KATAGO_BIN`, and copies `python/` and the configs at start).
+   `$GITROOTDIR/cpp/katago` or `KATAGO_BIN`, and copies `python/` and the configs at start). Colab workers need the new
+   binary too (old workers write unstamped v3 rows, step 5).
 3. **Back up** `train/run4/` (`cp -a train/run4 train/run4.v3`).
 4. **Upgrade the checkpoint:**
    `$PY python/quoridor_upgrade_v3_to_v4.py -checkpoint $BASEDIR/train/run4/checkpoint.ckpt -in-place`
-   (keeps `checkpoint.ckpt.pre_v4`). Move `checkpoint_prev*.ckpt` into the backup: they are v3.
-5. **Convert the self-play data** in place (the row count is unchanged, so the train bucket carries on; -num-processes defaults to half the cores):
-   `$PY python/quoridor_convert_tdata_v3_to_v4.py -katago cpp/katago $BASEDIR/selfplay` (`-dry-run` first).
-   Rewrites each v3 `.npz` atomically, keeping mtimes; ~4 min per 2M rows. Delete `shuffleddata/` and `shufflescratch/`
-   (regenerated). Remote (Colab) rows that come in as v3 need the same conversion before the shuffle, and Colab workers need the new binary.
-6. **Restart** with the v4 model kind and the zero flag, the draw target is the default:
-   `TRAIN_EXTRA_ARGS="... -zero-wall-effect" ./synchronous_loop.sh <NAMEPREFIX> $BASEDIR run4 tf3_b5c256_quoridor_v4 <USEGATING>`
-   (drop `-zero-wall-effect` to train with the wall-effect inputs). The first cycle self-plays with the newest model in
-   `models/`, a v3 net: it writes v4 rows (draws as noResult). The gatekeeper (v3 incumbent vs v4 candidate) uses the new
-   binary for both.
-7. Optional, later: `reduceVisitsDrawThreshold = 0.9` in the self-play config.
+   (keeps `checkpoint.ckpt.pre_v4`; the value head gets its noResult rows, the config says I/O v4). Move `checkpoint_prev*.ckpt`
+   into the backup: they are v3.
+5. **Convert the self-play data** in place (row count unchanged, so the train bucket carries on; `-num-processes` defaults to
+   half the cores): `$PY python/quoridor_convert_tdata_v3_to_v4.py $BASEDIR/selfplay` (`-dry-run` first to see "N v3 files to
+   convert"). It rewrites each unstamped `.npz` atomically (draw targets C0 = C1 = 0.5 → 0 / 0 / 1, plus the stamp), keeping
+   mtimes; stamped files are skipped, so it can be run again. Delete `shuffleddata/` and `shufflescratch/` (regenerated).
+   **Remote (Colab) rows** that come from a worker with the old binary are unstamped: the shuffle fails on the first one
+   ("npz has no quoridorIOVersion stamp ... convert it"); run the converter on that directory again, then restart the shuffle.
+6. **Restart** with the v4 model kind (the draw target is the default; no extra flag):
+   `./synchronous_loop.sh <NAMEPREFIX> $BASEDIR run4 tf3_b5c256_quoridor_v4 <USEGATING>`.
+   The first cycle self-plays with the newest model in `models/`, a v3 net: it writes v4 rows (draws as noResult). The
+   gatekeeper (v3 incumbent vs v4 candidate) uses the new binary for both.
+7. Optional, later: `reduceVisitsDrawThreshold = 0.9` in the self-play config, after the first v4 net exists and the draw
+   statistics look right.
 
-Equality and smoke checks done: the migrated checkpoint gives the v3 net's outputs up to P(noResult) = 3e-4
-(`tests/test_quoridor_v4.py`), an exported v4 net plays self-play (6 games, 66 rows, 25 / 21 channels, `reduceVisitsDrawThreshold = 0.5`
-accepted), and the A/B arms started from the migrated checkpoint trained with the loop's `train.sh`.
+Checks done: the migrated checkpoint gives the v3 net's outputs up to P(noResult) = 3e-4 (`tests/test_quoridor_v4.py`); a v4
+net (run4's checkpoint migrated and exported) plays self-play on the Eigen build and writes stamped 21 / 19-channel rows; the
+shuffler accepts those and refuses unstamped ones; the loader refuses unstamped data for a v4 net; `train.py` trained a b2c64 v4
+net on CPU on shuffled writer rows with `-stop-at-samples`.
 
 ## 11. Where things live
 
 | What | Where |
 |---|---|
-| layout, wall effects, symmetry | `cpp/neuralnet/quoridornn.{h,cpp}` |
-| training write | `cpp/dataio/trainingwrite.{h,cpp}` (`wallEffectNCHW`, `ValueTargets::setOutcomeOfWinner`) |
+| layout, symmetry | `cpp/neuralnet/quoridornn.{h,cpp}` |
+| training write | `cpp/dataio/trainingwrite.{h,cpp}` (`ValueTargets::setOutcomeOfWinner`, the `quoridorIOVersion` stamp) |
 | draw search values | `cpp/search/search.cpp`, `cpp/neuralnet/nneval.{h,cpp}`, `cpp/program/play.cpp` |
 | `rootInfo noResultValue` | `cpp/command/gtp.cpp`, `cpp/search/searchresults.cpp` |
-| converter helper command | `cpp/command/walleffects.cpp` (`katago quoridorwalleffects`) |
-| Python | `modelconfigs.py`, `model_pytorch.py` (3 value logits), `metrics_pytorch.py`, `data_processing_pytorch.py`, `shuffle.py`, `train.py`, `export_model_pytorch.py` |
+| Python | `modelconfigs.py`, `model_pytorch.py` (3 value logits), `metrics_pytorch.py`, `data_processing_pytorch.py`, `shuffle.py` (stamp check), `train.py` (`-stop-at-samples`), `export_model_pytorch.py` |
 | tools | `python/quoridor_convert_tdata_v3_to_v4.py`, `python/quoridor_upgrade_v3_to_v4.py`, `python/quoridor_eval_sets_v4.py`, `scripts/run_ab_io_v4.sh` |
-| tests | `cpp/tests/testquoridoriov4.cpp` (`runtests quoridorv4`), `python/tests/test_quoridor_v4.py`, `test_nn_parity.py`, `test_quoridor_model.py` |
+| tests | `cpp/tests/testquoridoriov4.cpp` (`runtests quoridorv4`), `python/tests/test_quoridor_v4.py`, `test_nn_parity.py`, `test_quoridor_model.py`, `test_train_stop_at_samples.py` |
