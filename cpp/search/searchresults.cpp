@@ -2156,6 +2156,8 @@ bool Search::getAnalysisJson(
     rootInfo["scoreLead"] = Global::roundDynamic(lead*flipFactor,OUTPUT_PRECISION);
     rootInfo["scoreStdev"] = Global::roundDynamic(rootVals.expectedScoreStdev,OUTPUT_PRECISION);
     rootInfo["utility"] = Global::roundDynamic(utility*flipFactor,OUTPUT_PRECISION);
+    //The search's draw probability (Quoridor I/O v4); the winrate counts a draw as half a win.
+    rootInfo["noResultValue"] = Global::roundDynamic(rootVals.noResultValue,OUTPUT_PRECISION);
 
     if(nnOutput != NULL) {
       rootInfo["rawWinrate"] = Global::roundDynamic(0.5 + 0.5*(nnOutput->whiteWinProb - nnOutput->whiteLossProb)*flipFactor,OUTPUT_PRECISION);

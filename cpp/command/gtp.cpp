@@ -999,9 +999,13 @@ struct GTPEngine {
           out << " scoreLead " << lead;
           out << " scoreSelfplay " << scoreMean;
           out << " weight " << rootVals.weight;
+          // The search's draw probability (Quoridor I/O v4: a draw is the noResult outcome; the winrate above counts it
+          // as half a win), whoever's perspective.
+          out << " noResultValue " << rootVals.noResultValue;
           if(rootNode != NULL) {
             const NNOutput* nnOutput = rootNode->getNNOutput();
             if(nnOutput != NULL) {
+              out << " rawNoResultProb " << nnOutput->whiteNoResultProb;
               out << " rawStWrError " << nnOutput->shorttermWinlossError;
               out << " rawStScoreError " << nnOutput->shorttermScoreError;
               out << " rawVarTimeLeft " << nnOutput->varTimeLeft;
