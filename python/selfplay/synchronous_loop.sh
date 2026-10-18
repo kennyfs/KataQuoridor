@@ -79,6 +79,9 @@ START_AT="${START_AT:-gatekeeper}" # First cycle only: start at this step (gatek
 # train on self-play data that a stopped loop already produced. Later cycles run all steps.
 GATEKEEPER_TIMEOUT="${GATEKEEPER_TIMEOUT:-3600}" # Kill a gatekeeper that runs longer than this many seconds (it has hung
 # once in CUDA backend init); the candidate stays in modelstobetested/ and is tested again next cycle. 0 disables.
+GATEKEEPER_WIN_PROP="${GATEKEEPER_WIN_PROP:-0.5}" # Candidate score (draw = 1/2) needed to be accepted. When nearly every
+# gating game is decided by the colour (run4: Black won 196 of 200), the score is ~0.5 for any net and 0.5 is a coin
+# flip; a lower value (e.g. 0.45) still rejects a broken net.
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
@@ -126,7 +129,7 @@ do
 
     if ! skip gatekeeper; then
     echo "Gatekeeper"
-    time timeout -k 60 "$GATEKEEPER_TIMEOUT" ./bin/katago gatekeeper -rejected-models-dir "$BASEDIR"/rejectedmodels -accepted-models-dir "$BASEDIR"/models/ -sgf-output-dir "$BASEDIR"/gatekeepersgf/ -test-models-dir "$BASEDIR"/modelstobetested/ -config "$DATED_ARCHIVE"/gatekeeper.cfg -quit-if-no-nets-to-test | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt \
+    time timeout -k 60 "$GATEKEEPER_TIMEOUT" ./bin/katago gatekeeper -required-candidate-win-prop "$GATEKEEPER_WIN_PROP" -rejected-models-dir "$BASEDIR"/rejectedmodels -accepted-models-dir "$BASEDIR"/models/ -sgf-output-dir "$BASEDIR"/gatekeepersgf/ -test-models-dir "$BASEDIR"/modelstobetested/ -config "$DATED_ARCHIVE"/gatekeeper.cfg -quit-if-no-nets-to-test | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt \
         || echo "$(date '+%F %T') gatekeeper failed or timed out (status $?), continuing with the current model" | tee -a "$BASEDIR"/gatekeepersgf/stdout.txt
     fi
 
