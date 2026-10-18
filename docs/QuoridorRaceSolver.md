@@ -73,6 +73,7 @@ A solved value is used only when:
 |---|---|---|
 | Search treats solved nodes as terminal leaves | `quoridorRaceSolver` | off |
 | ... including proven wins of the only player with walls | `quoridorRaceSolverOneSided` | on (when the solver is on) |
+| ... only at nodes with the root's walls (no wall placed since the root: one wall configuration, one solve per search) | `quoridorRaceSolverRootWallsOnly` | on (from 2026-10-18; off = also after walls placed in the tree, a solve per new configuration with a 1024-entry cache) |
 | Size of the solution cache | `quoridorRaceSolverCacheEntries` | 1024 |
 | Self-play finishes the game with solver moves | `quoridorRaceSelfplayFinish` | off |
 

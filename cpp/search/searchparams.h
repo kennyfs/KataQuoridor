@@ -51,6 +51,7 @@ struct SearchParams {
   //Graph search
   bool useGraphSearch; //Enable graph search instead of tree search?
   bool quoridorRaceSolverOneSided; //With quoridorRaceSolver: also prove the wins of the only player that still has walls (one solve per new wall configuration)
+  bool quoridorRaceSolverRootWallsOnly; //With quoridorRaceSolver: only at nodes with the root's walls (no wall placed since the root), so one solve per search; a wall placed in the tree is a new configuration and a solve (~1 ms) each
   bool quoridorRaceSolver; //KataQuoridor: treat positions whose pawn race is solved exactly as terminal (docs/QuoridorRaceSolver.md)
   int graphSearchRepBound; //Rep bound to use for graph search transposition safety. Higher will reduce transpositions but be more safe.
   double graphSearchCatchUpLeakProb; //Chance to perform a visit to deepen a branch anyways despite being behind on visit count.

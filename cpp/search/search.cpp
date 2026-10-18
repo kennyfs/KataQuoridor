@@ -1282,6 +1282,10 @@ bool Search::addRaceSolverLeafIfSolved(SearchThread& thread, SearchNode& node) {
     return false;
   if((board.blackFences > 0 || board.whiteFences > 0) && !searchParams.quoridorRaceSolverOneSided)
     return false;
+  //A wall placed since the root makes a new wall configuration, a solve of its own: left to the net
+  if(searchParams.quoridorRaceSolverRootWallsOnly &&
+     (board.blackFences != rootBoard.blackFences || board.whiteFences != rootBoard.whiteFences))
+    return false;
   RaceResult rr = RaceSolver::evaluate(board, thread.history, thread.pla);
   if(!rr.solved)
     return false;
