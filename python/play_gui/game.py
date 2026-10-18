@@ -117,7 +117,7 @@ def decorate_sgf(sgf, positions, black_name, white_name):
 
     The comments use the format of self-play SGFs, which python/sgfs_viewer understands: the comment on
     move i holds "whiteWin whiteLoss noResult whiteScore [v=visits]" for the position *before* move i,
-    from White's perspective. Existing comments (e.g. "result=W+2" on the last move) are kept.
+    from White's perspective (win and loss with a draw worth 1/2 each, noResult the draw probability). Existing comments (e.g. "result=W+2" on the last move) are kept.
     """
     sgf = re.sub(r"PB\[[^\]]*\]", lambda _: "PB[%s]" % black_name, sgf, count=1)
     sgf = re.sub(r"PW\[[^\]]*\]", lambda _: "PW[%s]" % white_name, sgf, count=1)
@@ -130,8 +130,8 @@ def decorate_sgf(sgf, positions, black_name, white_name):
         e = positions[i].get("eval") if i < len(positions) else None
         parts = []
         if e is not None:
-            parts.append("%.2f %.2f %.2f %.1f" % (e["white_win"], e["black_win"],
-                                                  max(0.0, 1.0 - e["white_win"] - e["black_win"]), -e["black_lead"]))
+            draw = max(0.0, 1.0 - e["white_win"] - e["black_win"])
+            parts.append("%.2f %.2f %.2f %.1f" % (e["white_win"] + draw / 2, e["black_win"] + draw / 2, draw, -e["black_lead"]))
             if e.get("visits"):
                 parts.append("v=%d" % e["visits"])
         if old:
@@ -341,11 +341,11 @@ class GameController:
             if self.engine.known_command("kata-search_analyze_cancellable"):
                 self._stream_cmd = "kata-search_analyze_cancellable"
                 self._must("kata-set-param maxVisits %d" % max_v)
-                self.engine.write("kata-search_analyze_cancellable %s %d rootInfo true minmoves 300"
+                self.engine.write("kata-search_analyze_cancellable %s %d rootInfo true noResultValue true minmoves 300"
                                   % (color, ANALYZE_INTERVAL_CS))
             else:
                 self._stream_cmd = "kata-analyze"
-                self.engine.write("kata-analyze %s %d rootInfo true minmoves 300" % (color, ANALYZE_INTERVAL_CS))
+                self.engine.write("kata-analyze %s %d rootInfo true noResultValue true minmoves 300" % (color, ANALYZE_INTERVAL_CS))
         except QTPError as e:
             raise self._fail(e)
 
@@ -462,7 +462,7 @@ class GameController:
                         return
                     color = self._to_move()
                 self._must("kata-set-param maxVisits %d" % self.visits)
-                ok, text = self._send("kata-genmove_analyze %s 1000 rootInfo true" % color,
+                ok, text = self._send("kata-genmove_analyze %s 1000 rootInfo true noResultValue true" % color,
                                       timeout=self.move_timeout)
                 if not ok:
                     with self.lock:
@@ -480,7 +480,7 @@ class GameController:
                 if a["root"] and a["infos"]:
                     r = a["root"]
                     root_eval = ev.from_side_to_move(r["winrate"], r["scoreLead"], color, "search",
-                                                     r.get("visits"), a["infos"][0].get("pv"))
+                                                     r.get("visits"), a["infos"][0].get("pv"), draw=r.get("noResultValue", 0.0))
                 winner, dist, walls_left, legal = self._query_position()
                 info = ev.info_for(a, move)
                 if winner:
@@ -488,7 +488,7 @@ class GameController:
                 elif info is not None:
                     visits = a["root"].get("visits") if a["root"] else info.get("visits")
                     move_eval = ev.from_side_to_move(info["winrate"], info["scoreLead"], color, "search",
-                                                     visits, info.get("pv", [])[1:])
+                                                     visits, info.get("pv", [])[1:], draw=info.get("noResultValue", 0.0))
                 else:  # 1-visit search: no analysis output
                     move_eval = self._raw_eval()
                 with self.lock:
@@ -799,7 +799,7 @@ class GameController:
             with self._session():
                 self._must("kata-set-param maxVisits %d" % visits)
                 try:
-                    ok, text = self._send("kata-search_analyze %s 1000 rootInfo true minmoves 300" % color,
+                    ok, text = self._send("kata-search_analyze %s 1000 rootInfo true noResultValue true minmoves 300" % color,
                                           timeout=self.move_timeout)
                 finally:
                     self._must("kata-set-param maxVisits %d" % self.visits)

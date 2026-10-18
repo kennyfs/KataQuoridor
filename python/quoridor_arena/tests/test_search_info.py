@@ -25,7 +25,7 @@ def test_parse_white_to_move():
     assert ev["win"] == pytest.approx(0.484088 - 0.01)
     assert ev["win"] + ev["loss"] + ev["noResult"] == pytest.approx(1.0)
     assert ev["lead"] == pytest.approx(-0.173807) and ev["score"] == pytest.approx(-0.1779)
-    assert referee.eval_comment(ev) == "0.47 0.51 0.02 -0.2 v=64 lead=-0.17"
+    assert referee.eval_comment(ev) == "0.48 0.52 0.02 -0.2 v=64 lead=-0.17"
 
 
 def test_parse_black_to_move_is_flipped_to_white():

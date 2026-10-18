@@ -113,12 +113,14 @@ def _prop(key, s):
 
 
 def parse_comment(c):
-    """Self-play move comment 'wWin wLoss noResult score v=N weight=W lead=L' (White's view), or None."""
+    """Self-play move comment 'wWin wLoss noResult score v=N weight=W lead=L' (White's view), or None. The first two numbers
+    are the win / loss probabilities with a draw worth 1/2 each (cpp/dataio/sgf.cpp; since Quoridor I/O v4 the third is the
+    draw probability, informational), so White's win probability is the first."""
     if not c:
         return None
     t = c.split()
     try:
-        d = {"white": float(t[0]) + 0.5 * float(t[2])}
+        d = {"white": float(t[0])}
     except (ValueError, IndexError):
         return None
     for x in t[3:]:

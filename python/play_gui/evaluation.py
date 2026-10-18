@@ -27,12 +27,14 @@ def make_eval(black_win, black_lead, source, visits=None, pv=None, draw=0.0):
             "source": source, "visits": visits, "pv": list(pv or [])}
 
 
-def from_side_to_move(winrate, score_lead, player, source="search", visits=None, pv=None):
-    """Convert a (winrate, scoreLead) pair given from `player`'s point of view ("b" or "w")."""
+def from_side_to_move(winrate, score_lead, player, source="search", visits=None, pv=None, draw=0.0):
+    """Convert a (winrate, scoreLead) pair given from `player`'s point of view ("b" or "w"). The engine's winrate counts a
+    draw as half a win; `draw` (its noResultValue, Quoridor I/O v4) is the draw probability, taken out of both sides."""
+    draw = min(1.0, max(0.0, float(draw or 0.0)))
     if player == "b":
-        return make_eval(winrate, score_lead, source, visits, pv)
+        return make_eval(float(winrate) - draw / 2, score_lead, source, visits, pv, draw=draw)
     if player == "w":
-        return make_eval(1.0 - float(winrate), -float(score_lead), source, visits, pv)
+        return make_eval(1.0 - float(winrate) - draw / 2, -float(score_lead), source, visits, pv, draw=draw)
     raise ValueError("player must be 'b' or 'w', got %r" % (player,))
 
 
@@ -77,7 +79,7 @@ def parse_raw_nn(text):
 
 
 _FLOAT_KEYS = {"winrate", "scoreLead", "scoreMean", "scoreStdev", "scoreSelfplay", "utility", "lcb", "prior",
-               "utilityLcb", "weight", "rawStWrError", "rawStScoreError", "rawVarTimeLeft"}
+               "utilityLcb", "weight", "rawStWrError", "rawStScoreError", "rawVarTimeLeft", "noResultValue", "rawNoResultProb"}
 _INT_KEYS = {"visits", "edgeVisits", "order"}
 
 
@@ -154,7 +156,8 @@ def candidates(analysis, player, include_symmetric=False):
         if not include_symmetric and d.get("isSymmetryOf") is not None:
             continue
         visits = d.get("visits", 0)
-        e = from_side_to_move(d.get("winrate", 0.5), d.get("scoreLead", 0.0), player, "search", visits, d.get("pv"))
+        e = from_side_to_move(d.get("winrate", 0.5), d.get("scoreLead", 0.0), player, "search", visits, d.get("pv"),
+                              draw=d.get("noResultValue", 0.0))
         order = len(out) if not include_symmetric else d.get("order", len(out))
         e.update(move=d["move"], order=order, prior=d.get("prior"), winrate=d.get("winrate"),
                  lead=d.get("scoreLead"), lcb=d.get("lcb"), utility=d.get("utility"),
@@ -170,8 +173,9 @@ def root_summary(analysis, player):
     if not r or "winrate" not in r:
         return None
     pv = analysis["infos"][0].get("pv") if analysis["infos"] else None
-    e = from_side_to_move(r["winrate"], r.get("scoreLead", 0.0), player, "search", r.get("visits"), pv)
-    e.update(winrate=r["winrate"], lead=r.get("scoreLead"), utility=r.get("utility"),
+    e = from_side_to_move(r["winrate"], r.get("scoreLead", 0.0), player, "search", r.get("visits"), pv,
+                          draw=r.get("noResultValue", 0.0))
+    e.update(winrate=r["winrate"], lead=r.get("scoreLead"), utility=r.get("utility"), draw=r.get("noResultValue", 0.0),
              score_stdev=r.get("scoreStdev"), raw_wr_error=r.get("rawStWrError"),
              raw_score_error=r.get("rawStScoreError"), raw_time_left=r.get("rawVarTimeLeft"))
     return e

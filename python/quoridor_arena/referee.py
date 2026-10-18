@@ -286,6 +286,8 @@ def parse_kata_genmove(text, color, perspective="sidetomove"):
             no_result = float(kv["noResultValue"])
     if root is None or "winrate" not in root:
         return move, None
+    if "noResultValue" in root:  # newer engines (Quoridor I/O v4) report the root's draw probability themselves
+        no_result = float(root["noResultValue"])
     winrate, score, lead = float(root["winrate"]), float(root["scoreSelfplay"]), float(root["scoreLead"])
     persp = perspective.lower()
     white_view = persp in ("w", "white") or (persp not in ("b", "black") and color == "w")
@@ -298,10 +300,11 @@ def parse_kata_genmove(text, color, perspective="sidetomove"):
 
 
 def eval_comment(ev):
-    """The self-play move comment (cpp/dataio/sgf.cpp: "win loss noResult score v=..", White's view) plus the
-    predicted lead as a named token, e.g. "0.48 0.52 0.00 -0.2 v=256 lead=-0.17"."""
-    return "%.2f %.2f %.2f %.1f v=%d lead=%.2f" % (ev["win"], ev["loss"], ev["noResult"], ev["score"],
-                                                   ev["visits"], ev["lead"])
+    """The self-play move comment (cpp/dataio/sgf.cpp: "win loss noResult score v=..", White's view; win and loss with a
+    draw worth 1/2 each, noResult the draw probability) plus the predicted lead as a named token, e.g.
+    "0.48 0.52 0.00 -0.2 v=256 lead=-0.17"."""
+    return "%.2f %.2f %.2f %.1f v=%d lead=%.2f" % (ev["win"] + ev["noResult"] / 2, ev["loss"] + ev["noResult"] / 2,
+                                                   ev["noResult"], ev["score"], ev["visits"], ev["lead"])
 
 
 def add_move_comments(sgf, comments):
