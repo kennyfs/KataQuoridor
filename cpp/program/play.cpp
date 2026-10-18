@@ -1846,7 +1846,8 @@ FinishedGameData* Play::runGame(
         playSettings.compensateAfterPolicyInitProb > 0.0 && gameRand.nextBool(playSettings.compensateAfterPolicyInitProb);
       if(gameData->mode != FinishedGameData::MODE_NORMAL)
         shouldCompensate = extraBlackAndKomi.makeGameFair;
-      if(shouldCompensate && canCompensateKomi) {
+      //KataQuoridor: the policy init moves can end the game (a weak net walking to the goal); no search there
+      if(shouldCompensate && canCompensateKomi && !hist.isGameFinished) {
         PlayUtils::adjustKomiToEven(botB,botW,board,hist,pla,playSettings.compensateKomiVisits,otherGameProps,gameRand);
         extraBlackAndKomi.komiMean = hist.rules.komi;
         PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
