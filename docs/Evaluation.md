@@ -259,7 +259,9 @@ model it), no resignation, no komi compensation, 1 search thread per bot, and co
 swapped, and opening k is the same for all pairs.
 
 **Schedule.** Nets are ordered by training samples within each series (a glob or list of model directories;
-samples from the `-s<N>-` in the name). All play at one visit count (`visits`). Pairs, not a round robin:
+samples from the `-s<N>-` in the name). All play at one visit count (`visits`). A series may have its own `search` params
+(`{"name": "cp13", "prefix": "cp13", "models": [...], "search": {"cpuctExploration": 1.3}}`, written as `key<botIndex>`
+match params over the global `search`): the same net in two series is a search-parameter A/B. Pairs, not a round robin:
 
 - within a series, nets at generation distance `links.generation_distances` (e.g. 1, 2, 3, 6, 12);
 - across series (`links.cross`), each net of a later series against the nearest net of the first series in log

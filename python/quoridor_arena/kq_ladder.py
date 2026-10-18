@@ -85,7 +85,7 @@ def make_roster(cfg, model_lister=list_models):
         lst = []
         for gen, d in enumerate(model_lister(s["models"])):
             lst.append({"series": s["name"], "prefix": s["prefix"], "samples": model_samples(d),
-                        "model": os.path.join(d, "model.bin.gz"), "gen": gen})
+                        "model": os.path.join(d, "model.bin.gz"), "gen": gen, "search": s.get("search", {})})
         nets[s["name"]] = lst
         for n in lst:
             name = bot_name(n["prefix"], n["samples"], visits)
@@ -217,6 +217,9 @@ def match_config(cfg, bots, game_list, results_file):
     for i, b in enumerate(bots.values()):
         lines += ["botName%d = %s" % (i, b["name"]), "nnModelFile%d = %s" % (i, b["model"]),
                   "maxVisits%d = %d" % (i, b["visits"])]
+        # a series' own search params (e.g. a search-parameter A/B: the same net in two series with different prefixes)
+        for k, v in b.get("search", {}).items():
+            lines.append("%s%d = %s" % (k, i, json.dumps(v) if isinstance(v, bool) else v))
     lines += ["gameListFile = %s" % game_list, "gameResultsFile = %s" % results_file,
               "bSizes = 17", "bSizeRelProbs = 1",
               # Standard match settings: no resignation, no komi changes, no handicap.
