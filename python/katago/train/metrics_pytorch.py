@@ -29,6 +29,10 @@ class Metrics:
         self.pos_len = raw_model.pos_len
         self.pos_area = raw_model.pos_len * raw_model.pos_len
         self.is_quoridor = modelconfigs.is_quoridor(raw_model.config)
+        # Quoridor I/O v4: how the value head's third logit (noResult = a draw) is trained. "noresult": the draw is its own
+        # outcome (targets C0-C2 as the data has them). "half": draws are mapped back to win 0.5 / loss 0.5 first (the
+        # pre-v4 target; the control of docs/QuoridorIOv4.md's A/B), so the logit is only pushed down.
+        self.quoridor_draw_target = "noresult"
 
         if self.is_quoridor:
             self.policy_len = 3 * self.pos_len * self.pos_len
@@ -352,7 +356,8 @@ class Metrics:
 
     def square_value(self, value_logits, global_weight):
         if self.is_quoridor:
-            return torch.sum(global_weight * torch.square(torch.sum(torch.softmax(value_logits, dim=1) * constant_like([1, -1], global_weight), dim=1)))
+            signs = [1, -1] if value_logits.shape[1] == 2 else [1, -1, 0]
+            return torch.sum(global_weight * torch.square(torch.sum(torch.softmax(value_logits, dim=1) * constant_like(signs, global_weight), dim=1)))
         return torch.sum(global_weight * torch.square(torch.sum(torch.softmax(value_logits,dim=1) * constant_like([1,-1,0],global_weight), dim=1)))
 
     @staticmethod
@@ -1058,11 +1063,11 @@ class Metrics:
         is_intermediate,
         include_model_norms=True,
     ):
-        # Training data and training exist only for the current Quoridor I/O version (docs/QuoridorIOv2.md).
+        # Training data and training exist only for the current Quoridor I/O version (docs/QuoridorIOv2.md, QuoridorIOv4.md).
         io_version = modelconfigs.get_quoridor_io_version(raw_model.config)
         assert io_version == modelconfigs.QUORIDOR_TRAINING_IO_VERSION, (
             f"only Quoridor I/O v{modelconfigs.QUORIDOR_TRAINING_IO_VERSION} models can be trained, got v{io_version}"
-            " (use a *_quoridor_v3 model config; quoridor_upgrade_v2_to_v3.py upgrades a v2 checkpoint)")
+            " (use a *_quoridor_v4 model config; quoridor_upgrade_v3_to_v4.py upgrades a v3 checkpoint)")
         (
             policy_logits,
             value_logits,
@@ -1153,7 +1158,8 @@ class Metrics:
                 global_weight,
             ).sum()
         else:
-            win_squared = torch.square(target_global_nc[:, 0])
+            # Final game win squared (squaring discourages draws); a draw counts as half a win in either draw-target mode.
+            win_squared = torch.square(target_global_nc[:, 0] + 0.5 * target_global_nc[:, 2])
             target_weight_longoptimistic_policy = torch.clamp(
                 win_squared, min=0.0, max=1.0
             ) * target_weight_policy_player
@@ -1196,18 +1202,40 @@ class Metrics:
         target_weight_longoptimistic_policy_sum = (global_weight * target_weight_longoptimistic_policy).sum()
         target_weight_shortoptimistic_policy_sum = (global_weight * target_weight_shortoptimistic_policy).sum()
 
-        # Value loss (2 logits: win, loss)
-        target_value = target_global_nc[:, 0:2]
-        target_value = target_value / torch.clamp(torch.sum(target_value, dim=1, keepdim=True), min=1e-8)
+        # Value loss: 3 logits (win, loss, noResult = a draw, I/O v4). In "half" mode the draw is mapped back to win 0.5 /
+        # loss 0.5 first (the pre-v4 target), so the noResult logit only gets pushed down.
+        assert value_logits.shape[1] == 3, "I/O v4 value head has 3 logits (config num_value_outputs 3)"
+        draw_outcome = self.quoridor_draw_target == "noresult"
+        assert draw_outcome or self.quoridor_draw_target == "half", self.quoridor_draw_target
+
+        def outcome_targets(win_loss_noresult):
+            # (..., 3) win / loss / noResult -> (..., 3) normalized targets under the draw-target mode
+            if not draw_outcome:
+                half = 0.5 * win_loss_noresult[..., 2]
+                win_loss_noresult = torch.stack(
+                    (win_loss_noresult[..., 0] + half, win_loss_noresult[..., 1] + half, torch.zeros_like(half)), dim=-1)
+            return win_loss_noresult / torch.clamp(torch.sum(win_loss_noresult, dim=-1, keepdim=True), min=1e-8)
+
+        target_value = outcome_targets(target_global_nc[:, 0:3])
         target_weight_value = 1.0 - target_global_nc[:, 35]
         loss_value = (1.50 * global_weight * target_weight_value * cross_entropy(value_logits, target_value, dim=1)).sum()
 
-        # TD-Value loss (4 horizons, each 2 logits)
+        # The same loss with draws mapped back to 1/2 on both sides (the target as above, the prediction win + noResult / 2,
+        # loss + noResult / 2): comparable between the draw-target modes and with pre-v4 nets.
+        value_probs = torch.softmax(value_logits, dim=1)
+        half_pred = torch.stack((value_probs[:, 0] + 0.5 * value_probs[:, 2], value_probs[:, 1] + 0.5 * value_probs[:, 2]), dim=1)
+        half_target = torch.stack((
+            target_global_nc[:, 0] + 0.5 * target_global_nc[:, 2], target_global_nc[:, 1] + 0.5 * target_global_nc[:, 2]), dim=1)
+        half_target = half_target / torch.clamp(torch.sum(half_target, dim=1, keepdim=True), min=1e-8)
+        loss_value_half = (
+            1.50 * global_weight * target_weight_value * -torch.sum(half_target * torch.log(half_pred + 1e-30), dim=1)).sum()
+
+        # TD-Value loss (4 horizons, each 3 logits: win, loss, noResult)
         target_td_value = torch.stack(
-            (target_global_nc[:, 4:6], target_global_nc[:, 8:10], target_global_nc[:, 12:14], target_global_nc[:, 16:18]),
+            (target_global_nc[:, 4:7], target_global_nc[:, 8:11], target_global_nc[:, 12:15], target_global_nc[:, 16:19]),
             dim=1,
         )
-        target_td_value = target_td_value / torch.clamp(torch.sum(target_td_value, dim=2, keepdim=True), min=1e-8)
+        target_td_value = outcome_targets(target_td_value)
         target_weight_td_value = 1.0 - target_global_nc[:, 24]
 
         td_ce = cross_entropy(td_value_logits, target_td_value, dim=2)  # (N, 4)
@@ -1227,14 +1255,17 @@ class Metrics:
         # Utility score u (KataGo's scoreMean): the game's final u, globalTargetsNC[20].
         # Upstream scoremean: 0.0015, delta 12 -> 0.0135, delta 4.
         target_utility_score = target_global_nc[:, 20]
+        # The score heads are conditional on there being a result (nneval.cpp multiplies them by 1 - P(noResult)), so with
+        # the draw as its own outcome they are trained on decisive games only; a draw's u is 0 either way.
+        target_weight_score = target_weight_outcome * ((1.0 - target_global_nc[:, 2]) if draw_outcome else 1.0)
         utility_score_huber = huber_loss(pred_utility_score, target_utility_score, delta=4.0)
-        loss_utility_score = (0.0135 * global_weight * target_weight_outcome * utility_score_huber).sum()
+        loss_utility_score = (0.0135 * global_weight * target_weight_score * utility_score_huber).sum()
 
         # Utility-score stdev: modeled on upstream's scorestdev, but with no score belief head to take a stdev of,
         # it is trained so that stdev^2 regresses the squared error of the (detached) utility-score prediction.
         utility_score_sqerror = torch.square(pred_utility_score.detach() - target_utility_score) + 1.0e-4
         utility_score_stdev_huber = huber_loss(torch.square(pred_utility_score_stdev), utility_score_sqerror, delta=10.0)
-        loss_utility_score_stdev = (0.004 * global_weight * target_weight_outcome * utility_score_stdev_huber).sum()
+        loss_utility_score_stdev = (0.004 * global_weight * target_weight_score * utility_score_stdev_huber).sum()
 
         # Tempo lead s (KataGo's lead): globalTargetsNC[21], weight [29] (Huber delta=1.0)
         target_lead = target_global_nc[:, 21]
@@ -1328,6 +1359,11 @@ class Metrics:
             "p0sopt_sum": loss_shortoptimistic_policy,
             "p0soptw_sum": target_weight_shortoptimistic_policy_sum,
             "vloss_sum": loss_value,
+            # Quoridor I/O v4: vloss with draws mapped back to 1/2 (comparable across draw-target modes and with pre-v4
+            # nets), and the predicted / target draw probability (weighted sums; divide by wsum).
+            "vhalfloss_sum": loss_value_half,
+            "pdraw_sum": torch.sum(global_weight * target_weight_value * value_probs[:, 2].detach()),
+            "tdraw_sum": torch.sum(global_weight * target_weight_value * target_global_nc[:, 2]),
             "tdvloss_sum": loss_td_value,
             "tdvloss1_sum": loss_td_value1,
             "tdvloss2_sum": loss_td_value2,

@@ -21,9 +21,10 @@ from export_model_pytorch import export_quoridor_onnx, QuoridorOnnxExportWrapper
 V1_CONFIGS = ["b2c64_quoridor", "tf2_b4c192_quoridor"]
 V2_CONFIGS = ["b2c64_quoridor_v2", "tf2_b4c192_quoridor_v2"]
 V3_CONFIGS = ["b2c64_quoridor_v3", "tf2_b4c192_quoridor_v3"]
+V4_CONFIGS = ["b2c64_quoridor_v4", "tf2_b4c192_quoridor_v4"]
 # Input channel counts by Quoridor I/O version (QuoridorNN in cpp/neuralnet/quoridornn.h).
-NUM_SPATIAL = {1: 17, 2: 19, 3: 21}
-NUM_GLOBAL = {1: 15, 2: 17, 3: 19}
+NUM_SPATIAL = {1: 17, 2: 19, 3: 21, 4: 25}
+NUM_GLOBAL = {1: 15, 2: 17, 3: 19, 4: 21}
 
 METRICS_ARGS = dict(
     soft_policy_weight_scale=1.0, disable_optimistic_policy=False, meta_kata_only_soft_policy=False,
@@ -41,7 +42,7 @@ def make_inputs(B, io_version, seed=0):
 
 
 def test_quoridor_config_properties():
-    for names, io_version in ((V1_CONFIGS, 1), (V2_CONFIGS, 2), (V3_CONFIGS, 3)):
+    for names, io_version in ((V1_CONFIGS, 1), (V2_CONFIGS, 2), (V3_CONFIGS, 3), (V4_CONFIGS, 4)):
         for name in names:
             assert name in modelconfigs.config_of_name
             cfg = modelconfigs.config_of_name[name]
@@ -49,10 +50,10 @@ def test_quoridor_config_properties():
             assert modelconfigs.get_quoridor_io_version(cfg) == io_version
             assert modelconfigs.get_num_bin_input_features(cfg) == NUM_SPATIAL[io_version]
             assert modelconfigs.get_num_global_input_features(cfg) == NUM_GLOBAL[io_version]
-    assert modelconfigs.QUORIDOR_TRAINING_IO_VERSION == 3
+    assert modelconfigs.QUORIDOR_TRAINING_IO_VERSION == 4
 
 
-@pytest.mark.parametrize("name", V1_CONFIGS + V2_CONFIGS + V3_CONFIGS)
+@pytest.mark.parametrize("name", V1_CONFIGS + V2_CONFIGS + V3_CONFIGS + V4_CONFIGS)
 def test_quoridor_forward_shapes(name):
     B = 2
     cfg = modelconfigs.base_config_of_name[name]
@@ -81,8 +82,9 @@ def test_quoridor_forward_shapes(name):
     ) = post[0]
 
     assert policy.shape == (B, 18, 9, 9)
-    assert value.shape == (B, 2)
-    assert td_value.shape == (B, 4, 2)
+    num_value = 3 if io_version >= 4 else 2  # I/O v4: win, loss, noResult (a draw)
+    assert value.shape == (B, num_value)
+    assert td_value.shape == (B, 4, num_value)
     assert variance_time.shape == (B,)
     assert utility_score.shape == (B,)
     assert lead.shape == (B,)
@@ -138,11 +140,11 @@ def run_metrics(model, batch, is_training=True, include_model_norms=False):
 
 def test_quoridor_backward_and_gradients():
     B = 2
-    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v3"]
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v4"]
     model = Model(cfg, pos_len=9)
     model.initialize()
     model.train()
-    results = run_metrics(model, outcome_batch(B, 3), include_model_norms=True)
+    results = run_metrics(model, outcome_batch(B, 4), include_model_norms=True)
 
     loss = results["loss_sum"]
     assert torch.isfinite(loss).item()
@@ -164,17 +166,17 @@ def test_quoridor_backward_and_gradients():
 
 
 def test_quoridor_draw_rows_have_no_lead_loss():
-    # A draw row (cpp/dataio/trainingwrite.cpp): value 0.5 / 0.5, u = 0 with its normal weight, lead weight 0,
+    # A draw row (cpp/dataio/trainingwrite.cpp): value 0 / 0 / 1 (noResult), u = 0 with its normal weight, lead weight 0,
     # plies left to maxPlies.
     torch.manual_seed(0)
-    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v3"]
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v4"]
     model = Model(cfg, pos_len=9)
     model.initialize()
     model.train()
 
-    batch = outcome_batch(2, 3)
+    batch = outcome_batch(2, 4)
     g = batch["globalTargetsNC"]
-    g[1, 0:2] = 0.5   # draw
+    g[1, 0:3] = torch.tensor([0.0, 0.0, 1.0])   # draw: the noResult outcome (I/O v4)
     g[1, 20] = 0.0    # u = 0
     g[1, 21] = 0.0    # no lead ...
     g[1, 29] = 0.0    # ... and no lead weight
@@ -183,12 +185,15 @@ def test_quoridor_draw_rows_have_no_lead_loss():
     draw_only = {k: v[1:2] for k, v in batch.items()}
     results = run_metrics(model, draw_only)
     assert results["leadloss_sum"].item() == 0.0
-    assert results["smloss_sum"].item() > 0.0
+    # The score heads are conditional on a result: no u loss on a draw when the draw is its own outcome.
+    assert results["smloss_sum"].item() == 0.0 and results["sdregloss_sum"].item() == 0.0
     assert results["rtloss_sum"].item() > 0.0
+    assert results["vloss_sum"].item() > 0.0 and results["tdraw_sum"].item() == 1.0
     model.zero_grad()
     results["loss_sum"].backward()
     assert model.value_head.linear_lead.weight.grad.abs().sum() == 0
-    assert model.value_head.linear_utility_score.weight.grad.abs().sum() > 0
+    assert model.value_head.linear_utility_score.weight.grad.abs().sum() == 0
+    assert model.value_head.linear_value.weight.grad[2].abs().sum() > 0  # the noResult logit learns from it
 
     # With the won row next to it, the lead loss is that of the won row alone.
     won_only = {k: v[0:1] for k, v in batch.items()}
@@ -197,11 +202,50 @@ def test_quoridor_draw_rows_have_no_lead_loss():
     assert both > 0
 
 
+def run_metrics_draw_mode(model, batch, mode):
+    metrics = Metrics(world_size=1, raw_model=model)
+    metrics.quoridor_draw_target = mode
+    post = model.postprocess_output(model(batch["binaryInputNCHW"], batch["globalInputNC"]))
+    return metrics.metrics_dict_batchwise(
+        raw_model=model, model_output_postprocessed_byheads=post, extra_outputs=None, batch=batch,
+        is_training=True, include_model_norms=False, **METRICS_ARGS,
+    )
+
+
+def test_quoridor_draw_target_round_trip():
+    # A draw row converted to the I/O v4 outcome (C0 = C1 = 0, C2 = 1; python/quoridor_convert_tdata_v3_to_v4.py) trains
+    # in "half" mode exactly like the unconverted row (C0 = C1 = 0.5): same value, TD value and score losses.
+    torch.manual_seed(0)
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v4"]
+    model = Model(cfg, pos_len=9)
+    model.initialize()
+    model.train()
+    batch = outcome_batch(3, 4)
+    g = batch["globalTargetsNC"]
+    g[1, 0:3] = torch.tensor([0.5, 0.5, 0.0])  # a draw, pre-v4 form
+    g[1, 20] = 0.0
+    g[1, 21] = 0.0
+    g[1, 29] = 0.0
+    g[1, 8:10] = 0.5   # a TD target of the draw game (win / loss form)
+    converted = {k: v.clone() for k, v in batch.items()}
+    converted["globalTargetsNC"][1, 0:3] = torch.tensor([0.0, 0.0, 1.0])
+
+    old_half = run_metrics_draw_mode(model, batch, "half")
+    new_half = run_metrics_draw_mode(model, converted, "half")
+    for key in ("vloss_sum", "vhalfloss_sum", "tdvloss_sum", "smloss_sum", "p0lopt_sum", "p0loptw_sum", "loss_sum"):
+        assert torch.allclose(old_half[key], new_half[key], rtol=1e-6, atol=1e-7), key
+    # In the noresult mode the draw is a distinct target: the value loss changes, the half-mapped one does not.
+    new_nr = run_metrics_draw_mode(model, converted, "noresult")
+    assert not torch.allclose(new_nr["vloss_sum"], new_half["vloss_sum"])
+    assert torch.allclose(new_nr["vhalfloss_sum"], new_half["vhalfloss_sum"], rtol=1e-6, atol=1e-7)
+    assert new_nr["smloss_sum"] < new_half["smloss_sum"]  # no u loss on the draw row
+
+
 def test_quoridor_v1_models_cannot_train():
     cfg = modelconfigs.base_config_of_name["b2c64_quoridor"]
     model = Model(cfg, pos_len=9)
     model.initialize()
-    with pytest.raises(AssertionError, match="only Quoridor I/O v3"):
+    with pytest.raises(AssertionError, match="only Quoridor I/O v4"):
         run_metrics(model, outcome_batch(1, 1))
 
 
@@ -222,17 +266,17 @@ def test_quoridor_shortterm_optimistic_policy_weight_uses_short_horizon():
     # much better than expected the short-term TD target turned out: horizon index 2, globalTargetsNC[12:16],
     # whose nowFactor 1/(1 + 81*0.016) is the largest. globalTargetsNC[4:8] is the longest horizon.
     torch.manual_seed(0)
-    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v3"]
+    cfg = modelconfigs.base_config_of_name["b2c64_quoridor_v4"]
     model = Model(cfg, pos_len=9)
     model.initialize()
     model.eval()
     metrics = Metrics(world_size=1, raw_model=model)
 
     def shortopt_weight(short_win, long_win):
-        spatial = torch.zeros(1, NUM_SPATIAL[3], 9, 9)
+        spatial = torch.zeros(1, NUM_SPATIAL[4], 9, 9)
         spatial[:, 0, :, :] = 1.0
         with torch.no_grad():
-            post = model.postprocess_output(model(spatial, torch.zeros(1, NUM_GLOBAL[3])))
+            post = model.postprocess_output(model(spatial, torch.zeros(1, NUM_GLOBAL[4])))
         g = torch.zeros(1, 80)
         g[:, 0:2] = 0.5
         g[:, 4:6] = torch.tensor([long_win, 1.0 - long_win])
@@ -259,11 +303,11 @@ def test_quoridor_shortterm_optimistic_policy_weight_uses_short_horizon():
     assert shortopt_weight(short_win=0.0, long_win=1.0) < 0.1
 
 
-@pytest.mark.parametrize("io_version", [1, 2, 3])
+@pytest.mark.parametrize("io_version", [1, 2, 3, 4])
 def test_quoridor_symmetries(io_version):
     B = 3
     C = NUM_SPATIAL[io_version]
-    wall_channels = [14, 15, 16] + ([17, 18] if io_version >= 2 else [])
+    wall_channels = [14, 15, 16] + ([17, 18] if io_version >= 2 else []) + ([21, 22, 23, 24] if io_version >= 4 else [])
     # 1. Spatial symmetry (wall-anchor channels are 8x8: row 8 / col 8 are 0)
     spatial = torch.randn(B, C, 9, 9)
     spatial[:, wall_channels, 8, :] = 0.0
@@ -306,7 +350,7 @@ def test_quoridor_symmetries(io_version):
     assert torch.allclose(vt_symm_2, val_targets, atol=1e-6)
 
 
-@pytest.mark.parametrize("name", ["b2c64_quoridor", "b2c64_quoridor_v2", "b2c64_quoridor_v3"])
+@pytest.mark.parametrize("name", ["b2c64_quoridor", "b2c64_quoridor_v2", "b2c64_quoridor_v3", "b2c64_quoridor_v4"])
 def test_quoridor_onnx_export(name):
     cfg = modelconfigs.base_config_of_name[name]
     io_version = modelconfigs.get_quoridor_io_version(cfg)
@@ -330,7 +374,7 @@ def test_quoridor_onnx_export(name):
         assert meta["katago.numInputChannels"] == str(NUM_SPATIAL[io_version])
         assert meta["katago.numInputGlobalChannels"] == str(NUM_GLOBAL[io_version])
         assert meta["katago.numPolicyChannels"] == "3"
-        assert meta["katago.numValueChannels"] == "2"
+        assert meta["katago.numValueChannels"] == str(cfg.get("num_value_outputs", 2))
         assert meta["katago.numScoreValueChannels"] == "0"
         assert meta["katago.numOwnershipChannels"] == "0"
         assert meta["katago.build.nnXLen"] == "9"
@@ -349,6 +393,6 @@ def test_quoridor_models_not_per_block_compiled():
     # Upstream's per-block compiled trunk only knows the Go heads; Quoridor must fall back to a single graph.
     from katago.train import modelconfigs
     from katago.train.model_pytorch import Model
-    for name in ("tf2_b4c192_quoridor_v3", "tf3_b5c256_quoridor_v3"):
+    for name in ("tf2_b4c192_quoridor_v3", "tf3_b5c256_quoridor_v3", "tf3_b5c256_quoridor_v4"):
         model = Model(modelconfigs.config_of_name[name], 9)
         assert not model.supports_per_block_compile(), name

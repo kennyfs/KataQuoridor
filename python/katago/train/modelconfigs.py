@@ -53,11 +53,13 @@ def is_quoridor(config: ModelConfig) -> bool:
 
 # Quoridor I/O versions (docs/QuoridorIOv2.md; QuoridorNN in cpp/neuralnet/quoridornn.h): 1 = KataQuoridor 0.1.0
 # nets, 2 = I/O v2 (legal-wall planes, plies-until-draw and komi inputs; utility-score, lead and remaining-plies heads),
-# 3 = I/O v3 = v2 + the repetition inputs (docs/QuoridorIOv3.md; same heads as v2).
+# 3 = I/O v3 = v2 + the repetition inputs (docs/QuoridorIOv3.md; same heads as v2),
+# 4 = I/O v4 = v3 + the wall-effect inputs (4 spatial, 2 global) and a third value logit, the draw (noResult) outcome
+# (docs/QuoridorIOv4.md).
 # Written by the exporter as model option D. Training data only exists for QUORIDOR_TRAINING_IO_VERSION.
-QUORIDOR_TRAINING_IO_VERSION = 3
-QUORIDOR_NUM_BIN_INPUT_FEATURES = {1: 17, 2: 19, 3: 21}
-QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17, 3: 19}
+QUORIDOR_TRAINING_IO_VERSION = 4
+QUORIDOR_NUM_BIN_INPUT_FEATURES = {1: 17, 2: 19, 3: 21, 4: 25}
+QUORIDOR_NUM_GLOBAL_INPUT_FEATURES = {1: 15, 2: 17, 3: 19, 4: 21}
 
 def get_quoridor_io_version(config: ModelConfig) -> int:
     assert is_quoridor(config)
@@ -1946,10 +1948,19 @@ b2c64_quoridor_v2 = dict(b2c64_quoridor, quoridor_io_version=2)
 tf2_b4c192_quoridor_v3 = dict(tf2_b4c192_quoridor, quoridor_io_version=3)
 tf3_b5c256_quoridor_v3 = dict(tf3_b5c256_quoridor, quoridor_io_version=3)
 b2c64_quoridor_v3 = dict(b2c64_quoridor, quoridor_io_version=3)
+# Quoridor I/O v4 presets: v3 + the wall-effect inputs (spatial 21-24, global 19-20) and 3 value logits (win, loss, noResult,
+# i.e. draw). Only v4 nets can be trained; a v3 checkpoint becomes v4 with quoridor_upgrade_v3_to_v4.py.
+tf2_b4c192_quoridor_v4 = dict(tf2_b4c192_quoridor, quoridor_io_version=4, num_value_outputs=3)
+tf3_b5c256_quoridor_v4 = dict(tf3_b5c256_quoridor, quoridor_io_version=4, num_value_outputs=3)
+b2c64_quoridor_v4 = dict(b2c64_quoridor, quoridor_io_version=4, num_value_outputs=3)
 
 
 base_config_of_name = {
     # QUORIDOR MODELS =============================================================
+    "tf2_b4c192_quoridor_v4": tf2_b4c192_quoridor_v4,
+    "tf3_b5c256_quoridor_v4": tf3_b5c256_quoridor_v4,
+    "b2c64_quoridor_v4": b2c64_quoridor_v4,
+    # I/O v3 (inference and export of existing nets, and the source of quoridor_upgrade_v3_to_v4.py).
     "tf2_b4c192_quoridor_v3": tf2_b4c192_quoridor_v3,
     "tf3_b5c256_quoridor_v3": tf3_b5c256_quoridor_v3,
     "b2c64_quoridor_v3": b2c64_quoridor_v3,

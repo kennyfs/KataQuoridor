@@ -68,6 +68,9 @@ def assert_keys(npz, include_meta: bool, include_qvalues: bool):
     actual_keys = set(npz.keys())
     if "qValueTargetsNCMove" in actual_keys:
         expected_keys.add("qValueTargetsNCMove")
+    # Quoridor I/O v4 rows carry the raw wall effects for input channels 21..24 (see data_processing_pytorch.py).
+    if "wallEffectNCHW" in actual_keys:
+        expected_keys.add("wallEffectNCHW")
     if "spatialDistNCHW" not in actual_keys:
         raise KeyError(
             "npz lacks spatialDistNCHW (S8-S11 raw distances); upgrade old data with "
@@ -108,9 +111,12 @@ def joint_shuffle_take_first_n(n: int, arrs: Sequence[np.ndarray | None]) -> lis
 
 def joint_concatenate(arrlists: Sequence[list[np.ndarray] | None]) -> list[np.ndarray | None]:
     assert_list_lengths_match(arrlists)
-    if len(arrlists[0]) == 1:
-        return [(arrlist[0] if arrlist is not None else None) for arrlist in arrlists]
-    return [(np.concatenate(arrlist, axis=0) if arrlist is not None else None) for arrlist in arrlists]
+    def concat(arrlist):
+        if arrlist is None or all(a is None for a in arrlist):
+            return None  # absent, or an optional array no input has (wallEffectNCHW of I/O v3 data)
+        assert not any(a is None for a in arrlist), "inputs mix files with and without an optional array (I/O v3 and v4 data?)"
+        return arrlist[0] if len(arrlist) == 1 else np.concatenate(arrlist, axis=0)
+    return [concat(arrlist) for arrlist in arrlists]
 
 def memusage_mb():
     return psutil.Process(os.getpid()).memory_info().rss // 1048576
@@ -124,8 +130,8 @@ def save_output_npz(
     start: int,
     stop: int,
 ):
-    assert len(arrs) == 9
-    [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,spatialDistNCHW] = (
+    assert len(arrs) == 10
+    [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,spatialDistNCHW,wallEffectNCHW] = (
         arrs
     )
     assert binaryInputNCHWPacked is not None
@@ -147,6 +153,8 @@ def save_output_npz(
         "valueTargetsNCHW": valueTargetsNCHW[start:stop],
         "spatialDistNCHW": spatialDistNCHW[start:stop],
     }
+    if wallEffectNCHW is not None:
+        save_dict["wallEffectNCHW"] = wallEffectNCHW[start:stop]
     if metadataInputNC is not None:
         save_dict["metadataInputNC"] = metadataInputNC[start:stop]
     if qValueTargetsNCMove is not None:
@@ -178,6 +186,7 @@ def load_and_accumulate_input_contents(
     metadataInputNCList: list[np.ndarray] | None,
     qValueTargetsNCMoveList: list[np.ndarray] | None,
     spatialDistNCHWList: list[np.ndarray],
+    wallEffectNCHWList: list[np.ndarray | None],
     include_meta: bool,
     include_qvalues: bool,
     fill_in_qvalues: bool
@@ -191,6 +200,7 @@ def load_and_accumulate_input_contents(
         scoreDistrNList.append(npz["scoreDistrN"])
         valueTargetsNCHWList.append(npz["valueTargetsNCHW"])
         spatialDistNCHWList.append(npz["spatialDistNCHW"])
+        wallEffectNCHWList.append(npz["wallEffectNCHW"] if "wallEffectNCHW" in npz else None)
         if metadataInputNCList is not None:
             metadataInputNCList.append(npz["metadataInputNC"])
         if qValueTargetsNCMoveList is not None:
@@ -236,10 +246,11 @@ def shardify(
     metadataInputNCList = [] if include_meta else None
     qValueTargetsNCMoveList = [] if include_qvalues else None
     spatialDistNCHWList = []
+    wallEffectNCHWList = []  # entries are None for I/O v3 data (no wallEffectNCHW)
 
     for input_file in input_file_group:
         try:
-            load_and_accumulate_input_contents(input_file,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,include_meta,include_qvalues,fill_in_qvalues=fill_in_qvalues)
+            load_and_accumulate_input_contents(input_file,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList,include_meta,include_qvalues,fill_in_qvalues=fill_in_qvalues)
 
         except FileNotFoundError:
             num_files_not_found += 1
@@ -251,7 +262,7 @@ def shardify(
 
     concatenated_arrs = (
         joint_concatenate(
-            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList]
+            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList]
         )
     )
 
@@ -343,11 +354,12 @@ def merge_bucket(
     metadataInputNCList = [] if include_meta else None
     qValueTargetsNCMoveList = [] if include_qvalues else None
     spatialDistNCHWList = []
+    wallEffectNCHWList = []  # entries are None for I/O v3 data (no wallEffectNCHW)
 
     for input_idx in range(num_shards_to_merge):
         shard_filename = os.path.join(out_tmp_dir, str(input_idx) + ".npz")
         try:
-            load_and_accumulate_input_contents(shard_filename,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,include_meta,include_qvalues,fill_in_qvalues=False)
+            load_and_accumulate_input_contents(shard_filename,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList,include_meta,include_qvalues,fill_in_qvalues=False)
         except FileNotFoundError:
             print("WARNING: Empty shard in merge_bucket for shard :", input_idx, out_tmp_dir)
 
@@ -357,7 +369,7 @@ def merge_bucket(
 
     concatenated_arrs = (
         joint_concatenate(
-            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList]
+            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList]
         )
     )
 

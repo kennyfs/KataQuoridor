@@ -186,8 +186,8 @@ class QuoridorOnnxExportWrapper(torch.nn.Module):
     """
     Wrapper for KataQuoridor neural net inference export.
     Exposes InputSpatial (B, C, 9, 9) and InputGlobal (B, G, 1, 1) as inputs (C / G = 17 / 15 for I/O v1,
-    19 / 17 for I/O v2),
-    and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2, 1, 1) as outputs.
+    19 / 17 for I/O v2, 21 / 19 for v3, 25 / 21 for v4),
+    and OutputPolicy (B, 3, 9, 9) and OutputValue (B, 2, 1, 1), for I/O v4 (B, 3, 1, 1): win, loss, noResult, as outputs.
     """
     def __init__(self, model: torch.nn.Module):
         super().__init__()
@@ -200,11 +200,11 @@ class QuoridorOnnxExportWrapper(torch.nn.Module):
             input_global_2d = input_global
         outputs_byheads = self.model(input_spatial, input_global_2d)
         policy_out = outputs_byheads[0][0]  # (B, 18, 9, 9)
-        value_out = outputs_byheads[0][1]   # (B, 2)
+        value_out = outputs_byheads[0][1]   # (B, 2), I/O v4 (B, 3)
 
         # Extract Target 0 (first 3 channels: pawn, v-wall, h-wall)
         raw_policy = policy_out[:, 0:3, :, :].contiguous()  # (B, 3, 9, 9)
-        raw_value = value_out.view(value_out.shape[0], 2, 1, 1).contiguous()  # (B, 2, 1, 1)
+        raw_value = value_out.view(value_out.shape[0], value_out.shape[1], 1, 1).contiguous()  # (B, 2 or 3, 1, 1)
         return raw_policy, raw_value
 
 
@@ -287,7 +287,7 @@ def export_quoridor_onnx(
             "katago.numInputGlobalChannels": str(num_global),
             "katago.numInputMetaChannels": "0",
             "katago.numPolicyChannels": "3",
-            "katago.numValueChannels": "2",
+            "katago.numValueChannels": str(model.config.get("num_value_outputs", 2)),
             "katago.numScoreValueChannels": "0",
             "katago.numOwnershipChannels": "0",
             "katago.build.nnXLen": "9",
@@ -515,7 +515,7 @@ def main(args):
         else:
             writeln(0)
         # Model option D: Quoridor I/O version (0 = not a Quoridor network, i.e. a Go network; else the config's
-        # quoridor_io_version, 1, 2 or 3). Options E-H are unused spare slots for future model options.
+        # quoridor_io_version, 1, 2, 3 or 4). Options E-H are unused spare slots for future model options.
         writeln(modelconfigs.get_quoridor_io_version(model_config) if modelconfigs.is_quoridor(model_config) else 0)
         writeln(0)
         writeln(0)
@@ -984,15 +984,20 @@ def main(args):
         write_activation(name+".act2", valuehead.act2)
 
         if modelconfigs.is_quoridor(model_config):
-            # v17 value channels: [win, loss, noResult]. noResult gets zero weights and bias -30
-            # so the engine never predicts it: Quoridor has no no-result games (a maxPlies draw is a result, trained
-            # as win 0.5 / loss 0.5, docs/QuoridorIOv2.md).
-            assert valuehead.linear_value.weight.shape[0] == 2
+            # v17 value channels: [win, loss, noResult]. Nets before I/O v4 (2 value logits) get zero weights and bias -30
+            # for noResult, so the engine never predicts it: they were trained with a draw as win 0.5 / loss 0.5
+            # (docs/QuoridorIOv2.md). I/O v4 nets have their own noResult logit, the draw outcome (docs/QuoridorIOv4.md).
             c_v2 = valuehead.linear2.weight.shape[0]
             c_v1 = valuehead.conv1.weight.shape[0]
-            zero_row_w = torch.zeros((1, c_v2), dtype=torch.float32)
-            value_w = torch.cat((valuehead.linear_value.weight, zero_row_w), dim=0)
-            value_b = torch.cat((valuehead.linear_value.bias, torch.tensor([-30.0], dtype=torch.float32)), dim=0)
+            if valuehead.linear_value.weight.shape[0] == 3:
+                assert valuehead.io_version >= 4
+                value_w = valuehead.linear_value.weight
+                value_b = valuehead.linear_value.bias
+            else:
+                assert valuehead.linear_value.weight.shape[0] == 2 and valuehead.io_version < 4
+                zero_row_w = torch.zeros((1, c_v2), dtype=torch.float32)
+                value_w = torch.cat((valuehead.linear_value.weight, zero_row_w), dim=0)
+                value_b = torch.cat((valuehead.linear_value.bias, torch.tensor([-30.0], dtype=torch.float32)), dim=0)
             write_matmul(name+".linear_valuehead", value_w)
             write_matbias(name+".bias_valuehead", value_b)
 

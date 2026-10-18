@@ -1112,6 +1112,7 @@ add_executable(katago
   command/contribute.cpp
   command/dumponnx.cpp
   command/nnparity.cpp
+  command/walleffects.cpp
   command/evalsgf.cpp
   command/gatekeeper.cpp
   command/genbook.cpp

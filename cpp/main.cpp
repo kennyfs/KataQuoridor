@@ -62,6 +62,7 @@ testbackendreference : Test backend absolute outputs against compiled-in blended
 dumponnx : (TensorRT/ONNX only) Write out the ONNX graph KataGo builds for a model.
 dumpnninputs : Dump Quoridor NN input rows for random positions (NN parity test).
 evalnnparity : Evaluate the NN parity positions with a model (NN parity test).
+quoridorwalleffects : Compute the I/O v4 wall effects of rows of canonical planes (training data conversion).
 
 racecheck : Compare self-play SGFs with the exact pawn race solver.
 runtests : Test important board algorithms and datastructures
@@ -117,6 +118,8 @@ static int handleSubcommand(const string& subcommand, const vector<string>& args
     return MainCmds::dumpnninputs(subArgs);
   else if(subcommand == "evalnnparity")
     return MainCmds::evalnnparity(subArgs);
+  else if(subcommand == "quoridorwalleffects")
+    return MainCmds::quoridorwalleffects(subArgs);
   else if(subcommand == "racecheck")
     return MainCmds::racecheck(subArgs);
   else if(subcommand == "runtests")

@@ -155,6 +155,8 @@ if __name__ == "__main__":
     optional_args.add_argument('-attn-logit-penalty-batch-frac', type=float, default=1.0, help='Compute the attention logit penalty on only this fraction of each batch (cuts its cost proportionally, adds gradient variance)', required=False)
     optional_args.add_argument('-soft-policy-weight-scale', type=float, default=8.0, help='Soft policy loss coeff', required=False)
     optional_args.add_argument('-disable-optimistic-policy', help='Disable optimistic policy', required=False, action='store_true')
+    optional_args.add_argument('-quoridor-draw-target', choices=['noresult', 'half'], default='noresult', help='Quoridor I/O v4 value target of a draw: its own outcome (noresult, the default) or mapped back to win 0.5 / loss 0.5 (half; A/B control, docs/QuoridorIOv4.md)', required=False)
+    optional_args.add_argument('-zero-wall-effect', help='Quoridor I/O v4: zero the wall-effect inputs (spatial 21-24, global 19-20), so the net sees the v3 inputs (A/B control, docs/QuoridorIOv4.md)', required=False, action='store_true')
     optional_args.add_argument('-meta-kata-only-soft-policy', help='Mask soft policy on non-kata rows using sgfmeta', required=False, action='store_true')
     optional_args.add_argument('-value-loss-scale', type=float, default=0.6, help='Additional value loss coeff', required=False)
     optional_args.add_argument('-td-value-loss-scales', type=str, default="0.6,0.6,0.6", help='Additional td value loss coeffs, 3 comma separated values', required=False)
@@ -442,6 +444,8 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
     attn_logit_penalty_batch_frac = args["attn_logit_penalty_batch_frac"]
     soft_policy_weight_scale = args["soft_policy_weight_scale"]
     disable_optimistic_policy = args["disable_optimistic_policy"]
+    quoridor_draw_target = args["quoridor_draw_target"]
+    zero_wall_effect = args["zero_wall_effect"]
     meta_kata_only_soft_policy = args["meta_kata_only_soft_policy"]
     value_loss_scale = args["value_loss_scale"]
     td_value_loss_scales = [float(x) for x in args["td_value_loss_scales"].split(",")]
@@ -930,6 +934,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                 swa_model = AveragedModel(raw_model, avg_fn=ema_avg)
 
             metrics_obj = Metrics(world_size,raw_model)
+            metrics_obj.quoridor_draw_target = quoridor_draw_target
             running_metrics = {}
             train_state = {}
             last_val_metrics = {}
@@ -1045,6 +1050,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                     swa_model.load_state_dict(swa_model_state_dict)
 
             metrics_obj = Metrics(world_size,raw_model)
+            metrics_obj.quoridor_draw_target = quoridor_draw_target
             if "metrics" in state_dict:
                 metrics_obj.load_state_dict(state_dict["metrics"])
             else:
@@ -1163,6 +1169,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
     logging.info(f"lookahead_k {lookahead_k}")
     logging.info(f"soft_policy_weight_scale {soft_policy_weight_scale}")
     logging.info(f"disable_optimistic_policy {disable_optimistic_policy}")
+    logging.info(f"quoridor_draw_target {quoridor_draw_target} zero_wall_effect {zero_wall_effect}")
     logging.info(f"meta_kata_only_soft_policy {meta_kata_only_soft_policy}")
     logging.info(f"value_loss_scale {value_loss_scale}")
     logging.info(f"td_value_loss_scales {td_value_loss_scales}")
@@ -1709,6 +1716,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                 include_meta=raw_model.get_has_metadata_encoder(),
                 model_config=model_config,
                 prefetch_depth=data_prefetch_depth,
+                zero_wall_effect=zero_wall_effect,
             ):
                 optimizer.zero_grad(set_to_none=True)
                 extra_outputs = None
@@ -1986,7 +1994,8 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                         device=device,
                         randomize_symmetries=True,
                         include_meta=raw_model.get_has_metadata_encoder(),
-                        model_config=model_config
+                        model_config=model_config,
+                        zero_wall_effect=zero_wall_effect,
                     ):
                         if use_amp:
                             with autocast("cuda", dtype=amp_dtype):

@@ -63,7 +63,7 @@ def dumped_rows():
 def test_train_inference_input_parity(dumped_rows):
     z = dumped_rows
     ref = z["binaryInputNCHW"]
-    got = decode_binary_input(z["trainBinaryInputNCHWPacked"], z["trainSpatialDistNCHW"], 9)
+    got = decode_binary_input(z["trainBinaryInputNCHWPacked"], z["trainSpatialDistNCHW"], 9, wallEffectNCHW=z["trainWallEffectNCHW"])
     assert got.dtype == np.float32 and ref.dtype == np.float32
     assert np.array_equal(got, ref), f"mismatch in channels {sorted(set(np.nonzero(got != ref)[1]))}"
     assert np.array_equal(z["trainGlobalInputNC"], z["globalInputNC"])
