@@ -130,6 +130,20 @@ removed before the loop switched (code in git history, `cb0b5ed7`). The loop's s
   `train/run4.v3`, `checkpoint.ckpt.s28602368_v3/_v4`), all 9.86M self-play rows converted in place (hard-link backup
   `selfplay.v3`; 6.6% draw rows), `reduceVisitsDrawThreshold = 0.9`, Colab binary rebuilt.
 
+### 5.4 First v4 cycles: s28.67M → s33.97M (2026-10-18 evening)
+
+- **Ladders** (v256, `~/arena/kq_std3` standard openings, `~/arena/kq_rand3` random 4-ply openings), vs s27.91M:
+  s33.97M is +31 [10, 51] on standard openings and +39 [21, 56] on random openings. No loss of generality, but the
+  standard-opening gain is slower than before v4 (s24.70M → s27.91M was +66 over 3.2M samples; now about +25 over 5.3M).
+- **Saturation.** At the standard komi the nets' first self-play eval gives White 10% (komi +0.5: White 90%): the
+  standard game is read as a one-tempo Black win, and every komi / handicap setting is near decided. 92% of searched
+  positions (s33.1M) are beyond 90 / 10%, up from 62% at s17.1M; so `reduceVisits` (threshold 0.9) acts almost all
+  game, and 1000-visit searches fell from 12.3% to 7.7% of positions (mean row weight 0.169 → 0.140).
+- **Shuffle:** `shuffle.py -rows-cache` reuses `rows_cache.json` (row counts were read from ~15k npz headers each
+  shuffle: 1 s warm, up to 131 s on a cold page cache on the HDD array).
+- **Training in bf16** (`-use-bf16`, from the next cycle): 25,600 samples in 16–21 s vs 49–54 s in fp32/TF32 on the
+  3070 (~2.7×), same losses (`~/q1_run/bench_bf16`).
+
 ## Lessons
 
 - Long games were mostly game-theoretic draws, not bugs; give the net the rules and inputs to see them.
