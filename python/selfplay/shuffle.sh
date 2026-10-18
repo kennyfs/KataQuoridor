@@ -47,6 +47,7 @@ then
            -out-tmp-dir "$TMPDIR"/train \
            -approx-rows-per-out-file 70000 \
            -num-processes "$NTHREADS" \
+           -rows-cache "$BASEDIR"/rows_cache.json \
            -keep-target-rows 20000000 \
            -only-include-md5-path-prop-lbound 0.00 \
            -only-include-md5-path-prop-ubound 1.00 \
@@ -64,6 +65,7 @@ else
            -out-tmp-dir "$TMPDIR"/val \
            -approx-rows-per-out-file 70000 \
            -num-processes "$NTHREADS" \
+           -rows-cache "$BASEDIR"/rows_cache.json \
            -keep-target-rows 20000000 \
            -only-include-md5-path-prop-lbound 0.99 \
            -only-include-md5-path-prop-ubound 1.00 \
@@ -79,6 +81,7 @@ else
            -out-tmp-dir "$TMPDIR"/train \
            -approx-rows-per-out-file 70000 \
            -num-processes "$NTHREADS" \
+           -rows-cache "$BASEDIR"/rows_cache.json \
            -keep-target-rows 20000000 \
            -only-include-md5-path-prop-lbound 0.00 \
            -only-include-md5-path-prop-ubound 0.99 \

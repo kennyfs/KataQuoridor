@@ -824,6 +824,7 @@ if __name__ == '__main__':
     required_args.add_argument('-num-processes', type=int, required=True, help='Number of multiprocessing processes for shuffling in parallel')
     optional_args.add_argument('-worker-group-size', type=int, required=False, default=80000, help='Internally, target having many rows per parallel sharding worker (doesnt affect merge)')
     optional_args.add_argument('-allow-unstamped-v3', action='store_true', help='Accept Quoridor I/O v3 data (npz without the quoridorIOVersion stamp) and write unstamped output; it must be converted with quoridor_convert_tdata_v3_to_v4.py before train.py accepts it')
+    optional_args.add_argument('-rows-cache', required=False, help='JSON cache of npz row counts by path, {path: [mtime, size, rows]} (the format of selfplay/rows_since_shuffle.py): only files not in it, or changed, are opened, and it is updated. Opening every npz is slow on a cold page cache (thousands of small files on a disk)')
     optional_args.add_argument('-exclude', required=False, help='Text file with npzs to ignore, one per line')
     optional_args.add_argument('-exclude-prefix', required=False, help='Prefix to concat to lines in exclude to produce the full file path')
     optional_args.add_argument('-exclude-basename', required=False, action="store_true", help='Consider an exclude to match if basename matches')
@@ -876,6 +877,7 @@ if __name__ == '__main__':
     num_processes = args.num_processes
     worker_group_size = args.worker_group_size
     exclude = args.exclude
+    rows_cache_path = args.rows_cache
     exclude_prefix = args.exclude_prefix
     if exclude_prefix is None:
         exclude_prefix = ""
@@ -1080,14 +1082,42 @@ if __name__ == '__main__':
     time.sleep(3)
 
     with TimeStuff("Computing rows for unsummarized files"):
+        rows_cache, cached, keys = {}, {}, {}
+        if rows_cache_path is not None:
+            try:
+                with open(rows_cache_path) as f:
+                    rows_cache = json.load(f)
+            except (OSError, ValueError):
+                rows_cache = {}
+            for filename in files_with_unknown_num_rows:
+                try:
+                    st = os.stat(filename)
+                except OSError:
+                    continue
+                keys[filename] = [st.st_mtime, st.st_size]
+                hit = rows_cache.get(filename)
+                if hit is not None and hit[:2] == keys[filename]:
+                    cached[filename] = hit[2]
+        to_open = [f for f in files_with_unknown_num_rows if f not in cached]
+        if rows_cache_path is not None:
+            print("Row counts cached for %d files, opening %d" % (len(cached), len(to_open)), flush=True)
         with multiprocessing.Pool(num_processes) as pool:
-            results = pool.map(compute_num_rows,files_with_unknown_num_rows)
+            results = pool.map(compute_num_rows,to_open)
             results = dict(results)
-            for i in range(len(all_files)):
-                info = all_files[i]
-                if len(info) < 3:
-                    num_rows = results[info[0]]
-                    all_files[i] = (info[0], info[1], num_rows)
+        results.update(cached)
+        if rows_cache_path is not None and to_open:
+            for filename, num_rows in results.items():
+                if num_rows is not None and filename in keys:
+                    rows_cache[filename] = keys[filename] + [int(num_rows)]
+            tmp = rows_cache_path + ".tmp%d" % os.getpid()
+            with open(tmp, "w") as f:
+                json.dump(rows_cache, f)
+            os.replace(tmp, rows_cache_path)
+        for i in range(len(all_files)):
+            info = all_files[i]
+            if len(info) < 3:
+                num_rows = results[info[0]]
+                all_files[i] = (info[0], info[1], num_rows)
 
     num_rows_total = 0 # Number of data rows
     num_random_rows_capped = 0 # Number of random data rows, capped at min_rows - we never keep more than min_rows many data rows if they're from random.
