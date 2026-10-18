@@ -127,6 +127,7 @@ if __name__ == "__main__":
     optional_args.add_argument('-export-prob', help='Export model with this probablity', type=float, required=False)
     optional_args.add_argument('-export-only-at-end', help='Do not export per epoch, only export once when this training instance finishes', required=False, action='store_true')
     optional_args.add_argument('-max-epochs-this-instance', help='Terminate training after this many more epochs', type=int, required=False)
+    optional_args.add_argument('-stop-at-samples', help='Stop once the run\'s total trained samples (train_state global_step_samples, counted over all instances) reach this many (K/M/B suffixes ok), in the middle of an epoch if need be, with the usual validation, checkpoint and a forced export; an instance resumed at or past it does nothing. Unlike -max-epochs-this-instance / -max-training-samples, which only act at epoch boundaries. Stops at the first batch boundary at or after N (a multiple of batch size * world size is hit exactly).', type=str, required=False)
     optional_args.add_argument('-max-training-samples', help='Terminate training after about this many training steps in samples', type=int, required=False)
     optional_args.add_argument('-sleep-seconds-per-epoch', help='Sleep this long between epochs', type=int, required=False)
     optional_args.add_argument('-max-train-bucket-per-new-data', help='When data added, add this many train rows per data row to bucket', type=float, required=False)
@@ -156,7 +157,6 @@ if __name__ == "__main__":
     optional_args.add_argument('-soft-policy-weight-scale', type=float, default=8.0, help='Soft policy loss coeff', required=False)
     optional_args.add_argument('-disable-optimistic-policy', help='Disable optimistic policy', required=False, action='store_true')
     optional_args.add_argument('-quoridor-draw-target', choices=['noresult', 'half'], default='noresult', help='Quoridor I/O v4 value target of a draw: its own outcome (noresult, the default) or mapped back to win 0.5 / loss 0.5 (half; A/B control, docs/QuoridorIOv4.md)', required=False)
-    optional_args.add_argument('-zero-wall-effect', help='Quoridor I/O v4: zero the wall-effect inputs (spatial 21-24, global 19-20), so the net sees the v3 inputs (A/B control, docs/QuoridorIOv4.md)', required=False, action='store_true')
     optional_args.add_argument('-meta-kata-only-soft-policy', help='Mask soft policy on non-kata rows using sgfmeta', required=False, action='store_true')
     optional_args.add_argument('-value-loss-scale', type=float, default=0.6, help='Additional value loss coeff', required=False)
     optional_args.add_argument('-td-value-loss-scales', type=str, default="0.6,0.6,0.6", help='Additional td value loss coeffs, 3 comma separated values', required=False)
@@ -417,6 +417,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
     export_only_at_end = args["export_only_at_end"]
     max_epochs_this_instance = args["max_epochs_this_instance"]
     max_training_samples = args["max_training_samples"]
+    stop_at_samples = parse_sample_count(args["stop_at_samples"]) if args["stop_at_samples"] is not None else None
     sleep_seconds_per_epoch = args["sleep_seconds_per_epoch"]
     max_train_bucket_per_new_data = args["max_train_bucket_per_new_data"]
     max_train_bucket_size = args["max_train_bucket_size"]
@@ -445,7 +446,6 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
     soft_policy_weight_scale = args["soft_policy_weight_scale"]
     disable_optimistic_policy = args["disable_optimistic_policy"]
     quoridor_draw_target = args["quoridor_draw_target"]
-    zero_wall_effect = args["zero_wall_effect"]
     meta_kata_only_soft_policy = args["meta_kata_only_soft_policy"]
     value_loss_scale = args["value_loss_scale"]
     td_value_loss_scales = [float(x) for x in args["td_value_loss_scales"].split(",")]
@@ -1169,7 +1169,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
     logging.info(f"lookahead_k {lookahead_k}")
     logging.info(f"soft_policy_weight_scale {soft_policy_weight_scale}")
     logging.info(f"disable_optimistic_policy {disable_optimistic_policy}")
-    logging.info(f"quoridor_draw_target {quoridor_draw_target} zero_wall_effect {zero_wall_effect}")
+    logging.info(f"quoridor_draw_target {quoridor_draw_target}")
     logging.info(f"meta_kata_only_soft_policy {meta_kata_only_soft_policy}")
     logging.info(f"value_loss_scale {value_loss_scale}")
     logging.info(f"td_value_loss_scales {td_value_loss_scales}")
@@ -1623,6 +1623,9 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
         if max_training_samples is not None and train_state["global_step_samples"] >= max_training_samples:
             logging.info("Hit max training samples, done")
             break
+        if stop_at_samples is not None and train_state["global_step_samples"] >= stop_at_samples:
+            logging.info(f"Hit -stop-at-samples {stop_at_samples} ({train_state['global_step_samples']} trained), done")
+            break
 
         if rank == 0:
             maybe_reload_training_data()
@@ -1673,6 +1676,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
 
         # SUB EPOCH LOOP -----------
         batch_count_this_epoch = 0
+        stop_at_samples_reached = False
         last_train_stats_time = time.perf_counter()
         for i in range(sub_epochs):
 
@@ -1716,7 +1720,6 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                 include_meta=raw_model.get_has_metadata_encoder(),
                 model_config=model_config,
                 prefetch_depth=data_prefetch_depth,
-                zero_wall_effect=zero_wall_effect,
             ):
                 optimizer.zero_grad(set_to_none=True)
                 extra_outputs = None
@@ -1935,7 +1938,15 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                         logging.info("Accumulating SWA")
                         swa_model.update_parameters(raw_model)
 
+                # -stop-at-samples: end the epoch early. global_step_samples is the same on every rank.
+                if stop_at_samples is not None and train_state["global_step_samples"] >= stop_at_samples:
+                    stop_at_samples_reached = True
+                    logging.info(f"Reached -stop-at-samples {stop_at_samples} mid-subepoch, ending the epoch here")
+                    break
+
             logging.info("Finished training subepoch!")
+            if stop_at_samples_reached:
+                break
 
         # END SUB EPOCH LOOP ------------
 
@@ -1994,8 +2005,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
                         device=device,
                         randomize_symmetries=True,
                         include_meta=raw_model.get_has_metadata_encoder(),
-                        model_config=model_config,
-                        zero_wall_effect=zero_wall_effect,
+                        model_config=model_config
                     ):
                         if use_amp:
                             with autocast("cuda", dtype=amp_dtype):
@@ -2052,7 +2062,7 @@ def _main_impl(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes
         # schedule, takes it mod epochs_per_export. One consequence is that a run switched from
         # -no-export to exporting waits for its next cycle boundary rather than exporting
         # immediately.
-        is_time_to_export = (train_state["export_cycle_counter"] % epochs_per_export == 0)
+        is_time_to_export = (train_state["export_cycle_counter"] % epochs_per_export == 0) or stop_at_samples_reached
 
         if rank == 0:
             logging.info("Export cycle counter = " + str(train_state["export_cycle_counter"]))
