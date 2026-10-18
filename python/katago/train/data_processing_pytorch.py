@@ -53,41 +53,20 @@ def apply_quoridor_dist_planes(binaryInputNCHW: np.ndarray, spatialDistNCHW: np.
     assert not binaryInputNCHW[:, lo:hi].any(), f"{npz_file}: packed bit planes 8..11 are nonzero; data not upgraded correctly"
     binaryInputNCHW[:, lo:hi] = decode_quoridor_dist_planes(spatialDistNCHW)
 
-# Quoridor I/O v4 wall-effect planes 21..24 (QuoridorNN::fillCanonicalWallEffectU8, docs/QuoridorIOv4.md): per anchor
-# of the 8x8 grid, [vertical wall, horizontal wall] x [side to move, opponent], the increase of that player's shortest
-# distance if the wall were placed; the npz carries them raw in wallEffectNCHW (uint8 [N,4,H,W], canonical orientation,
-# 255 = illegal placement, 0 outside the 8x8 anchors). The input is min(increase, 8) / 8, illegal -1. The globals 19 / 20
-# (largest opponent increase, number of opponent walls costing >= 2) are stored as floats in globalInputNC.
-QUORIDOR_WALL_EFFECT_FIRST_CHANNEL = 21
-QUORIDOR_WALL_EFFECT_NUM_CHANNELS = 4
-QUORIDOR_WALL_EFFECT_ILLEGAL = 255
-QUORIDOR_WALL_EFFECT_CAP = 8
-QUORIDOR_WALL_EFFECT_ILLEGAL_VALUE = -1.0
-QUORIDOR_WALL_EFFECT_GLOBAL_CHANNELS = (19, 20)
+# Quoridor I/O v4 data (QuoridorNN::TRAINING_IO_VERSION) has the same arrays as v3 and differs only in the draw targets
+# (a draw is noResult 1 instead of win 0.5 / loss 0.5), so the C++ writer, the shuffler and the converter stamp every npz
+# with the key "quoridorIOVersion" (int32 [1,1]); an npz without it is v3 or older. See docs/QuoridorIOv4.md.
+QUORIDOR_IO_VERSION_KEY = "quoridorIOVersion"
+QUORIDOR_UNSTAMPED_IO_VERSION = 3
 
-def decode_quoridor_wall_effect_planes(wallEffectNCHW: np.ndarray) -> np.ndarray:
-    d = np.minimum(wallEffectNCHW, np.uint8(QUORIDOR_WALL_EFFECT_CAP)).astype(np.float32) / np.float32(QUORIDOR_WALL_EFFECT_CAP)
-    return np.where(wallEffectNCHW == QUORIDOR_WALL_EFFECT_ILLEGAL, np.float32(QUORIDOR_WALL_EFFECT_ILLEGAL_VALUE), d).astype(np.float32)
+def quoridor_npz_io_version(npz) -> int:
+    """The Quoridor I/O version an npz was written for: its stamp, or 3 (v3 or older) without one."""
+    if QUORIDOR_IO_VERSION_KEY in npz:
+        return int(np.asarray(npz[QUORIDOR_IO_VERSION_KEY]).reshape(-1)[0])
+    return QUORIDOR_UNSTAMPED_IO_VERSION
 
-def apply_quoridor_wall_effect_planes(binaryInputNCHW: np.ndarray, wallEffectNCHW: np.ndarray, npz_file="") -> None:
-    """Overwrites channels 21..24 of unpacked float inputs [N,C,H,W] in place with decoded wall effects (before any symmetry)."""
-    lo = QUORIDOR_WALL_EFFECT_FIRST_CHANNEL
-    hi = lo + QUORIDOR_WALL_EFFECT_NUM_CHANNELS
-    assert wallEffectNCHW.dtype == np.uint8, f"{npz_file}: wallEffectNCHW dtype {wallEffectNCHW.dtype}"
-    assert wallEffectNCHW.shape == (binaryInputNCHW.shape[0], QUORIDOR_WALL_EFFECT_NUM_CHANNELS) + binaryInputNCHW.shape[2:], (
-        f"{npz_file}: wallEffectNCHW shape {wallEffectNCHW.shape} vs inputs {binaryInputNCHW.shape}")
-    assert not binaryInputNCHW[:, lo:hi].any(), f"{npz_file}: packed bit planes 21..24 are nonzero"
-    binaryInputNCHW[:, lo:hi] = decode_quoridor_wall_effect_planes(wallEffectNCHW)
-
-def zero_quoridor_wall_effect_inputs(binaryInputNCHW: np.ndarray, globalInputNC: np.ndarray) -> None:
-    """Zeroes the I/O v4 wall-effect inputs (planes 21..24, globals 19 / 20) in place: the net then sees exactly the v3 inputs
-    (the A/B control arm of docs/QuoridorIOv4.md)."""
-    binaryInputNCHW[:, QUORIDOR_WALL_EFFECT_FIRST_CHANNEL:QUORIDOR_WALL_EFFECT_FIRST_CHANNEL + QUORIDOR_WALL_EFFECT_NUM_CHANNELS] = 0.0
-    for g in QUORIDOR_WALL_EFFECT_GLOBAL_CHANNELS:
-        globalInputNC[:, g] = 0.0
-
-def decode_binary_input(binaryInputNCHWPacked: np.ndarray, spatialDistNCHW: np.ndarray, pos_len: int, npz_file="", wallEffectNCHW=None) -> np.ndarray:
-    """Packed bit planes + raw distances (+ raw wall effects, for I/O v4 rows) from an npz -> float32 spatial inputs [N,C,H,W], unmirrored."""
+def decode_binary_input(binaryInputNCHWPacked: np.ndarray, spatialDistNCHW: np.ndarray, pos_len: int, npz_file="") -> np.ndarray:
+    """Packed bit planes + raw distances from an npz -> float32 spatial inputs [N,C,H,W], unmirrored."""
     binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked,axis=2)
     assert len(binaryInputNCHW.shape) == 3
     assert binaryInputNCHW.shape[2] == ((pos_len * pos_len + 7) // 8) * 8
@@ -96,10 +75,6 @@ def decode_binary_input(binaryInputNCHWPacked: np.ndarray, spatialDistNCHW: np.n
         binaryInputNCHW.shape[0], binaryInputNCHW.shape[1], pos_len, pos_len
     )).astype(np.float32)
     apply_quoridor_dist_planes(binaryInputNCHW, spatialDistNCHW, npz_file)
-    if binaryInputNCHW.shape[1] >= QUORIDOR_WALL_EFFECT_FIRST_CHANNEL + QUORIDOR_WALL_EFFECT_NUM_CHANNELS:
-        if wallEffectNCHW is None:
-            raise KeyError(f"{npz_file}: I/O v4 rows (>= 25 spatial channels) need wallEffectNCHW; convert I/O v3 data with python/quoridor_convert_tdata_v3_to_v4.py")
-        apply_quoridor_wall_effect_planes(binaryInputNCHW, wallEffectNCHW, npz_file)
     return binaryInputNCHW
 
 def read_npz_training_data(
@@ -113,7 +88,6 @@ def read_npz_training_data(
     include_meta: bool,
     model_config: modelconfigs.ModelConfig,
     prefetch_depth: int = 1,
-    zero_wall_effect: bool = False,
 ):
     rand = np.random.default_rng(seed=list(os.urandom(12)))
     num_bin_features = modelconfigs.get_num_bin_input_features(model_config)
@@ -148,6 +122,15 @@ def read_npz_training_data(
                 arr = arr[:, rank]
                 return arr.reshape(num_whole_steps * batch_size, *rest)
 
+            # v3 and v4 rows have the same arrays; only the stamp tells v3 data (draw = win 0.5 / loss 0.5) from v4 data (draw = noResult).
+            if modelconfigs.is_quoridor(model_config):
+                data_io_version = quoridor_npz_io_version(npz)
+                model_io_version = modelconfigs.get_quoridor_io_version(model_config)
+                if data_io_version != model_io_version:
+                    raise ValueError(
+                        f"{npz_file} is Quoridor I/O v{data_io_version} data (" +
+                        ("no quoridorIOVersion stamp: v3 or older, draws as win 0.5 / loss 0.5; convert it with python/quoridor_convert_tdata_v3_to_v4.py" if QUORIDOR_IO_VERSION_KEY not in npz else "stamped") +
+                        f"), the model is I/O v{model_io_version}")
             binaryInputNCHWPacked = select_rank_rows(npz["binaryInputNCHWPacked"])
             if "spatialDistNCHW" not in npz:
                 raise KeyError(
@@ -155,7 +138,6 @@ def read_npz_training_data(
                     "must be upgraded with python/quoridor_add_dist_planes.py; see docs/DistPlanesUpgrade.md."
                 )
             spatialDistNCHW = select_rank_rows(npz["spatialDistNCHW"])
-            wallEffectNCHW = select_rank_rows(npz["wallEffectNCHW"]) if "wallEffectNCHW" in npz else None
             globalInputNC = select_rank_rows(npz["globalInputNC"])
             policyTargetsNCMove = select_rank_rows(npz["policyTargetsNCMove"]).astype(np.float32)
             globalTargetsNC = pad_global_targets_nc(select_rank_rows(npz["globalTargetsNC"]))
@@ -171,13 +153,9 @@ def read_npz_training_data(
                 qValueTargetsNCMove = None
         del npz
 
-        binaryInputNCHW = decode_binary_input(binaryInputNCHWPacked, spatialDistNCHW, pos_len, npz_file, wallEffectNCHW)
-        if zero_wall_effect and binaryInputNCHW.shape[1] >= QUORIDOR_WALL_EFFECT_FIRST_CHANNEL + QUORIDOR_WALL_EFFECT_NUM_CHANNELS:
-            zero_quoridor_wall_effect_inputs(binaryInputNCHW, globalInputNC)
-
-        # Data of another Quoridor I/O version (v1: 17 / 15, v2: 19 / 17, v3: 21 / 19 input channels) cannot train an I/O v4 model.
-        # Rows of all versions have the same targets, but older rows lack the newer inputs (v2 -> v3 repetition inputs, whose
-        # history is not stored; v3 -> v4 wall effects, which quoridor_convert_tdata_v3_to_v4.py adds exactly).
+        binaryInputNCHW = decode_binary_input(binaryInputNCHWPacked, spatialDistNCHW, pos_len, npz_file)
+        # Data of an older Quoridor I/O version with fewer input channels (v1: 17 / 15, v2: 19 / 17) cannot train a newer model
+        # (the v3 repetition inputs' history is not stored). v3 -> v4 changes only the draw targets (see the stamp check above).
         assert binaryInputNCHW.shape[1] == num_bin_features and globalInputNC.shape[1] == num_global_features, (
             f"{npz_file}: {binaryInputNCHW.shape[1]} spatial / {globalInputNC.shape[1]} global input channels, the model"
             f" expects {num_bin_features} / {num_global_features} (training data of an older Quoridor I/O version?)")

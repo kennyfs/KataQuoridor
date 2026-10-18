@@ -49,8 +49,17 @@ COMPRESSED_FRACTION_LARGE_FILE = 0.12
 # with asymptote = COMPRESSED_FRACTION_LARGE_FILE * uncompressed_bytes_per_row.
 CLIFF_OVERHEAD_BYTES_PER_FILE = 1650
 
+# Quoridor I/O v4 stamps every npz with this key (int32 [1,1]); v3 and v4 rows have the same arrays and differ only in the
+# draw targets (docs/QuoridorIOv4.md). Data without the stamp is v3 or older and is refused.
+IO_VERSION_KEY = "quoridorIOVersion"
+IO_VERSION = 4
+# -allow-unstamped-v3: shuffle I/O v3 data as it is (for conversion tooling and the A/B prep); the output is then unstamped
+# too, so it is still refused by train.py until python/quoridor_convert_tdata_v3_to_v4.py has converted it.
+ALLOW_UNSTAMPED_V3 = False
+
 def assert_keys(npz, include_meta: bool, include_qvalues: bool):
     keys = [
+        IO_VERSION_KEY,
         "binaryInputNCHWPacked",
         "globalInputNC",
         "policyTargetsNCMove",
@@ -68,14 +77,20 @@ def assert_keys(npz, include_meta: bool, include_qvalues: bool):
     actual_keys = set(npz.keys())
     if "qValueTargetsNCMove" in actual_keys:
         expected_keys.add("qValueTargetsNCMove")
-    # Quoridor I/O v4 rows carry the raw wall effects for input channels 21..24 (see data_processing_pytorch.py).
-    if "wallEffectNCHW" in actual_keys:
-        expected_keys.add("wallEffectNCHW")
     if "spatialDistNCHW" not in actual_keys:
         raise KeyError(
             "npz lacks spatialDistNCHW (S8-S11 raw distances); upgrade old data with "
             "python/quoridor_add_dist_planes.py, see docs/DistPlanesUpgrade.md"
         )
+    if IO_VERSION_KEY not in actual_keys and ALLOW_UNSTAMPED_V3:
+        expected_keys.discard(IO_VERSION_KEY)
+    elif IO_VERSION_KEY not in actual_keys:
+        raise KeyError(
+            "npz has no quoridorIOVersion stamp, so it is Quoridor I/O v3 or older data (a draw is win 0.5 / loss 0.5, not "
+            "noResult 1); convert it with python/quoridor_convert_tdata_v3_to_v4.py, see docs/QuoridorIOv4.md"
+        )
+    if IO_VERSION_KEY in actual_keys and int(np.asarray(npz[IO_VERSION_KEY]).reshape(-1)[0]) != IO_VERSION:
+        raise KeyError(f"npz is Quoridor I/O v{int(np.asarray(npz[IO_VERSION_KEY]).reshape(-1)[0])} data, expected v{IO_VERSION}")
     assert actual_keys == expected_keys, (sorted(actual_keys), sorted(expected_keys))
 
 def is_temp_npz_like(filename: str) -> bool:
@@ -111,12 +126,9 @@ def joint_shuffle_take_first_n(n: int, arrs: Sequence[np.ndarray | None]) -> lis
 
 def joint_concatenate(arrlists: Sequence[list[np.ndarray] | None]) -> list[np.ndarray | None]:
     assert_list_lengths_match(arrlists)
-    def concat(arrlist):
-        if arrlist is None or all(a is None for a in arrlist):
-            return None  # absent, or an optional array no input has (wallEffectNCHW of I/O v3 data)
-        assert not any(a is None for a in arrlist), "inputs mix files with and without an optional array (I/O v3 and v4 data?)"
-        return arrlist[0] if len(arrlist) == 1 else np.concatenate(arrlist, axis=0)
-    return [concat(arrlist) for arrlist in arrlists]
+    if len(arrlists[0]) == 1:
+        return [(arrlist[0] if arrlist is not None else None) for arrlist in arrlists]
+    return [(np.concatenate(arrlist, axis=0) if arrlist is not None else None) for arrlist in arrlists]
 
 def memusage_mb():
     return psutil.Process(os.getpid()).memory_info().rss // 1048576
@@ -130,8 +142,8 @@ def save_output_npz(
     start: int,
     stop: int,
 ):
-    assert len(arrs) == 10
-    [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,spatialDistNCHW,wallEffectNCHW] = (
+    assert len(arrs) == 9
+    [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,spatialDistNCHW] = (
         arrs
     )
     assert binaryInputNCHWPacked is not None
@@ -153,8 +165,8 @@ def save_output_npz(
         "valueTargetsNCHW": valueTargetsNCHW[start:stop],
         "spatialDistNCHW": spatialDistNCHW[start:stop],
     }
-    if wallEffectNCHW is not None:
-        save_dict["wallEffectNCHW"] = wallEffectNCHW[start:stop]
+    if not ALLOW_UNSTAMPED_V3:
+        save_dict[IO_VERSION_KEY] = np.array([[IO_VERSION]], dtype=np.int32)
     if metadataInputNC is not None:
         save_dict["metadataInputNC"] = metadataInputNC[start:stop]
     if qValueTargetsNCMove is not None:
@@ -186,7 +198,6 @@ def load_and_accumulate_input_contents(
     metadataInputNCList: list[np.ndarray] | None,
     qValueTargetsNCMoveList: list[np.ndarray] | None,
     spatialDistNCHWList: list[np.ndarray],
-    wallEffectNCHWList: list[np.ndarray | None],
     include_meta: bool,
     include_qvalues: bool,
     fill_in_qvalues: bool
@@ -200,7 +211,6 @@ def load_and_accumulate_input_contents(
         scoreDistrNList.append(npz["scoreDistrN"])
         valueTargetsNCHWList.append(npz["valueTargetsNCHW"])
         spatialDistNCHWList.append(npz["spatialDistNCHW"])
-        wallEffectNCHWList.append(npz["wallEffectNCHW"] if "wallEffectNCHW" in npz else None)
         if metadataInputNCList is not None:
             metadataInputNCList.append(npz["metadataInputNC"])
         if qValueTargetsNCMoveList is not None:
@@ -246,11 +256,10 @@ def shardify(
     metadataInputNCList = [] if include_meta else None
     qValueTargetsNCMoveList = [] if include_qvalues else None
     spatialDistNCHWList = []
-    wallEffectNCHWList = []  # entries are None for I/O v3 data (no wallEffectNCHW)
 
     for input_file in input_file_group:
         try:
-            load_and_accumulate_input_contents(input_file,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList,include_meta,include_qvalues,fill_in_qvalues=fill_in_qvalues)
+            load_and_accumulate_input_contents(input_file,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,include_meta,include_qvalues,fill_in_qvalues=fill_in_qvalues)
 
         except FileNotFoundError:
             num_files_not_found += 1
@@ -262,7 +271,7 @@ def shardify(
 
     concatenated_arrs = (
         joint_concatenate(
-            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList]
+            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList]
         )
     )
 
@@ -354,12 +363,11 @@ def merge_bucket(
     metadataInputNCList = [] if include_meta else None
     qValueTargetsNCMoveList = [] if include_qvalues else None
     spatialDistNCHWList = []
-    wallEffectNCHWList = []  # entries are None for I/O v3 data (no wallEffectNCHW)
 
     for input_idx in range(num_shards_to_merge):
         shard_filename = os.path.join(out_tmp_dir, str(input_idx) + ".npz")
         try:
-            load_and_accumulate_input_contents(shard_filename,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList,include_meta,include_qvalues,fill_in_qvalues=False)
+            load_and_accumulate_input_contents(shard_filename,binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,include_meta,include_qvalues,fill_in_qvalues=False)
         except FileNotFoundError:
             print("WARNING: Empty shard in merge_bucket for shard :", input_idx, out_tmp_dir)
 
@@ -369,7 +377,7 @@ def merge_bucket(
 
     concatenated_arrs = (
         joint_concatenate(
-            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList,wallEffectNCHWList]
+            [binaryInputNCHWPackedList,globalInputNCList,policyTargetsNCMoveList,globalTargetsNCList,scoreDistrNList,valueTargetsNCHWList,metadataInputNCList,qValueTargetsNCMoveList,spatialDistNCHWList]
         )
     )
 
@@ -815,6 +823,7 @@ if __name__ == '__main__':
     optional_args.add_argument('-dry-run-print-resource-cost', type=int, required=False, metavar='NUM_DATASET_ROWS', help='Do not actually shuffle (or even scan the dataset). Assume the dataset has this many total rows, run the window-size / keep / md5-filter math, and print rough estimates of output files, peak intermediate shard count, peak temp disk usage, and peak memory. Assumes 19x19 data and typical measured per-row sizes.')
     required_args.add_argument('-num-processes', type=int, required=True, help='Number of multiprocessing processes for shuffling in parallel')
     optional_args.add_argument('-worker-group-size', type=int, required=False, default=80000, help='Internally, target having many rows per parallel sharding worker (doesnt affect merge)')
+    optional_args.add_argument('-allow-unstamped-v3', action='store_true', help='Accept Quoridor I/O v3 data (npz without the quoridorIOVersion stamp) and write unstamped output; it must be converted with quoridor_convert_tdata_v3_to_v4.py before train.py accepts it')
     optional_args.add_argument('-exclude', required=False, help='Text file with npzs to ignore, one per line')
     optional_args.add_argument('-exclude-prefix', required=False, help='Prefix to concat to lines in exclude to produce the full file path')
     optional_args.add_argument('-exclude-basename', required=False, action="store_true", help='Consider an exclude to match if basename matches')
@@ -826,6 +835,7 @@ if __name__ == '__main__':
     optional_args.add_argument('-exclude-qvalues', action="store_true", required=False, help='Exclude Q-value targets (for backwards compatibility with pre-v1.16)')
 
     args = parser.parse_args()
+    ALLOW_UNSTAMPED_V3 = args.allow_unstamped_v3
 
     print("Command: %s" % shlex.join(sys.argv), flush=True)
 

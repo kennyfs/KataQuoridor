@@ -49,12 +49,11 @@ def test_end_to_end_training():
         # Verify raw npz shapes and contents
         sample_npz = np.load(raw_files[0])
         print(f"[E2E] Verifying raw npz shapes: {list(sample_npz.keys())}")
-        assert sample_npz["binaryInputNCHWPacked"].shape == (rows_per_file, 25, 11)
+        assert sample_npz["binaryInputNCHWPacked"].shape == (rows_per_file, 21, 11)
         assert sample_npz["spatialDistNCHW"].shape == (rows_per_file, 4, 9, 9)
         assert sample_npz["spatialDistNCHW"].dtype == np.uint8
-        assert sample_npz["wallEffectNCHW"].shape == (rows_per_file, 4, 9, 9)
-        assert sample_npz["wallEffectNCHW"].dtype == np.uint8
-        assert sample_npz["globalInputNC"].shape == (rows_per_file, 21)
+        assert sample_npz["quoridorIOVersion"].tolist() == [[4]]
+        assert sample_npz["globalInputNC"].shape == (rows_per_file, 19)
         assert sample_npz["policyTargetsNCMove"].shape == (rows_per_file, 2, 243)
         assert sample_npz["globalTargetsNC"].shape == (rows_per_file, 80)
         assert sample_npz["scoreDistrN"].shape == (rows_per_file, 282)

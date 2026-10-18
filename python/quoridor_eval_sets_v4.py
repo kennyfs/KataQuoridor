@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Held-out losses of an I/O v4 training checkpoint on sets of v4 npz files (docs/QuoridorIOv4.md, A/B).
 
-Usage: quoridor_eval_sets_v4.py CKPT MAXROWS [-zero-wall-effect] [-swa] NAME=GLOB_OR_DIR [NAME=...]
+Usage: quoridor_eval_sets_v4.py CKPT MAXROWS [-swa] NAME=GLOB_OR_DIR [NAME=...]
 
 Prints one line per set: policy KL (p0loss - policy target entropy), top-1 accuracy, the value loss in the net's own
 3-logit form (the draw as its own outcome; only comparable between nets trained that way) and with draws mapped back to 1/2
@@ -15,7 +15,6 @@ from katago.train import load_model, data_processing_pytorch
 from katago.train.metrics_pytorch import Metrics
 
 args = [a for a in sys.argv[1:] if not a.startswith("-")]
-zero = "-zero-wall-effect" in sys.argv
 use_swa = "-swa" in sys.argv
 ckpt, maxrows = args[0], int(args[1])
 dev = os.environ.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
@@ -33,7 +32,7 @@ for spec in args[2:]:
     sums, n, wsum = {k: 0.0 for k in keys}, 0, 0.0
     with torch.no_grad():
         for batch in data_processing_pytorch.read_npz_training_data(files, 256, world_size=1, rank=0, pos_len=9, device=dev,
-                randomize_symmetries=False, include_meta=False, model_config=cfg, zero_wall_effect=zero):
+                randomize_symmetries=False, include_meta=False, model_config=cfg):
             out = model.postprocess_output(model(batch["binaryInputNCHW"], batch["globalInputNC"]))
             m = metrics_obj.metrics_dict_batchwise(model, out, None, batch, is_training=False, soft_policy_weight_scale=8.0,
                     disable_optimistic_policy=False, meta_kata_only_soft_policy=False, value_loss_scale=0.6,
@@ -45,5 +44,5 @@ for spec in args[2:]:
             if n >= maxrows:
                 break
     r = {k: sums[k] / n for k in keys}
-    r.update(name=name, rows=n, kl=r["p0loss"] - r["ptentr"], ckpt=os.path.basename(os.path.dirname(ckpt)), zero=zero, swa=use_swa)
+    r.update(name=name, rows=n, kl=r["p0loss"] - r["ptentr"], ckpt=os.path.basename(os.path.dirname(ckpt)), swa=use_swa)
     print(json.dumps(r), flush=True)

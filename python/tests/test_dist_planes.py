@@ -63,7 +63,7 @@ def dumped_rows():
 def test_train_inference_input_parity(dumped_rows):
     z = dumped_rows
     ref = z["binaryInputNCHW"]
-    got = decode_binary_input(z["trainBinaryInputNCHWPacked"], z["trainSpatialDistNCHW"], 9, wallEffectNCHW=z["trainWallEffectNCHW"])
+    got = decode_binary_input(z["trainBinaryInputNCHWPacked"], z["trainSpatialDistNCHW"], 9)
     assert got.dtype == np.float32 and ref.dtype == np.float32
     assert np.array_equal(got, ref), f"mismatch in channels {sorted(set(np.nonzero(got != ref)[1]))}"
     assert np.array_equal(z["trainGlobalInputNC"], z["globalInputNC"])
@@ -204,4 +204,8 @@ def test_missing_dist_key_fails_loudly():
     keys = ["binaryInputNCHWPacked", "globalInputNC", "policyTargetsNCMove", "globalTargetsNC", "scoreDistrN", "valueTargetsNCHW"]
     with pytest.raises(KeyError, match="spatialDistNCHW"):
         shuffle.assert_keys({k: None for k in keys}, include_meta=False, include_qvalues=False)
-    shuffle.assert_keys({k: None for k in keys + ["spatialDistNCHW"]}, include_meta=False, include_qvalues=False)
+    full = {k: None for k in keys + ["spatialDistNCHW"]}
+    with pytest.raises(KeyError, match="quoridorIOVersion"):  # I/O v3 data: the stamp is missing too
+        shuffle.assert_keys(full, include_meta=False, include_qvalues=False)
+    full["quoridorIOVersion"] = np.array([[4]], dtype=np.int32)
+    shuffle.assert_keys(full, include_meta=False, include_qvalues=False)

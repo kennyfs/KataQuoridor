@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Upgrade a Quoridor I/O v3 training checkpoint to I/O v4 (docs/QuoridorIOv4.md).
 
-I/O v4 = v3 + 4 spatial input channels (21-24: the wall effects) and 2 global input channels (19, 20), appended, and a
-third value logit, the draw (noResult) outcome, in the value head and in each of the 4 TD value horizons. What changes:
+I/O v4 has the v3 inputs (the same 21 spatial / 19 global channels) and a third value logit, the draw (noResult) outcome,
+in the value head and in each of the 4 TD value horizons. So only the value head changes:
 
-- conv_spatial.weight [C, 21, k, k] -> [C, 25, k, k] and linear_global.weight [C, 19] -> [C, 21]: the new input columns
-  are zeros, so the new inputs are multiplied by 0 until training moves them;
 - linear_value [2, c] -> [3, c] and linear_td_value [4 * 2, c] -> [4 * 3, c]: the new noResult rows get zero weights and bias
   NR_BIAS (default -8: P(noResult) = 3e-4 instead of exactly 0 so that it can be learned; every other probability
   changes by less than that, and the exported net's win / loss / score outputs by less than 1e-3);
@@ -13,8 +11,8 @@ third value logit, the draw (noResult) outcome, in the value head and in each of
   same way: zeros), so train.py resumes with optimizer.load_state_dict as usual;
 - config["quoridor_io_version"] = 4, config["num_value_outputs"] = 3, and a marker in train_state.
 
-The upgraded net, fed v3-equivalent inputs (the new inputs 0), computes what the v3 net computed up to the noResult
-logit's tiny probability. To train it as the v3 net, run train.py with `-zero-wall-effect -quoridor-draw-target half`.
+The upgraded net computes what the v3 net computed up to the noResult logit's tiny probability. To keep training it on
+v3-style draw targets (a draw as win 0.5 / loss 0.5), run train.py with `-quoridor-draw-target half`.
 
 Usage:
   python quoridor_upgrade_v3_to_v4.py -checkpoint IN.ckpt -output OUT.ckpt [-nr-bias -8]
@@ -32,25 +30,12 @@ import torch
 
 import katago.train.load_model
 
-OLD_SPATIAL, NEW_SPATIAL = 21, 25
-OLD_GLOBAL, NEW_GLOBAL = 19, 21
 NUM_TD = 4
-SPATIAL_SUFFIX = "conv_spatial.weight"
-GLOBAL_SUFFIX = "linear_global.weight"
 VALUE_SUFFIXES = ("value_head.linear_value.weight", "value_head.linear_value.bias")
 TD_SUFFIXES = ("value_head.linear_td_value.weight", "value_head.linear_td_value.bias")
 MARKER = "quoridor_upgraded_v3_to_v4"
 BACKUP_SUFFIX = ".pre_v4"
 NR_BIAS_DEFAULT = -8.0
-
-
-def pad_input_dim(t: torch.Tensor, new_size: int, fill: float = 0.0) -> torch.Tensor:
-    """Pads dimension 1 (the input channels) of a weight-shaped tensor."""
-    shape = list(t.shape)
-    pad = new_size - shape[1]
-    assert pad > 0, f"unexpected shape {tuple(t.shape)}"
-    shape[1] = pad
-    return torch.cat([t, torch.full(shape, fill, dtype=t.dtype, device=t.device)], dim=1)
 
 
 def add_nr_rows(t: torch.Tensor, groups: int, fill: float) -> torch.Tensor:
@@ -71,8 +56,6 @@ def transforms(nr_bias: float) -> dict:
     """suffix -> (old shape check, function) for every tensor that changes, applied to weights, SWA weights and
     optimizer state (optimizer state tensors of the old shape get fill 0 instead of nr_bias)."""
     return {
-        SPATIAL_SUFFIX: lambda t, fill: pad_input_dim(t, NEW_SPATIAL),
-        GLOBAL_SUFFIX: lambda t, fill: pad_input_dim(t, NEW_GLOBAL),
         VALUE_SUFFIXES[0]: lambda t, fill: add_nr_rows(t, 1, 0.0),
         VALUE_SUFFIXES[1]: lambda t, fill: add_nr_rows(t, 1, fill),
         TD_SUFFIXES[0]: lambda t, fill: add_nr_rows(t, NUM_TD, 0.0),
@@ -86,17 +69,13 @@ def upgrade_state_dict(state: dict, what: str, nr_bias: float, log) -> dict:
     for suffix, fn in transforms(nr_bias).items():
         k = find_key(state, suffix)
         old[suffix] = tuple(state[k].shape)
-        if suffix == SPATIAL_SUFFIX:
-            assert state[k].dim() == 4 and state[k].shape[1] == OLD_SPATIAL, f"{what} {k}: {old[suffix]}"
-        if suffix == GLOBAL_SUFFIX:
-            assert state[k].dim() == 2 and state[k].shape[1] == OLD_GLOBAL, f"{what} {k}: {old[suffix]}"
         state[k] = fn(state[k], nr_bias)
         log(f"{what}: {k} {old[suffix]} -> {tuple(state[k].shape)}")
     return old
 
 
 def upgrade_optimizer(opt: dict, old_shapes: dict, nr_bias: float, log) -> int:
-    """Pads every optimizer state tensor that has one of the old shapes (zeros). Each old shape must belong to exactly one
+    """Extends every optimizer state tensor that has one of the old shapes (zero rows). Each old shape must belong to exactly one
     parameter's state, else the mapping is ambiguous. Returns the number of tensors padded."""
     fns = transforms(nr_bias)
     shape_to_suffix = {}
@@ -127,6 +106,7 @@ def upgrade_checkpoint(data: dict, nr_bias: float = NR_BIAS_DEFAULT, log=print) 
         raise SystemExit(f"checkpoint is Quoridor I/O v{io_version}, expected v3" +
                          (" (already upgraded)" if train_state.get(MARKER) is not None else ""))
     assert config.get("num_value_outputs", 2) == 2
+    assert config.get("quoridor_io_version") == 3
     old_shapes = upgrade_state_dict(data["model"], "model", nr_bias, log)
     if data.get("swa_model") is not None:
         assert upgrade_state_dict(data["swa_model"], "swa_model", nr_bias, log) == old_shapes

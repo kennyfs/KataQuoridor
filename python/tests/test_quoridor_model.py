@@ -23,8 +23,8 @@ V2_CONFIGS = ["b2c64_quoridor_v2", "tf2_b4c192_quoridor_v2"]
 V3_CONFIGS = ["b2c64_quoridor_v3", "tf2_b4c192_quoridor_v3"]
 V4_CONFIGS = ["b2c64_quoridor_v4", "tf2_b4c192_quoridor_v4"]
 # Input channel counts by Quoridor I/O version (QuoridorNN in cpp/neuralnet/quoridornn.h).
-NUM_SPATIAL = {1: 17, 2: 19, 3: 21, 4: 25}
-NUM_GLOBAL = {1: 15, 2: 17, 3: 19, 4: 21}
+NUM_SPATIAL = {1: 17, 2: 19, 3: 21, 4: 21}
+NUM_GLOBAL = {1: 15, 2: 17, 3: 19, 4: 19}
 
 METRICS_ARGS = dict(
     soft_policy_weight_scale=1.0, disable_optimistic_policy=False, meta_kata_only_soft_policy=False,
@@ -307,7 +307,7 @@ def test_quoridor_shortterm_optimistic_policy_weight_uses_short_horizon():
 def test_quoridor_symmetries(io_version):
     B = 3
     C = NUM_SPATIAL[io_version]
-    wall_channels = [14, 15, 16] + ([17, 18] if io_version >= 2 else []) + ([21, 22, 23, 24] if io_version >= 4 else [])
+    wall_channels = [14, 15, 16] + ([17, 18] if io_version >= 2 else [])
     # 1. Spatial symmetry (wall-anchor channels are 8x8: row 8 / col 8 are 0)
     spatial = torch.randn(B, C, 9, 9)
     spatial[:, wall_channels, 8, :] = 0.0

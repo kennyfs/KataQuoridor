@@ -61,8 +61,8 @@ MODEL_CONFIGS = os.environ.get(
     "b2c64_quoridor_v4,tf2_b4c192_quoridor_v4,tf3_b5c256_quoridor_v4",
 ).split(",")
 IO_VERSIONS = [1, 2, 3, 4]
-NUM_SPATIAL = {1: 17, 2: 19, 3: 21, 4: 25}
-NUM_GLOBAL = {1: 15, 2: 17, 3: 19, 4: 21}
+NUM_SPATIAL = {1: 17, 2: 19, 3: 21, 4: 21}
+NUM_GLOBAL = {1: 15, 2: 17, 3: 19, 4: 19}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -161,33 +161,6 @@ def _dist_feature(d):
     return np.where(d < 0, 1.0, np.minimum(1.0, d / 32.0)).astype(np.float32)
 
 
-def python_wall_effects(pos):
-    """I/O v4 planes 21..24 and globals 19 / 20, re-derived by brute force: for every anchor and both orientations, place the
-    wall in the canonical frame and recompute both players' shortest distances. Illegal placements are -1."""
-    me, opp, h, v = _canonical(pos)
-    planes = np.zeros((4, 9, 9), dtype=np.float32)
-    effects = np.full((4, 8, 8), -1, dtype=np.int64)  # [channel][r_canon][c], -1 = illegal
-    base_me = _distances(h, v, [(c, 0) for c in range(9)])[me[1], me[0]]
-    base_opp = _distances(h, v, [(c, 8) for c in range(9)])[opp[1], opp[0]]
-    for c in range(8):
-        for r in range(8):
-            r_canon = 7 - r if pos.to_move == rules.WHITE else r
-            for k, horizontal in enumerate((False, True)):  # channel offset 0 = vertical, 1 = horizontal
-                if not rules.wall_ok(pos, c, r, horizontal):
-                    continue
-                h2, v2 = (h | {(c, r_canon)}, v) if horizontal else (h, v | {(c, r_canon)})
-                d_me = _distances(h2, v2, [(c2, 0) for c2 in range(9)])[me[1], me[0]]
-                d_opp = _distances(h2, v2, [(c2, 8) for c2 in range(9)])[opp[1], opp[0]]
-                assert d_me >= base_me and d_opp >= base_opp
-                effects[k, r_canon, c] = d_me - base_me
-                effects[2 + k, r_canon, c] = d_opp - base_opp
-    for k in range(4):
-        planes[k, :8, :8] = np.where(effects[k] < 0, -1.0, np.minimum(effects[k], 8) / 8.0)
-    opp_effects = effects[2:4][effects[2:4] >= 0]
-    glob_ = np.array([min(int(opp_effects.max()), 8) / 8.0, min(1.0, float((opp_effects >= 2).sum()) / 16.0)], dtype=np.float32)
-    return planes, glob_
-
-
 def python_features(pos, io_version, ply, max_plies, komi, rep_info=None, rep_moves=None):
     me, opp, h, v = _canonical(pos)
     spatial = np.zeros((NUM_SPATIAL[io_version], 9, 9), dtype=np.float32)  # [channel][row][col], canonical rows
@@ -259,8 +232,6 @@ def python_features(pos, io_version, ply, max_plies, komi, rep_info=None, rep_mo
                 spatial[20, r_canon, c] = 1.0 if rep_moves[r, c] + 1 >= n else 0.0
         else:
             assert count >= 1 and not rep_moves.any()
-    if io_version >= 4:
-        spatial[21:25], glob_[19:21] = python_wall_effects(pos)
     return spatial, glob_
 
 
