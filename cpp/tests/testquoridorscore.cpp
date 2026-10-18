@@ -182,9 +182,7 @@ static OutcomeRow outcomeRowOf(const ScriptedGame& g, int plyIdx, bool mainRow, 
   testAssert(endHist.isGameFinished && !endHist.isNoResult);
   Player nextPla = (plyIdx % 2 == 0) ? P_BLACK : P_WHITE;
   ValueTargets resultTargets;
-  resultTargets.win = (float)ScoreValue::whiteWinsOfWinner(endHist.winner, 0.5);
-  resultTargets.loss = 1.0f - resultTargets.win;
-  resultTargets.noResult = 0.0f;
+  resultTargets.setOutcomeOfWinner(endHist.winner);
   resultTargets.score = endHist.finalWhiteMinusBlackScore;
   vector<ValueTargets> whiteValueTargets;
   if(mainRow) {
@@ -268,7 +266,7 @@ static void testOutcomeTargets() {
     r = outcomeRowOf(g, 4, true);
     testAssert(approxEqual(r.gt[20], -42.0f) && r.gt[21] == -6.5f && r.gt[47] == -1.5f);
   }
-  //A draw at maxPlies: value 0.5 / 0.5, u = 0 with its weight, no lead, plies left to the draw, a normal finished game.
+  //A draw at maxPlies: the noResult outcome (I/O v4: value 0 / 0 / 1), u = 0 with its weight, no lead, plies left to the draw, a normal finished game.
   {
     Rules rules = Rules::getTrompTaylorish();
     rules.maxPlies = 10;
@@ -276,7 +274,7 @@ static void testOutcomeTargets() {
     testAssert(g.hist.isDraw() && g.hist.getCurrentTurnNumber() == 10);
     for(int ply : {0, 1, 9}) {
       OutcomeRow r = outcomeRowOf(g, ply, true);
-      testAssert(r.gt[0] == 0.5f && r.gt[1] == 0.5f);
+      testAssert(r.gt[0] == 0.0f && r.gt[1] == 0.0f && r.gt[2] == 1.0f);
       testAssert(r.gt[20] == 0.0f && r.gt[27] == 1.0f);
       testAssert(r.gt[21] == 0.0f && r.gt[29] == 0.0f);
       testAssert(r.gt[23] == (float)(10 - ply));

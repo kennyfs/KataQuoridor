@@ -20,6 +20,19 @@ ValueTargets::ValueTargets()
 ValueTargets::~ValueTargets()
 {}
 
+void ValueTargets::setOutcomeOfWinner(Player winner) {
+  if(winner == P_WHITE) {
+    win = 1.0f; loss = 0.0f; noResult = 0.0f;
+  }
+  else if(winner == P_BLACK) {
+    win = 0.0f; loss = 1.0f; noResult = 0.0f;
+  }
+  else {
+    testAssert(winner == C_EMPTY);
+    win = 0.0f; loss = 0.0f; noResult = 1.0f;
+  }
+}
+
 //-------------------------------------------------------------------------------------
 
 SidePosition::SidePosition()
@@ -295,6 +308,7 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    binaryInputNCHWUnpacked(NULL),
    binaryInputNCHWPacked({maxRws, numBChannels, packedBoardArea}),
    spatialDistNCHW({maxRws, QuoridorNN::NUM_DIST_CHANNELS, yLen, xLen}),
+   wallEffectNCHW({maxRws, QuoridorNN::NUM_WALL_EFFECT_CHANNELS, yLen, xLen}),
    globalInputNC({maxRws, numFChannels}),
    policyTargetsNCMove({maxRws, POLICY_TARGET_NUM_CHANNELS, QuoridorNN::NUM_POLICY_PLANES * QuoridorNN::MODEL_LEN * QuoridorNN::MODEL_LEN}),
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
@@ -443,6 +457,7 @@ void TrainingWriteBuffers::fillQuoridorInputRow(
   float* rowBinScratch,
   uint8_t* rowBinPacked,
   uint8_t* rowDist,
+  uint8_t* rowWallEffect,
   float* rowGlobal
 ) {
   const int ioVersion = QuoridorNN::TRAINING_IO_VERSION;
@@ -456,6 +471,13 @@ void TrainingWriteBuffers::fillQuoridorInputRow(
   std::fill(
     rowBinScratch + QuoridorNN::FIRST_DIST_CHANNEL * posArea,
     rowBinScratch + (QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS) * posArea,
+    0.0f
+  );
+  //Likewise the wall-effect channels (the raw array is filled below from the same function fillRow used).
+  QuoridorNN::fillCanonicalWallEffectU8(board, nextPlayer, rowWallEffect);
+  std::fill(
+    rowBinScratch + QuoridorNN::SPATIAL_WALL_EFFECT_V4 * posArea,
+    rowBinScratch + (QuoridorNN::SPATIAL_WALL_EFFECT_V4 + QuoridorNN::NUM_WALL_EFFECT_CHANNELS) * posArea,
     0.0f
   );
 
@@ -534,6 +556,7 @@ void TrainingWriteBuffers::addRow(
       board, hist, nextPlayer, nnInputParams, binaryInputNCHWUnpacked,
       binaryInputNCHWPacked.data + curRows * numBinaryChannels * packedBoardArea,
       spatialDistNCHW.data + curRows * QuoridorNN::NUM_DIST_CHANNELS * posArea,
+      wallEffectNCHW.data + curRows * QuoridorNN::NUM_WALL_EFFECT_CHANNELS * posArea,
       globalInputNC.data + curRows * numGlobalChannels
     );
   }
@@ -820,6 +843,9 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
   numBytes = spatialDistNCHW.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("spatialDistNCHW", spatialDistNCHW.dataIncludingHeader, numBytes);
 
+  numBytes = wallEffectNCHW.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("wallEffectNCHW", wallEffectNCHW.dataIncludingHeader, numBytes);
+
   numBytes = globalInputNC.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("globalInputNC", globalInputNC.dataIncludingHeader, numBytes);
 
@@ -876,6 +902,16 @@ void TrainingWriteBuffers::writeToTextOstream(ostream& out) {
   len = spatialDistNCHW.getActualDataLen(curRows);
   for(int i = 0; i<len; i++) {
     out << (int)spatialDistNCHW.data[i] << " ";
+    if((i+1) % (len/curRows) == 0) out << endl;
+  }
+  out << endl;
+
+  out << "wallEffectNCHW" << endl;
+  wallEffectNCHW.prepareHeaderWithNumRows(curRows);
+  printHeader((const char*)wallEffectNCHW.dataIncludingHeader);
+  len = wallEffectNCHW.getActualDataLen(curRows);
+  for(int i = 0; i<len; i++) {
+    out << (int)wallEffectNCHW.data[i] << " ";
     if((i+1) % (len/curRows) == 0) out << endl;
   }
   out << endl;
@@ -1079,7 +1115,7 @@ void TrainingDataWriter::writeGame(const FinishedGameData& data) {
     else if(data.endHist.winner == P_WHITE)
       testAssert(lastTargets.win == 1.0f && lastTargets.loss == 0.0f && lastTargets.noResult == 0.0f);
     else
-      testAssert(lastTargets.noResult == 0.0f);
+      testAssert(lastTargets.win == 0.0f && lastTargets.loss == 0.0f && lastTargets.noResult == 1.0f); //a draw
 
     testAssert(!data.endHist.isResignation);
   }

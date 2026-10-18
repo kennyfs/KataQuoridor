@@ -24,9 +24,7 @@ using namespace std;
 static ValueTargets makeForcedWinnerValueTarget(Player winner) {
   ValueTargets targets;
   if(winner == C_EMPTY) {
-    targets.win = 0.5f;
-    targets.loss = 0.5f;
-    targets.noResult = 0.0f;
+    targets.setOutcomeOfWinner(C_EMPTY);
     targets.score = 0.0f;
     targets.hasLead = false;
     targets.lead = 0.0f;
@@ -103,9 +101,7 @@ static ValueTargets makeWhiteValueTarget(
     else {
       BoardHistory copyHist(hist);
       copyHist.endAndScoreGameNow(board);
-      targets.win = (float)ScoreValue::whiteWinsOfWinner(copyHist.winner, drawEquivalentWinsForWhite);
-      targets.loss = 1.0f - targets.win;
-      targets.noResult = 0.0f;
+      targets.setOutcomeOfWinner(copyHist.winner);
       targets.score = (float)ScoreValue::whiteScoreDrawAdjust(copyHist.finalWhiteMinusBlackScore,drawEquivalentWinsForWhite,hist);
       targets.hasLead = false;
       targets.lead = targets.score;

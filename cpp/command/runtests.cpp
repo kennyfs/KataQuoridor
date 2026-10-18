@@ -66,6 +66,8 @@ int MainCmds::runtests(const vector<string>& args) {
 
   if(shouldRun("quoridorv3"))
     Tests::runQuoridorIOv3Tests();
+  if(shouldRun("quoridorv4"))
+    Tests::runQuoridorIOv4Tests();
 
   if(shouldRun("quoridorracesolver"))
     Tests::runQuoridorRaceSolverTests();

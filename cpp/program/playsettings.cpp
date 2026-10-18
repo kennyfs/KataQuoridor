@@ -12,7 +12,7 @@ PlaySettings::PlaySettings()
    sekiForkHackProb(0.0),fancyKomiVarying(false),
    cheapSearchProb(0),cheapSearchVisits(0),cheapSearchTargetWeight(0.0f),
    quoridorRaceSelfplayFinish(false),
-   reduceVisits(false),reduceVisitsThreshold(100.0),reduceVisitsThresholdLookback(1),reducedVisitsMin(0),reducedVisitsWeight(1.0f),
+   reduceVisits(false),reduceVisitsThreshold(100.0),reduceVisitsThresholdLookback(1),reducedVisitsMin(0),reducedVisitsWeight(1.0f),reduceVisitsDrawThreshold(1.0),
    policySurpriseDataWeight(0.0),valueSurpriseDataWeight(0.0),useSearchValueSurprise(false),scaleDataWeight(1.0),
    useReanalyze(false),reanalyzeProp(0.0),
    reanalyzePolicySurpriseWeight(1.0),reanalyzeValueSurpriseWeight(1.0),reanalyzeSurpriseExponent(1.0),
@@ -108,6 +108,7 @@ PlaySettings PlaySettings::loadForSelfplay(ConfigParser& cfg, bool isDistributed
   playSettings.reduceVisits = cfg.getBool("reduceVisits");
   playSettings.reduceVisitsThreshold = cfg.getDouble("reduceVisitsThreshold",0.0,0.999999);
   playSettings.reduceVisitsThresholdLookback = cfg.getInt("reduceVisitsThresholdLookback",0,1000);
+  playSettings.reduceVisitsDrawThreshold = cfg.contains("reduceVisitsDrawThreshold") ? cfg.getDouble("reduceVisitsDrawThreshold",0.0,1.0) : 1.0;
   playSettings.reducedVisitsMin = cfg.getInt("reducedVisitsMin",1,10000000);
   playSettings.reducedVisitsWeight = cfg.getFloat("reducedVisitsWeight",0.0f,1.0f);
   playSettings.policySurpriseDataWeight = cfg.getDouble("policySurpriseDataWeight",0.0,1.0);

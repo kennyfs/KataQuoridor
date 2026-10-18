@@ -34,6 +34,12 @@ struct ValueTargets {
 
   ValueTargets();
   ~ValueTargets();
+
+  //The win / loss / noResult of a finished game with this winner (White's view). Quoridor I/O v4: a draw
+  //(winner == C_EMPTY: the maxPlies or repetition rule) is the noResult outcome, a distribution of its own, so the
+  //value head can tell a certain draw from a coin flip; the search values it with noResultUtilityForWhite
+  //(0 in all configs, as the old win 0.5 / loss 0.5 was). Does not touch score / lead.
+  void setOutcomeOfWinner(Player winner);
 };
 
 //Some basic extra stats to record outputted data about the neural net's raw evaluation on the position.
@@ -191,6 +197,10 @@ struct TrainingWriteBuffers {
   //These channels are continuous (d/32), so they cannot live in the packed bit planes above, where
   //they are written as 0. The training loader rebuilds channels 8-11 from this array.
   NumpyBuffer<uint8_t> spatialDistNCHW;
+  //Quoridor I/O v4: raw wall effects for spatial input channels 21-24, shape [N,4,H,W], canonical orientation, anchors
+  //in [0..7]x[0..7], 255 = illegal placement (see QuoridorNN::fillCanonicalWallEffectU8). Written as 0 in the packed
+  //bit planes, like the distance channels.
+  NumpyBuffer<uint8_t> wallEffectNCHW;
   //Input features that are global.
   NumpyBuffer<float> globalInputNC;
 
@@ -328,8 +338,8 @@ struct TrainingWriteBuffers {
   TrainingWriteBuffers& operator=(const TrainingWriteBuffers&) = delete;
 
   //Encodes one Quoridor input row (I/O version QuoridorNN::TRAINING_IO_VERSION, the only one written) exactly as
-  //addRow stores it: packed bit planes (channels 8-11 written as 0), raw canonical distances for channels 8-11,
-  //and global features. rowBinScratch must hold numSpatialFeatures(TRAINING_IO_VERSION) * 81 floats.
+  //addRow stores it: packed bit planes (channels 8-11 and 21-24 written as 0), raw canonical distances for channels
+  //8-11, raw wall effects for channels 21-24, and global features. rowBinScratch must hold numSpatialFeatures(TRAINING_IO_VERSION) * 81 floats.
   static void fillQuoridorInputRow(
     const Board& board,
     const BoardHistory& hist,
@@ -338,6 +348,7 @@ struct TrainingWriteBuffers {
     float* rowBinScratch,
     uint8_t* rowBinPacked,
     uint8_t* rowDist,
+    uint8_t* rowWallEffect,
     float* rowGlobal
   );
 

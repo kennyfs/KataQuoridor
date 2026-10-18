@@ -93,6 +93,7 @@ NNEvaluator::NNEvaluator(
    internalModelName(),
    modelVersion(-1),
    inputsVersion(-1),
+   predictsNoResult(false),
    numInputMetaChannels(0),
    postProcessParams(),
    numServerThreadsEverSpawned(0),
@@ -149,6 +150,7 @@ NNEvaluator::NNEvaluator(
       throw StringError(
         "KataQuoridor: model " + modelFileName + " has unsupported Quoridor I/O version " +
         Global::intToString(inputsVersion) + " (model option D)");
+    predictsNoResult = inputsVersion >= 4;
     numInputMetaChannels = desc.numInputMetaChannels;
     int modelXLen = QuoridorNN::MODEL_LEN;
     int modelYLen = QuoridorNN::MODEL_LEN;
@@ -1427,7 +1429,7 @@ void NNEvaluator::evaluate(
         double shorttermWinlossErrorPreSoftplus = buf.result->shorttermWinlossError * postProcessParams.outputScaleMultiplier;
         double shorttermScoreErrorPreSoftplus = buf.result->shorttermScoreError * postProcessParams.outputScaleMultiplier;
 
-        if(history.rules.koRule != Rules::KO_SIMPLE && history.rules.scoringRule != Rules::SCORING_TERRITORY)
+        if(!predictsNoResult && history.rules.koRule != Rules::KO_SIMPLE && history.rules.scoringRule != Rules::SCORING_TERRITORY)
           noResultLogits -= 100000.0;
 
         // Softmax
@@ -1436,7 +1438,7 @@ void NNEvaluator::evaluate(
         lossProb = exp(lossLogits - maxLogits);
         noResultProb = (noResultLogits <= -1e20) ? 0.0 : exp(noResultLogits - maxLogits);
 
-        if(history.rules.koRule != Rules::KO_SIMPLE && history.rules.scoringRule != Rules::SCORING_TERRITORY)
+        if(!predictsNoResult && history.rules.koRule != Rules::KO_SIMPLE && history.rules.scoringRule != Rules::SCORING_TERRITORY)
           noResultProb = 0.0;
 
         double probSum = winProb + lossProb + noResultProb;

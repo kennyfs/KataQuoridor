@@ -1208,6 +1208,7 @@ struct SearchLimitsThisMove {
 static SearchLimitsThisMove getSearchLimitsThisMove(
   const Search* toMoveBot, Player pla, const PlaySettings& playSettings, Rand& gameRand,
   const vector<double>& historicalMctsWinLossValues,
+  const vector<double>& historicalMctsNoResultValues,
   size_t numHistoricalMctsValuesToUse,
   bool clearBotBeforeSearch,
   const OtherGameProperties& otherGameProps,
@@ -1285,8 +1286,18 @@ static SearchLimitsThisMove getSearchLimitsThisMove(
       if(signedMostExtreme > 1.0)
         signedMostExtreme = 1.0;
       double amountThrough = signedMostExtreme - playSettings.reduceVisitsThreshold;
-      if(amountThrough > 0) {
-        double proportionThrough = amountThrough / (1.0 - playSettings.reduceVisitsThreshold);
+      double proportionThrough = amountThrough > 0 ? amountThrough / (1.0 - playSettings.reduceVisitsThreshold) : 0.0;
+      //CDC: a settled draw (the search's draw probability above reduceVisitsDrawThreshold for the lookback turns)
+      //is as settled as a won game
+      if(playSettings.reduceVisitsDrawThreshold < 1.0 && historicalMctsNoResultValues.size() >= numHistoricalValues) {
+        double minNoResult = 1e20;
+        for(int j = 0; j<playSettings.reduceVisitsThresholdLookback; j++)
+          minNoResult = std::min(minNoResult, historicalMctsNoResultValues[numHistoricalValues-1-j]);
+        double drawThrough = std::min(minNoResult, 1.0) - playSettings.reduceVisitsDrawThreshold;
+        if(drawThrough > 0)
+          proportionThrough = std::max(proportionThrough, drawThrough / (1.0 - playSettings.reduceVisitsDrawThreshold));
+      }
+      if(proportionThrough > 0) {
         testAssert(proportionThrough >= 0.0 && proportionThrough <= 1.0);
         double visitReductionProp = proportionThrough * proportionThrough;
         doAlterVisitsPlayouts = true;
@@ -1416,6 +1427,13 @@ static Loc runBotWithLimits(
 
 //KL divergence of a win/loss/noresult distribution from the raw neural net value prediction, capped at 1.
 static double valueSurpriseKL(double winValue, double lossValue, double noResultValue, const ReportedSearchValues& rawNNValues) {
+  //A net that can't predict a draw (Quoridor I/O v1-v3: its noResult output is ~e^-30) values it as win 0.5 / loss 0.5, so
+  //compare against that rather than against an impossible outcome (which would be the maximal surprise).
+  if(rawNNValues.noResultValue < 1e-9) {
+    winValue += 0.5 * noResultValue;
+    lossValue += 0.5 * noResultValue;
+    noResultValue = 0.0;
+  }
   double valueSurprise = 0.0;
   if(winValue > 1e-100) valueSurprise += winValue * (log(winValue) - log(std::max((double)rawNNValues.winValue,1e-100)));
   if(lossValue > 1e-100) valueSurprise += lossValue * (log(lossValue) - log(std::max((double)rawNNValues.lossValue,1e-100)));
@@ -1478,6 +1496,7 @@ static void reanalyzeCheapSearchPositions(
   const vector<bool>& wasCheapSearchByTurn,
   const vector<double>& valueSurpriseByTurn,
   const vector<double>& historicalMctsWinLossValues,
+  const vector<double>& historicalMctsNoResultValues,
   Rand& gameRand,
   const std::function<bool()>& shouldStop,
   const WaitableFlag* shouldPause,
@@ -1554,7 +1573,7 @@ static void reanalyzeCheapSearchPositions(
       //including any reduceVisits and asymmetric playout adjustments, based on the mcts winloss values
       //of the turns leading up to this one.
       SearchLimitsThisMove limits = getSearchLimitsThisMove(
-        toMoveBot, pla, playSettings, gameRand, historicalMctsWinLossValues, (size_t)turnAfterStart,
+        toMoveBot, pla, playSettings, gameRand, historicalMctsWinLossValues, historicalMctsNoResultValues, (size_t)turnAfterStart,
         clearBotBeforeSearch, otherGameProps, true
       );
       runBotWithLimits(toMoveBot, pla, playSettings, limits);
@@ -1884,6 +1903,7 @@ FinishedGameData* Play::runGame(
   vector<SidePosition*> sidePositionsToSearch;
 
   vector<double> historicalMctsWinLossValues;
+  vector<double> historicalMctsNoResultValues;
   vector<double> historicalMctsLeads;
   vector<double> historicalMctsScoreStdevs;
   vector<ReportedSearchValues> rawNNValues;
@@ -1921,9 +1941,7 @@ FinishedGameData* Play::runGame(
           score = lead > 0 ? lead + bonus : lead - bonus;
         }
         ValueTargets vt;
-        vt.win = (float)ScoreValue::whiteWinsOfWinner(rr.winner, gameData->drawEquivalentWinsForWhite);
-        vt.loss = 1.0f - vt.win;
-        vt.noResult = 0.0f;
+        vt.setOutcomeOfWinner(rr.winner);
         vt.score = (float)ScoreValue::whiteScoreDrawAdjust(score,gameData->drawEquivalentWinsForWhite,hist);
         vt.hasLead = true;
         vt.lead = (float)ScoreValue::whiteScoreDrawAdjust(lead,gameData->drawEquivalentWinsForWhite,hist);
@@ -1941,7 +1959,7 @@ FinishedGameData* Play::runGame(
         ReportedSearchValues raw;
         raw.winValue = vt.win;
         raw.lossValue = vt.loss;
-        raw.noResultValue = 0.0;
+        raw.noResultValue = vt.noResult;
         raw.staticScoreValue = raw.dynamicScoreValue = raw.expectedScore = vt.score;
         raw.expectedScoreStdev = 0.0;
         raw.lead = vt.lead;
@@ -1955,6 +1973,7 @@ FinishedGameData* Play::runGame(
         wasCheapSearchByTurn.push_back(false);
         if(playSettings.allowResignation || playSettings.reduceVisits) {
           historicalMctsWinLossValues.push_back(vt.win - vt.loss);
+          historicalMctsNoResultValues.push_back(vt.noResult);
           historicalMctsLeads.push_back(vt.lead);
           historicalMctsScoreStdevs.push_back(0.0);
         }
@@ -1998,7 +2017,7 @@ FinishedGameData* Play::runGame(
     }
 
     SearchLimitsThisMove limits = getSearchLimitsThisMove(
-      toMoveBot, pla, playSettings, gameRand, historicalMctsWinLossValues, historicalMctsWinLossValues.size(),
+      toMoveBot, pla, playSettings, gameRand, historicalMctsWinLossValues, historicalMctsNoResultValues, historicalMctsWinLossValues.size(),
       clearBotBeforeSearch, otherGameProps, false
     );
     Loc loc;
@@ -2091,6 +2110,7 @@ FinishedGameData* Play::runGame(
     if(playSettings.allowResignation || playSettings.reduceVisits) {
       ReportedSearchValues values = toMoveBot->getRootValuesRequireSuccess();
       historicalMctsWinLossValues.push_back(values.winLossValue);
+      historicalMctsNoResultValues.push_back(values.noResultValue);
       historicalMctsLeads.push_back(values.lead);
       historicalMctsScoreStdevs.push_back(values.expectedScoreStdev);
     }
@@ -2209,9 +2229,7 @@ FinishedGameData* Play::runGame(
       //We also do want to call this here to force-end the game if we crossed a move limit.
       hist.endAndScoreGameNow(board,gameData->finalOwnership);
 
-      finalValueTargets.win = (float)ScoreValue::whiteWinsOfWinner(hist.winner, gameData->drawEquivalentWinsForWhite);
-      finalValueTargets.loss = 1.0f - finalValueTargets.win;
-      finalValueTargets.noResult = 0.0f;
+      finalValueTargets.setOutcomeOfWinner(hist.winner);
       finalValueTargets.score = (float)ScoreValue::whiteScoreDrawAdjust(hist.finalWhiteMinusBlackScore,gameData->drawEquivalentWinsForWhite,hist);
       finalValueTargets.hasLead = true;
       finalValueTargets.lead = (float)ScoreValue::whiteScoreDrawAdjust(hist.finalWhiteLead,gameData->drawEquivalentWinsForWhite,hist);
@@ -2261,7 +2279,7 @@ FinishedGameData* Play::runGame(
     if(!gameData->hitTurnLimit && playSettings.useReanalyze && playSettings.reanalyzeProp > 0.0) {
       reanalyzeCheapSearchPositions(
         botB, botW, playSettings, otherGameProps, clearBotBeforeSearch,
-        wasCheapSearchByTurn, valueSurpriseByTurn, historicalMctsWinLossValues,
+        wasCheapSearchByTurn, valueSurpriseByTurn, historicalMctsWinLossValues, historicalMctsNoResultValues,
         gameRand, shouldStop, shouldPause, maybeCheckForNewNNEval,
         rawNNValues, locsBuf, playSelectionValuesBuf,
         gameData

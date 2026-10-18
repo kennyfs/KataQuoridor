@@ -766,9 +766,7 @@ int MainCmds::writesampletrainquoridor(const vector<string>& args) {
 
       vector<ValueTargets> whiteValueTargets(turnsPlayed + 1);
       for(size_t i = 0; i <= (size_t)turnsPlayed; i++) {
-        whiteValueTargets[i].win = (float)ScoreValue::whiteWinsOfWinner(currHist.winner, 0.5);
-        whiteValueTargets[i].loss = 1.0f - whiteValueTargets[i].win;
-        whiteValueTargets[i].noResult = 0.0f;
+        whiteValueTargets[i].setOutcomeOfWinner(currHist.winner);
         whiteValueTargets[i].score = (float)currHist.finalWhiteMinusBlackScore;
       }
       //As in Play::runGame, only the final targets carry the game's lead.

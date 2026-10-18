@@ -1083,6 +1083,7 @@ add_executable(katago
   tests/testquoridoriov2.cpp
   tests/testquoridorrepetition.cpp
   tests/testquoridoriov3.cpp
+  tests/testquoridoriov4.cpp
   tests/testquoridorselfplay.cpp
   tests/testquoridorracesolver.cpp
   tests/testscore.cpp

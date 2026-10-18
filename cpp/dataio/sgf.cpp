@@ -2185,8 +2185,10 @@ void WriteSgf::writeSgf(
         char lossBuf[32];
         char noResultBuf[32];
         char scoreBuf[32];
-        sprintf(winBuf,"%.2f",targets.win);
-        sprintf(lossBuf,"%.2f",targets.loss);
+        //White's win probability with a draw worth 1/2 (as before the draw was its own outcome, Quoridor I/O v4); the third
+        //number is the draw probability.
+        sprintf(winBuf,"%.2f",targets.win + 0.5 * targets.noResult);
+        sprintf(lossBuf,"%.2f",targets.loss + 0.5 * targets.noResult);
         sprintf(noResultBuf,"%.2f",targets.noResult);
         sprintf(scoreBuf,"%.1f",targets.score);
         if(comment.length() > 0)

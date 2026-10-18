@@ -16,6 +16,8 @@ int QuoridorNN::numSpatialFeatures(int ioVersion) {
     return NUM_FEATURES_SPATIAL_V2;
   if(ioVersion == 3)
     return NUM_FEATURES_SPATIAL_V3;
+  if(ioVersion == 4)
+    return NUM_FEATURES_SPATIAL_V4;
   ASSERT_UNREACHABLE;
 }
 
@@ -26,6 +28,8 @@ int QuoridorNN::numGlobalFeatures(int ioVersion) {
     return NUM_FEATURES_GLOBAL_V2;
   if(ioVersion == 3)
     return NUM_FEATURES_GLOBAL_V3;
+  if(ioVersion == 4)
+    return NUM_FEATURES_GLOBAL_V4;
   ASSERT_UNREACHABLE;
 }
 
@@ -150,6 +154,286 @@ void QuoridorNN::fillCanonicalDistancesU8(const Board& board, Player nextPlayer,
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Wall effects (I/O v4).
+//
+// Everything is in true board space (cell index r*9+c, r = 0 is Black's goal row) on a local copy of the open edges.
+// For a player with shortest distance D, a wall closes two edges. If it doesn't cut every shortest path the distance
+// can't grow, so we count the shortest paths through each edge (sigma_from_pawn[a] * sigma_to_goal[b] for an edge
+// a -> b on a shortest path): when the two edges together carry fewer paths than exist in total, the increase is 0
+// and the player still reaches the goal. Otherwise (all shortest paths may be cut) one early-exit BFS with the two
+// edges closed gives the new distance, or "unreachable" = the placement fully blocks = illegal.
+// ---------------------------------------------------------------------------------------------------------------
+namespace {
+  constexpr int NB = 9;
+  constexpr int NC = 81;
+  constexpr uint8_t OPEN_N = 1, OPEN_S = 2, OPEN_E = 4, OPEN_W = 8;
+
+  struct WallEffectPlayer {
+    int pawn;       // cell index
+    int goalRow;    // board row
+    int dist;       // shortest distance, -1 if the goal is unreachable
+    int df[NC];     // distance from the pawn
+    int dg[NC];     // distance to the goal row
+    int sf[NC];     // number of shortest paths from the pawn
+    int sg[NC];     // number of shortest paths to the goal row
+    int totalPaths;
+    int cntS[NC];   // shortest paths through the edge (cell) <-> (cell + 9)
+    int cntE[NC];   // shortest paths through the edge (cell) <-> (cell + 1)
+  };
+
+  inline int stepNeighbors(const uint8_t* open, int cell, int nbr[4]) {
+    int n = 0;
+    uint8_t o = open[cell];
+    if(o & OPEN_N) nbr[n++] = cell - NB;
+    if(o & OPEN_S) nbr[n++] = cell + NB;
+    if(o & OPEN_E) nbr[n++] = cell + 1;
+    if(o & OPEN_W) nbr[n++] = cell - 1;
+    return n;
+  }
+
+  // BFS from the given sources; fills dist (-1 unreachable) and returns the number of cells in `order`.
+  inline int bfsAll(const uint8_t* open, const int* sources, int numSources, int* dist, int* order) {
+    for(int i = 0; i < NC; i++)
+      dist[i] = -1;
+    int head = 0, tail = 0;
+    for(int i = 0; i < numSources; i++) {
+      dist[sources[i]] = 0;
+      order[tail++] = sources[i];
+    }
+    int nbr[4];
+    while(head < tail) {
+      int x = order[head++];
+      int n = stepNeighbors(open, x, nbr);
+      for(int i = 0; i < n; i++) {
+        int y = nbr[i];
+        if(dist[y] < 0) {
+          dist[y] = dist[x] + 1;
+          order[tail++] = y;
+        }
+      }
+    }
+    return tail;
+  }
+
+  // The open edges as 81-bit boards (bit r*9+c): bit set = the pawn on that cell can step in that direction.
+  typedef unsigned __int128 Bits81;
+  struct OpenMasks {
+    Bits81 n, s, e, w;
+  };
+
+  inline OpenMasks makeOpenMasks(const uint8_t* open) {
+    OpenMasks m = {0, 0, 0, 0};
+    for(int i = 0; i < NC; i++) {
+      Bits81 b = ((Bits81)1) << i;
+      if(open[i] & OPEN_N) m.n |= b;
+      if(open[i] & OPEN_S) m.s |= b;
+      if(open[i] & OPEN_E) m.e |= b;
+      if(open[i] & OPEN_W) m.w |= b;
+    }
+    return m;
+  }
+
+  // Shortest distance from pawn to the goal row, -1 if unreachable: a breadth-first search on whole frontiers at once.
+  inline int bfsToGoalRow(const OpenMasks& m, int pawn, int goalRow) {
+    const Bits81 goal = ((((Bits81)1) << NB) - 1) << (goalRow * NB);
+    Bits81 visited = ((Bits81)1) << pawn;
+    Bits81 frontier = visited;
+    for(int d = 0;; d++) {
+      if(frontier & goal)
+        return d;
+      Bits81 next = ((frontier & m.n) >> NB) | ((frontier & m.s) << NB) | ((frontier & m.e) << 1) | ((frontier & m.w) >> 1);
+      next &= ~visited;
+      if(!next)
+        return -1;
+      visited |= next;
+      frontier = next;
+    }
+  }
+
+  void setupWallEffectPlayer(const uint8_t* open, int pawn, int goalRow, WallEffectPlayer& p) {
+    p.pawn = pawn;
+    p.goalRow = goalRow;
+    int order[NC];
+    int n = bfsAll(open, &pawn, 1, p.df, order);
+    for(int i = 0; i < NC; i++)
+      p.sf[i] = 0;
+    p.sf[pawn] = 1;
+    int nbr[4];
+    for(int i = 0; i < n; i++) {
+      int x = order[i];
+      int k = stepNeighbors(open, x, nbr);
+      for(int j = 0; j < k; j++)
+        if(p.df[nbr[j]] == p.df[x] + 1)
+          p.sf[nbr[j]] += p.sf[x];
+    }
+    int goals[NB];
+    for(int c = 0; c < NB; c++)
+      goals[c] = goalRow * NB + c;
+    n = bfsAll(open, goals, NB, p.dg, order);
+    for(int i = 0; i < NC; i++)
+      p.sg[i] = 0;
+    for(int c = 0; c < NB; c++)
+      p.sg[goals[c]] = 1;
+    for(int i = 0; i < n; i++) {
+      int x = order[i];
+      int k = stepNeighbors(open, x, nbr);
+      for(int j = 0; j < k; j++)
+        if(p.dg[nbr[j]] == p.dg[x] + 1)
+          p.sg[nbr[j]] += p.sg[x];
+    }
+    p.dist = p.dg[pawn];
+    p.totalPaths = p.dist >= 0 ? p.sg[pawn] : 0;
+    for(int i = 0; i < NC; i++) {
+      p.cntS[i] = 0;
+      p.cntE[i] = 0;
+    }
+    if(p.dist < 0)
+      return;
+    auto edgeCount = [&](int a, int b) {
+      if(p.df[a] >= 0 && p.dg[b] >= 0 && p.df[a] + 1 + p.dg[b] == p.dist)
+        return p.sf[a] * p.sg[b];
+      if(p.df[b] >= 0 && p.dg[a] >= 0 && p.df[b] + 1 + p.dg[a] == p.dist)
+        return p.sf[b] * p.sg[a];
+      return 0;
+    };
+    for(int r = 0; r < NB; r++) {
+      for(int c = 0; c < NB; c++) {
+        int cell = r * NB + c;
+        if((open[cell] & OPEN_S) && r + 1 < NB)
+          p.cntS[cell] = edgeCount(cell, cell + NB);
+        if((open[cell] & OPEN_E) && c + 1 < NB)
+          p.cntE[cell] = edgeCount(cell, cell + 1);
+      }
+    }
+  }
+
+  //The edge east of `cell` / south of `cell`: close it in both directions, or open it again.
+  inline void toggleEdgeE(OpenMasks& m, int cell) {
+    m.e ^= ((Bits81)1) << cell;
+    m.w ^= ((Bits81)1) << (cell + 1);
+  }
+  inline void toggleEdgeS(OpenMasks& m, int cell) {
+    m.s ^= ((Bits81)1) << cell;
+    m.n ^= ((Bits81)1) << (cell + NB);
+  }
+}
+
+// raw[k][rBoard * 8 + c] for k in 0..3 (see header), board space (rBoard = the anchor's board row).
+static void computeWallEffectsBoardSpace(const Board& board, Player nextPlayer, uint8_t raw[4][64]) {
+  uint8_t open[NC];
+  {
+    //An edge is open unless the board has a fence cell at the edge's midpoint (Board::canPawnStep).
+    const int xs = board.x_size;
+    for(int r = 0; r < NB; r++) {
+      for(int c = 0; c < NB; c++) {
+        uint8_t o = 0;
+        if(r > 0 && board.colors[Location::getLoc(2 * c, 2 * r - 1, xs)] != C_FENCE) o |= OPEN_N;
+        if(r < NB - 1 && board.colors[Location::getLoc(2 * c, 2 * r + 1, xs)] != C_FENCE) o |= OPEN_S;
+        if(c < NB - 1 && board.colors[Location::getLoc(2 * c + 1, 2 * r, xs)] != C_FENCE) o |= OPEN_E;
+        if(c > 0 && board.colors[Location::getLoc(2 * c - 1, 2 * r, xs)] != C_FENCE) o |= OPEN_W;
+        open[r * NB + c] = o;
+      }
+    }
+  }
+  Loc curPawnLoc = (nextPlayer == P_BLACK) ? board.blackPawnLoc : board.whitePawnLoc;
+  Loc oppPawnLoc = (nextPlayer == P_BLACK) ? board.whitePawnLoc : board.blackPawnLoc;
+  auto cellOf = [&](Loc loc) { return (Location::getY(loc, board.x_size) / 2) * NB + Location::getX(loc, board.x_size) / 2; };
+  OpenMasks masks = makeOpenMasks(open);
+  WallEffectPlayer pl[2];
+  setupWallEffectPlayer(open, cellOf(curPawnLoc), nextPlayer == P_BLACK ? 0 : 8, pl[0]);
+  setupWallEffectPlayer(open, cellOf(oppPawnLoc), nextPlayer == P_BLACK ? 8 : 0, pl[1]);
+
+  for(int k = 0; k < 4; k++)
+    for(int i = 0; i < 64; i++)
+      raw[k][i] = 0;
+
+  for(int r = 0; r < 8; r++) {
+    for(int c = 0; c < 8; c++) {
+      Loc center = Location::getLoc(2 * c + 1, 2 * r + 1, board.x_size);
+      if(board.colors[center] != C_EMPTY) {
+        for(int k = 0; k < 4; k++)
+          raw[k][r * 8 + c] = QuoridorNN::WALL_EFFECT_ILLEGAL_U8;
+        continue;
+      }
+      for(int orient = 0; orient < 2; orient++) {
+        const bool isVertical = (orient == 0);
+        Loc arm1 = isVertical ? (center + board.adj_offsets[0]) : (center + board.adj_offsets[1]);
+        Loc arm2 = isVertical ? (center + board.adj_offsets[3]) : (center + board.adj_offsets[2]);
+        const bool geometricOverlap = (board.colors[arm1] != C_EMPTY || board.colors[arm2] != C_EMPTY);
+        int cell = r * NB + c;
+        //Vertical wall (c, r) closes the east edges of cells (c, r) and (c, r + 1); horizontal wall (c, r) closes the
+        //south edges of cells (c, r) and (c + 1, r).
+        int e1 = cell;
+        int e2 = isVertical ? cell + NB : cell + 1;
+        int effect[2] = {0, 0};
+        bool legal = !geometricOverlap;
+        if(legal) {
+          for(int p = 0; p < 2 && legal; p++) {
+            const WallEffectPlayer& P = pl[p];
+            if(P.dist < 0)
+              continue;
+            int cut = isVertical ? (P.cntE[e1] + P.cntE[e2]) : (P.cntS[e1] + P.cntS[e2]);
+            if(cut < P.totalPaths)
+              continue;
+            //Both edges are open (a fence at an arm is an overlap, excluded above), so toggling closes them.
+            if(isVertical) { toggleEdgeE(masks, e1); toggleEdgeE(masks, e2); }
+            else { toggleEdgeS(masks, e1); toggleEdgeS(masks, e2); }
+            int nd = bfsToGoalRow(masks, P.pawn, P.goalRow);
+            if(isVertical) { toggleEdgeE(masks, e1); toggleEdgeE(masks, e2); }
+            else { toggleEdgeS(masks, e1); toggleEdgeS(masks, e2); }
+            if(nd < 0)
+              legal = false;
+            else
+              effect[p] = nd - P.dist;
+          }
+        }
+        for(int p = 0; p < 2; p++) {
+          int k = p * 2 + (isVertical ? 0 : 1);
+          raw[k][r * 8 + c] = !legal ? QuoridorNN::WALL_EFFECT_ILLEGAL_U8 : (uint8_t)std::min(std::max(effect[p], 0), QuoridorNN::WALL_EFFECT_RAW_MAX);
+        }
+      }
+    }
+  }
+}
+
+void QuoridorNN::fillCanonicalWallEffectU8(const Board& board, Player nextPlayer, uint8_t* out) {
+  assert(nextPlayer == P_BLACK || nextPlayer == P_WHITE);
+  uint8_t raw[4][64];
+  computeWallEffectsBoardSpace(board, nextPlayer, raw);
+  std::fill(out, out + NUM_WALL_EFFECT_CHANNELS * 81, (uint8_t)0);
+  for(int k = 0; k < NUM_WALL_EFFECT_CHANNELS; k++) {
+    for(int rb = 0; rb < 8; rb++) {
+      int rCanon = (nextPlayer == P_WHITE) ? (7 - rb) : rb;
+      for(int c = 0; c < 8; c++)
+        out[k * 81 + rCanon * 9 + c] = raw[k][rb * 8 + c];
+    }
+  }
+}
+
+float QuoridorNN::wallEffectInputValue(uint8_t raw) {
+  if(raw == WALL_EFFECT_ILLEGAL_U8)
+    return WALL_EFFECT_ILLEGAL_VALUE;
+  return (float)std::min((int)raw, WALL_EFFECT_CAP) / (float)WALL_EFFECT_CAP;
+}
+
+void QuoridorNN::wallEffectGlobals(const uint8_t* raw, float& maxOppEffect, float& numOppBigEffects) {
+  int maxEffect = 0;
+  int numBig = 0;
+  for(int k = 2; k < 4; k++) {
+    for(int i = 0; i < 81; i++) {
+      uint8_t v = raw[k * 81 + i];
+      if(v == WALL_EFFECT_ILLEGAL_U8)
+        continue;
+      maxEffect = std::max(maxEffect, (int)v);
+      if((int)v >= WALL_EFFECT_GLOBAL_MIN_COUNT_INCREASE)
+        numBig++;
+    }
+  }
+  maxOppEffect = (float)std::min(maxEffect, WALL_EFFECT_CAP) / (float)WALL_EFFECT_CAP;
+  numOppBigEffects = std::min(1.0f, (float)numBig / NUM_OPP_WALL_EFFECT_SCALE);
 }
 
 void QuoridorNN::fillRow(
@@ -390,6 +674,21 @@ void QuoridorNN::fillRow(
       (float)(boardHistory.currentSelfKomi(nextPlayer, nnInputParams.drawEquivalentWinsForWhite) / SELF_KOMI_SCALE);
   }
 
+  if(ioVersion >= 4) {
+    uint8_t raw[NUM_WALL_EFFECT_CHANNELS * 81];
+    fillCanonicalWallEffectU8(board, nextPlayer, raw);
+    for(int k = 0; k < NUM_WALL_EFFECT_CHANNELS; k++) {
+      for(int rCanon = 0; rCanon < 8; rCanon++) {
+        for(int c = 0; c < 8; c++) {
+          float f = wallEffectInputValue(raw[k * 81 + rCanon * 9 + c]);
+          if(f != 0.0f)
+            setRowBin(rowSpatial, NNPos::xyToPos(c, rCanon, nnXLen), SPATIAL_WALL_EFFECT_V4 + k, f, posStride, featureStride);
+        }
+      }
+    }
+    wallEffectGlobals(raw, rowGlobal[GLOBAL_MAX_OPP_WALL_EFFECT_V4], rowGlobal[GLOBAL_NUM_OPP_WALL_EFFECT2_V4]);
+  }
+
   if(ioVersion >= 3) {
     const int n = boardHistory.rules.repetitionDrawCount;
     if(n > 0) {
@@ -457,6 +756,10 @@ void QuoridorNN::applyInputSymmetry(float* rowSpatial, int ioVersion, bool useNH
   if(ioVersion >= 2) {
     wallChannels.push_back(SPATIAL_LEGAL_VWALL_V2);
     wallChannels.push_back(SPATIAL_LEGAL_HWALL_V2);
+  }
+  if(ioVersion >= 4) {
+    for(int k = 0; k < NUM_WALL_EFFECT_CHANNELS; k++)
+      wallChannels.push_back(SPATIAL_WALL_EFFECT_V4 + k);
   }
   for(int ch : wallChannels) {
     for(int r = 0; r < 8; r++) {

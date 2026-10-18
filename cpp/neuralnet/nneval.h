@@ -289,6 +289,9 @@ class NNEvaluator {
   std::string internalModelName;
   int modelVersion;
   int inputsVersion;
+  //Quoridor I/O v4 nets are trained with the draw as the noResult outcome; older nets (and the random test net) have a
+  //noResult output that is forced off, so a draw is value 0 with win / loss ~ 1/2 as before.
+  bool predictsNoResult;
   int numInputMetaChannels;
 
   ModelPostProcessParams postProcessParams;

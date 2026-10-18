@@ -1293,12 +1293,14 @@ bool Search::addRaceSolverLeafIfSolved(SearchThread& thread, SearchNode& node) {
     double bonus = (double)thread.history.rules.timeBonusPerPly * (double)std::max((int64_t)0, (int64_t)thread.history.rules.maxPlies - endPly);
     score = lead > 0 ? lead + bonus : lead - bonus;
   }
-  double winLossValue = 2.0 * ScoreValue::whiteWinsOfWinner(rr.winner, searchParams.drawEquivalentWinsForWhite) - 1;
+  //A drawn race is the noResult outcome (Quoridor I/O v4), valued by noResultUtilityForWhite.
+  double winLossValue = rr.winner == C_EMPTY ? 0.0 : (rr.winner == P_WHITE ? 1.0 : -1.0);
+  double noResultValue = rr.winner == C_EMPTY ? 1.0 : 0.0;
   double scoreMean = ScoreValue::whiteScoreDrawAdjust(score,searchParams.drawEquivalentWinsForWhite,thread.history);
   double scoreMeanSq = ScoreValue::whiteScoreMeanSqOfScoreGridded(score,searchParams.drawEquivalentWinsForWhite);
   double leadVal = ScoreValue::whiteScoreDrawAdjust(lead,searchParams.drawEquivalentWinsForWhite,thread.history);
   double weight = (searchParams.useUncertainty && nnEvaluator->supportsShorttermError()) ? searchParams.uncertaintyMaxWeight : 1.0;
-  addLeafValue(node, winLossValue, 0.0, scoreMean, scoreMeanSq, leadVal, weight, true, false);
+  addLeafValue(node, winLossValue, noResultValue, scoreMean, scoreMeanSq, leadVal, weight, true, false);
   return true;
 }
 
@@ -1328,8 +1330,10 @@ bool Search::playoutDescend(
       return true;
     }
     else {
-      double winLossValue = 2.0 * ScoreValue::whiteWinsOfWinner(thread.history.winner, searchParams.drawEquivalentWinsForWhite) - 1;
-      double noResultValue = 0.0;
+      //A draw (maxPlies or repetition rule) is the noResult outcome (Quoridor I/O v4), valued by noResultUtilityForWhite
+      //(0, like the old win 0.5 / loss 0.5), so that the search reports a draw probability.
+      double winLossValue = thread.history.winner == C_EMPTY ? 0.0 : (thread.history.winner == P_WHITE ? 1.0 : -1.0);
+      double noResultValue = thread.history.winner == C_EMPTY ? 1.0 : 0.0;
       double scoreMean = ScoreValue::whiteScoreDrawAdjust(thread.history.finalWhiteMinusBlackScore,searchParams.drawEquivalentWinsForWhite,thread.history);
       double scoreMeanSq = ScoreValue::whiteScoreMeanSqOfScoreGridded(thread.history.finalWhiteMinusBlackScore,searchParams.drawEquivalentWinsForWhite);
       //KataQuoridor: the lead is the history's lead (tempo + komi), not the score, which may include a time bonus.

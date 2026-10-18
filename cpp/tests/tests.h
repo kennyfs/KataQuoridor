@@ -40,6 +40,9 @@ namespace Tests {
   void runQuoridorRepetitionTests();
   //testquoridoriov3.cpp
   void runQuoridorIOv3Tests();
+
+  //testquoridoriov4.cpp
+  void runQuoridorIOv4Tests();
   //testquoridorselfplay.cpp
   void runQuoridorSelfplayTests();
   //testquoridorracesolver.cpp

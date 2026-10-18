@@ -56,6 +56,9 @@ struct PlaySettings {
   int reduceVisitsThresholdLookback; //Value must be more extreme over the last this many turns
   int reducedVisitsMin; //Number of visits at the most extreme winrate
   float reducedVisitsWeight; //Amount of weight to put on the training sample at minimum visits winrate.
+  //Also reduce visits (as reduceVisits does for a winning side) when the search's draw probability (the noResult value
+  //of the Quoridor I/O v4 draw outcome) has been above this for reduceVisitsThresholdLookback turns. 1.0 = off.
+  double reduceVisitsDrawThreshold;
 
   //Probabilistically favor samples that had high policy surprise (kl divergence).
   double policySurpriseDataWeight;

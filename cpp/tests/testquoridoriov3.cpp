@@ -266,7 +266,7 @@ static void testCacheHash() {
   NNEvaluator* nnEval = TestSearchCommon::startNNEval(
     "/dev/null", logger, "quoridorIOv3CacheNN", NNPos::MAX_BOARD_LEN, NNPos::MAX_BOARD_LEN, 0, false, false, false, true, false
   );
-  testAssert(nnEval->getInputsVersion() == QuoridorNN::MAX_SUPPORTED_IO_VERSION && nnEval->getInputsVersion() == 3);
+  testAssert(nnEval->getInputsVersion() == QuoridorNN::MAX_SUPPORTED_IO_VERSION);
   NNResultBuf buf;
   nnEval->evaluate(a.board, a.hist, a.pla, params, buf, false, false);
   Hash128 ha = buf.result->nnHash;
@@ -296,17 +296,18 @@ static void testTrainingEncoding() {
   const vector<string> shuffle = {"e8", "e2", "e9", "e1", "e8", "e2", "e9", "e1"};
   const int C = QuoridorNN::numSpatialFeatures(QuoridorNN::TRAINING_IO_VERSION);
   const int G = QuoridorNN::numGlobalFeatures(QuoridorNN::TRAINING_IO_VERSION);
-  testAssert(QuoridorNN::TRAINING_IO_VERSION == 3 && C == 21 && G == 19);
+  testAssert(QuoridorNN::TRAINING_IO_VERSION == 4 && C == 25 && G == 21);
   const int packedArea = (AREA + 7) / 8;
   int drawingRows = 0;
   for(size_t i = 0; i < shuffle.size(); i++) {
     vector<float> scratch(C * AREA), global(G);
-    vector<uint8_t> packed(C * packedArea), dist(QuoridorNN::NUM_DIST_CHANNELS * AREA);
+    vector<uint8_t> packed(C * packedArea), dist(QuoridorNN::NUM_DIST_CHANNELS * AREA), wallEffect(QuoridorNN::NUM_WALL_EFFECT_CHANNELS * AREA);
     MiscNNInputParams params;
-    TrainingWriteBuffers::fillQuoridorInputRow(g.board, g.hist, g.pla, params, scratch.data(), packed.data(), dist.data(), global.data());
+    TrainingWriteBuffers::fillQuoridorInputRow(g.board, g.hist, g.pla, params, scratch.data(), packed.data(), dist.data(), wallEffect.data(), global.data());
+    //The training row is I/O v4; its first 21 spatial / 19 global features are the v3 row.
     Row row = fill(g.board, g.hist, g.pla);
-    testAssert(global == row.global);
-    for(int ch = 0; ch < C; ch++) {
+    testAssert(vector<float>(global.begin(), global.begin() + row.global.size()) == row.global);
+    for(int ch = 0; ch < QuoridorNN::NUM_FEATURES_SPATIAL_V3; ch++) {
       if(ch >= QuoridorNN::FIRST_DIST_CHANNEL && ch < QuoridorNN::FIRST_DIST_CHANNEL + QuoridorNN::NUM_DIST_CHANNELS)
         continue;
       for(int p = 0; p < AREA; p++) {
