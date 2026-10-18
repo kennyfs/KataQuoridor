@@ -31,7 +31,7 @@ function occurrences(g) {
   return { max, last };
 }
 
-const seen = { ruleOn: 0, ruleOff: 0, n3: 0, n4: 0, repDraw: 0, maxPliesDraw: 0, fork: 0, hint: 0, hcB: 0, hcW: 0, komi: 0, match: 0, decisive: 0 };
+const seen = { ruleOn: 0, ruleOff: 0, n3: 0, n4: 0, repDraw: 0, maxPliesDraw: 0, fork: 0, hint: 0, hcB: 0, hcW: 0, komi: 0, match: 0, decisive: 0, predDraw: 0 };
 lines.forEach((line, i) => {
   const h = A.headerOf(line, i), g = A.parseGame(line), s = A.summarize(line, h);
   const re = /RE\[([^\]]*)\]/.exec(line)[1];
@@ -74,6 +74,11 @@ lines.forEach((line, i) => {
   } else { seen.ruleOff++; assert.notStrictEqual(h.drawReason, "repetition"); }
   if (h.drawReason === "maxPlies") seen.maxPliesDraw++;
   if (h.gtype === "fork") seen.fork++;
+  // I/O v4 comments: win / loss count a draw as 1/2, the third number is the draw probability
+  for (const mv of g.moves) if (mv.ev && !mv.ev.onlyResult && mv.ev.noRes > 0) {
+    seen.predDraw++;
+    assert(Math.abs(mv.ev.pWin + mv.ev.pLoss + mv.ev.noRes - 1) < 0.021, "pure win + draw + pure loss = 1");
+  }
   if (h.wb < h.ww) seen.hcB++;
   if (h.ww < h.wb) seen.hcW++;
   if (h.komi !== -0.5) seen.komi++;

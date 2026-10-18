@@ -17,6 +17,7 @@
     --w-acc: #3d9be0;
     --w-pawn: #fbfaf6;
     --margin: #2a8c80;
+    --draw: #b9b3a4;
     --m-new: #2a8c80;
     --m-old: #8a63d2;
     --neutral: #6b7f8e;
@@ -114,6 +115,10 @@
   .wbar { display: flex; height: 8px; gap: 2px; margin: 5px 0 3px; border-radius: 4px; overflow: hidden; }
   .wbar .w { background: var(--w-acc); border-radius: 4px 0 0 4px; transition: flex-basis .15s; }
   .wbar .b { background: var(--b-pawn); border-radius: 0 4px 4px 0; flex: 1; }
+  .wbar { position: relative; overflow: visible; }
+  .wbar .d { background: var(--draw); transition: flex-basis .15s; }
+  .wbar .b { transition: flex-basis .15s; }
+  .wbar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; transition: left .15s; }
   .delta { font-weight: 600; }
 
   .controls { display: flex; gap: 6px; align-items: center; }

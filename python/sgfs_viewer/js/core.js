@@ -5,7 +5,7 @@
 // SGF coords: x = letter - 'a', y = letter - 'a'. Notation matches Location::toString:
 // pawn "e8", walls "e2h"/"e2v" with col = x/2, row = y/2 + 1.
 // Move comments (sgf.cpp) are the value targets of the search at the position BEFORE that
-// move, from White's perspective: "win loss noResult score v=.. [rv=..] weight=.. [result=..] [lead=..]".
+// move, from White's perspective: "win loss noResult score v=.. [rv=..] weight=.. [result=..] [lead=..]" (win and loss count a draw as ½; noResult = draw prob.).
 // score is the search's utility score u (with the time bonus: not comparable across nets trained with different
 // lambdas) and is never displayed when lead is present; lead (scoreLead) is the predicted tempo lead s. ev.wMargin
 // is the margin shown and used as a prediction: lead when present, else score (old files: ev.hasLead is false and the
@@ -129,6 +129,9 @@ function parseEval(c) {
   if (ev.rv !== undefined) ev.rv = +ev.rv;
   if (ev.weight !== undefined) ev.weight = +ev.weight;
   if (ev.lead !== undefined) ev.lead = +ev.lead;
+  // the comment's win / loss count a draw as ½ each (sgf.cpp); noRes is the draw probability (0 in files from before I/O v4)
+  if (!isFinite(ev.noRes)) ev.noRes = 0;
+  ev.pWin = Math.max(0, ev.wWin - ev.noRes / 2); ev.pLoss = Math.max(0, ev.wLoss - ev.noRes / 2);
   ev.hasLead = ev.lead !== undefined;
   ev.wMargin = ev.hasLead ? ev.lead : ev.wScore;
   return ev;

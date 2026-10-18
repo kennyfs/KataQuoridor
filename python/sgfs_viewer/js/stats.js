@@ -35,7 +35,7 @@ function summarize(line, h) {
       addWallToBlock(bl, k, mv.x, mv.y);
       for (const p of ["B", "W"]) if (wallAffects(dG[p], k, mv.x, mv.y)) dG[p] = goalDist(bl, p);
     }
-    if (hasEv(mv)) s.evs.push({ i, pla: mv.pla, p: mv.ev.wWin, score: mv.ev.wMargin, lead: mv.ev.hasLead, v: mv.ev.v, w: mv.ev.weight });
+    if (hasEv(mv)) s.evs.push({ i, pla: mv.pla, p: mv.ev.wWin, draw: mv.ev.noRes, score: mv.ev.wMargin, lead: mv.ev.hasLead, v: mv.ev.v, w: mv.ev.weight });
     race();
   });
   if (!isFinite(s.raceDeficit)) s.raceDeficit = null;
@@ -55,15 +55,17 @@ function summarize(line, h) {
   s.hasLead = has && E.every(e => e.lead);   // margin values below are the predicted lead (else the old score)
   s.minWinnerScore = hasW ? Math.min(...E.map(sw)) : null;
   const yW = s.y === null ? null : 1 - s.y;   // White's score
-  let lastBelow = -1, lead = 0, vol = 0, swing = 0, brier = 0, prevSide = 0;
+  let lastBelow = -1, lastDrawBelow = -1, lead = 0, vol = 0, swing = 0, brier = 0, prevSide = 0;
   E.forEach((e, k) => {
     if (hasW && pw(e) < 0.9) lastBelow = e.i;
+    if (isDraw(s.winner) && e.draw < 0.9) lastDrawBelow = e.i;
     const side = e.p > 0.5 ? 1 : e.p < 0.5 ? -1 : 0;
     if (side && prevSide && side !== prevSide) lead++;
     if (side) prevSide = side;
     if (k) { const d = Math.abs(e.p - E[k - 1].p); vol += d; swing = Math.max(swing, d); }
     if (yW !== null) brier += (e.p - yW) ** 2;
   });
+  s.drawSettledLeft = isDraw(s.winner) && has ? s.n - (lastDrawBelow + 1) : null;   // draws: moves left once the predicted draw% stayed ≥ 90%
   s.decidedLeft = hasW ? s.n - (lastBelow + 1) : null;  // moves remaining once decided
   s.leadChanges = has ? lead : null;
   s.volatility = has ? vol : null;
@@ -227,7 +229,7 @@ function renderStats() {
 
   // calibration: a draw's outcome is ½ for White, as in the move comments
   const calib = Array.from({ length: 10 }, () => ({ n: 0, sumP: 0, wins: 0 }));
-  let brier = 0, nPos = 0, fullV = 0, sumW = 0, nW = 0;
+  let brier = 0, nPos = 0, fullV = 0, sumW = 0, nW = 0, sumDraw = 0;
   const fullVs = new Map();
   for (const s of S) if (s.maxV) fullVs.set(s.maxV, (fullVs.get(s.maxV) || 0) + 1);
   for (const s of S) {
@@ -235,7 +237,7 @@ function renderStats() {
     for (const e of s.evs) {
       const y = 1 - s.y, b = Math.min(9, Math.floor(e.p * 10));
       calib[b].n++; calib[b].sumP += e.p; calib[b].wins += y;
-      brier += (e.p - y) ** 2; nPos++;
+      brier += (e.p - y) ** 2; nPos++; sumDraw += e.draw;
       if (e.v === s.maxV) fullV++;
       if (e.w !== undefined) { sumW += e.w; nW++; }
     }
@@ -249,6 +251,7 @@ function renderStats() {
     ["Games", S.length, `${R.b} B · ${R.d} D · ${R.w} W`],
     ["Black (1st) score", pctOr(R.score), `draw = ½ · B ${pctOr(R.b / R.n, 0)} · D ${pctOr(R.drawRate, 0)} · W ${pctOr(R.w / R.n, 0)}`],
     ["Draws", pctOr(R.drawRate), R.d ? reasonText(reasons) : "none"],
+    ["Predicted draw", nPos ? pct(sumDraw / nPos) : "—", "mean noResult of the searches (0 in files from before I/O v4)"],
     ["Game length", f1(dAll.mean), `± ${f1(dAll.sd)} · median ${f1(dAll.median)}`],
     ["Length range", `${dAll.min}–${dAll.max}`, `p10 ${f1(dAll.p10)} · p90 ${f1(dAll.p90)}`],
     ["Searched moves", f1(dS.mean), `± ${f1(dS.sd)} · median ${f1(dS.median)}`],
@@ -437,6 +440,19 @@ function renderStats() {
     const svg = barChart(c, [{ name: "Actual White score", color: C_W, values: actual }], { labels, yMax: 1, yFmt: v => Math.round(v * 100) + "%", tickEvery: 1,
       tickLabels: labels.map(l => l.split("–")[0]),
       tipFor: k => `<b>predicted ${labels[k]}</b><br>${calib[k].n} positions<br>mean predicted ${calib[k].n ? pct(calib[k].sumP / calib[k].n) : "—"}<br>${sw(C_W)}actual score ${calib[k].n ? pct(actual[k]) : "—"}` });
+    const L = 40, band = (560 - 40 - 10) / 10, T = 16, ph = 170 - 16 - 26;
+    el("line", { x1: L, y1: T + ph, x2: L + 10 * band, y2: T, stroke: "#3e4c59", "stroke-dasharray": "4 3", "stroke-width": 1.2, "pointer-events": "none" }, svg);
+  }
+
+  // 12b. draw calibration
+  if (nPos && sumDraw > 0) {
+    const c = card("Draw calibration", "Predicted draw% (noResult) at every searched position, binned, vs the share of those positions whose game was drawn. Dashed = perfect.");
+    const dc = Array.from({ length: 10 }, () => ({ n: 0, draws: 0, sumD: 0 }));
+    for (const s of S) if (s.y !== null) for (const e of s.evs) { const b = dc[Math.min(9, Math.floor(e.draw * 10))]; b.n++; b.sumD += e.draw; b.draws += isDraw(s.winner) ? 1 : 0; }
+    const labels = dc.map((_, k) => `${k * 10}–${k * 10 + 10}%`);
+    const svg = barChart(c, [{ name: "Drawn", color: DRAW_COLOR, values: dc.map(b => b.n ? b.draws / b.n : 0) }], { labels, yMax: 1, yFmt: v => Math.round(v * 100) + "%", tickEvery: 1,
+      tickLabels: labels.map(l => l.split("–")[0]),
+      tipFor: k => `<b>predicted draw ${labels[k]}</b><br>${dc[k].n} positions<br>mean predicted ${dc[k].n ? pct(dc[k].sumD / dc[k].n) : "—"}<br>drawn ${dc[k].n ? pct(dc[k].draws / dc[k].n) : "—"}` });
     const L = 40, band = (560 - 40 - 10) / 10, T = 16, ph = 170 - 16 - 26;
     el("line", { x1: L, y1: T + ph, x2: L + 10 * band, y2: T, stroke: "#3e4c59", "stroke-dasharray": "4 3", "stroke-width": 1.2, "pointer-events": "none" }, svg);
   }

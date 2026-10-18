@@ -63,7 +63,7 @@
       <div class="ev-tile" id="evWin">
         <div class="k">White win% · search here</div>
         <div class="v" id="evWinV">—</div>
-        <div class="wbar"><div class="w" id="evWinBar"></div><div class="b"></div></div>
+        <div class="wbar"><div class="w" id="evWinBar"></div><div class="d" id="evDrawBar"></div><div class="b" id="evLossBar"></div><i class="tick" id="evTick"></i></div>
         <div class="s" id="evWinS"></div>
       </div>
       <div class="ev-tile" id="evVis">
@@ -99,7 +99,7 @@
     <h2>Game</h2>
     <dl id="info"></dl>
     <h2 class="trace-h">Search trace (White's view)</h2>
-    <div class="legend"><span style="--c:var(--w-acc)">White win%</span><span style="--c:var(--margin)" id="marLegend">Predicted lead</span></div>
+    <div class="legend"><span style="--c:var(--w-acc)" id="winLegend">White win%</span><span style="--c:var(--draw)" id="drawLegend">draw%</span><span style="--c:var(--margin)" id="marLegend">Predicted lead</span></div>
     <svg id="chart"></svg>
     <div id="moveList"></div>
   </section>

@@ -112,7 +112,7 @@ function renderEvalStrip() {
     tiles.forEach(t => $(t).classList.add("dim"));
     const why = ply >= cur.moves.length ? `Game over · ${resultLabel(games[curGameIdx])}` : ply < cur.startTurnIdx ? (isHint() ? "Hint position move, no search" : "Random init move, no search") : "No search data";
     $("evWinV").textContent = "—"; $("evMarV").textContent = "—"; $("evVisV").textContent = "—";
-    $("evWinBar").style.flexBasis = "50%";
+    $("evWinBar").style.flexBasis = "50%"; $("evDrawBar").style.flexBasis = "0%"; $("evLossBar").style.flexBasis = "50%"; $("evTick").style.left = "50%";
     $("evWinS").textContent = why; $("evMarS").textContent = ""; $("evVisS").textContent = "";
     return;
   }
@@ -121,8 +121,13 @@ function renderEvalStrip() {
   const dW = pev ? ev.wWin - pev.wWin : null, dS = pev ? ev.wMargin - pev.wMargin : null;
   const dSpan = (d, fmt) => d === null ? "" : ` <span class="delta">${d >= 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}</span> vs prev`;
   $("evWinV").textContent = pct(ev.wWin);
-  $("evWinBar").style.flexBasis = (100 * ev.wWin).toFixed(1) + "%";
-  $("evWinS").innerHTML = `B ${pct(ev.wLoss)}` + (ev.noRes > 0 ? ` · draw ${pct(ev.noRes)}` : "") + " ·" + dSpan(dW, x => (100 * x).toFixed(1) + "pt");
+  // bar: White win | draw | Black win; the tick is White's score (a draw as ½), the big number
+  $("evWinBar").style.flexBasis = (100 * ev.pWin).toFixed(1) + "%";
+  $("evDrawBar").style.flexBasis = (100 * ev.noRes).toFixed(1) + "%";
+  $("evLossBar").style.flexBasis = (100 * ev.pLoss).toFixed(1) + "%";
+  $("evTick").style.left = (100 * ev.wWin).toFixed(1) + "%";
+  $("evWin").querySelector(".k").textContent = ev.noRes > 0 ? "White score · search here" : "White win% · search here";
+  $("evWinS").innerHTML = `W ${pct(ev.pWin, 0)} · draw ${pct(ev.noRes, 0)} · B ${pct(ev.pLoss, 0)} ·` + dSpan(dW, x => (100 * x).toFixed(1) + "pt");
   $("evMar").querySelector(".k").textContent = ev.hasLead ? "Predicted lead (W)" : "Margin (W) · no lead in file";
   $("evMarV").textContent = fmtScore(ev.wMargin);
   $("evMarS").innerHTML = (ev.wMargin >= 0 ? "White ahead" : "Black ahead") + (dS === null ? "" : " ·" + dSpan(dS, x => x.toFixed(1)));
@@ -156,7 +161,7 @@ function renderMoveList() {
     if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">${isHint() ? "Hint position" : "Random init"} · ${cur.startTurnIdx} moves</div>`);
     if (i === cur.startTurnIdx && i > 0) parts.push(`<div class="sep">Self-play search${isHint() ? " · the first one searches the hint move (4× visits)" : ""}</div>`);
     const e = mv.ev;
-    const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}% · ${e.hasLead ? "lead" : "margin"} ${fmtScore(e.wMargin)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
+    const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}%${e.noRes > 0.05 ? ` · D ${(e.noRes * 100).toFixed(0)}%` : ""} · ${e.hasLead ? "lead" : "margin"} ${fmtScore(e.wMargin)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
     parts.push(`<div class="m${i < cur.startTurnIdx ? " init" : ""}" data-i="${i + 1}"><span class="n">${i + 1}</span><span class="who ${mv.pla}"></span><span class="mv">${notation(mv)}</span><span class="ev">${ev}</span></div>`);
   });
   $("moveList").innerHTML = parts.join("");
@@ -174,8 +179,11 @@ function chartGeom() {
 }
 
 const curHasLead = () => cur.moves.some(mv => hasEv(mv) && mv.ev.hasLead);
+const curHasDraw = () => cur.moves.some(mv => hasEv(mv) && mv.ev.noRes > 0);
 
 function renderChart() {
+  $("drawLegend").hidden = !curHasDraw();
+  $("winLegend").textContent = curHasDraw() ? "White score (draw = ½)" : "White win%";
   $("marLegend").textContent = curHasLead() ? "Predicted lead" : "Margin (no lead in file)";
   const { svg, w, n, X, top2 } = chartGeom();
   const H = top2 + CH.h2 + CH.b;
@@ -210,14 +218,15 @@ function renderChart() {
   txt(svg, CH.l - 5, Ym(M) + 8, "+" + M, { "text-anchor": "end" });
   txt(svg, CH.l - 5, Ym(0) + 4, "0", { "text-anchor": "end" });
   txt(svg, CH.l - 5, Ym(-M), "−" + M, { "text-anchor": "end" });
-  txt(svg, w - CH.r, CH.t + 10, "win%", { "text-anchor": "end", fill: "#6b7885" });
+  txt(svg, w - CH.r, CH.t + 10, curHasDraw() ? "score" : "win%", { "text-anchor": "end", fill: "#6b7885" });
   txt(svg, w - CH.r, top2 + 10, curHasLead() ? "lead" : "margin", { "text-anchor": "end", fill: "#6b7885" });
 
   if (pts.length) {
     const line = (Y, key) => pts.map((p, k) => (k ? "L" : "M") + X(p.i).toFixed(1) + " " + Y(p.ev[key]).toFixed(1)).join("");
-    const dW = line(Yw, "wWin"), dM = line(Ym, "wMargin");
+    const dW = line(Yw, "wWin"), dM = line(Ym, "wMargin"), dD = line(Yw, "noRes");
     const x0 = X(pts[0].i), x1 = X(pts[pts.length - 1].i);
     el("path", { d: dW + `L${x1} ${Yw(0.5)}L${x0} ${Yw(0.5)}Z`, fill: "var(--w-acc)", opacity: 0.1 }, svg);
+    if (curHasDraw()) el("path", { d: dD, fill: "none", stroke: "var(--draw)", "stroke-width": 1.5, "stroke-dasharray": "4 3" }, svg);
     el("path", { d: dW, fill: "none", stroke: "var(--w-acc)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
     el("path", { d: dM + `L${x1} ${Ym(0)}L${x0} ${Ym(0)}Z`, fill: "var(--margin)", opacity: 0.1 }, svg);
     el("path", { d: dM, fill: "none", stroke: "var(--margin)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
@@ -285,6 +294,7 @@ const SORTS = [
   { key: "comeback", label: "Comeback (win%)", desc: "Winner's lowest White/Black win% during search. Low = the winner was nearly lost. Draws have no winner and are listed last.", get: s => s.minWinnerP, fmt: v => pct(v, 0), dir: "asc" },
   { key: "scoreComeback", label: "Comeback (lead)", desc: "Winner's worst predicted lead during search. Negative = the winner was predicted to trail by that much. Draws are listed last.", get: s => leadOnly(s) ? s.minWinnerScore : null, fmt: fmtScore, dir: "asc" },
   { key: "raceDeficit", label: "Race comeback (path)", desc: "Winner's worst path-race deficit: max over positions of (winner's shortest path − loser's). High = the winner was far behind in the race. Draws are listed last.", get: s => s.raceDeficit, fmt: v => (v > 0 ? "+" : "") + v, dir: "desc" },
+  { key: "drawSettledLeft", label: "Draw foreseen", desc: "Draws: moves left after the predicted draw% last dropped below 90%. Decided games are listed last.", get: s => s.drawSettledLeft, fmt: v => v, dir: "asc" },
   { key: "leadChanges", label: "Lead changes", desc: "Times the win% crossed 50% during search.", get: s => s.leadChanges, fmt: v => v, dir: "desc" },
   { key: "volatility", label: "Volatility", desc: "Total win% movement: sum of |Δ win%| between consecutive searches.", get: s => s.volatility, fmt: v => (100 * v).toFixed(0), dir: "desc" },
   { key: "maxSwing", label: "Biggest swing", desc: "Largest single-move |Δ win%|: a blunder or a surprise.", get: s => s.maxSwing, fmt: v => pct(v, 0), dir: "desc" },
