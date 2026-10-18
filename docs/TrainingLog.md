@@ -153,9 +153,12 @@ removed before the loop switched (code in git history, `cb0b5ed7`). The loop's s
 - **Search-parameter A/B** (`~/arena/kq_search1`, s33.97M vs itself, v512, 300 games each): cpuct 0.8 +25 [−3, 53],
   cpuct 1.4 −23, fpuReductionMax 0.4 −18 / 0.1 +5, dynamicScoreUtilityFactor 0.5 −12, policyOptimism 0.5 +13,
   subtreeValueBiasFactor 0 +5. Nothing significant; nothing changed (cpuct 0.8 is worth a longer test).
-- **Race solver CPU:** every wall placed in the tree was a new configuration and a ~1 ms solve (1024-entry cache), so
-  match used all cores. `quoridorRaceSolverRootWallsOnly` (default on) solves only nodes with the root's walls.
-  460 games at v256: CPU 800 s (old) vs 478 s (root walls only) vs 482 s (solver off).
+- **Race solver CPU:** match used all cores because one-sided proofs are on by default there: every wall the player
+  with walls places in the tree is a new configuration and a ~1 ms solve (1024-entry cache). Exact races (both out of
+  walls) are cheap and are the solver's main use (leaves after the last walls placed in the tree), so only one-sided
+  proofs are now limited to the root's walls (`quoridorRaceSolverOneSidedRootWallsOnly`, default on). CPU for 460
+  games at v256: one-sided everywhere 827 s, exact everywhere + one-sided at the root 510 s, exact only 457 s (the
+  self-play setting), solver off 482 s.
 
 ## Lessons
 
