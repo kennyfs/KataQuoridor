@@ -111,9 +111,30 @@ draw probability. Not run: a seed-noise arm. Decision: v4 = the v3 inputs + the 
 removed before the loop switched (code in git history, `cb0b5ed7`). The loop's switch to v4 converts old data by stamp
 (`quoridorIOVersion`) and draw targets only.
 
+### 5.3 Overnight run, lr ×4, switch to v4 (2026-10-18)
+
+- One night (02:36-09:52): 11 nets, run4-s21083904 → s28602368, +1.28M rows, 1.05M of them from Colab workers (2 L4, some
+  T4); window `EXPAND_WINDOW_PER_ROW` 0.6 → 0.3 (3.0M → 1.9M rows), hints on (3% of the games).
+- Standard-opening ladder `~/arena/kq_std2` (v256, race solver off, 4298 games, s20387072 = 0): s21.8M +20, s23.4M +81,
+  s24.7M +106, s26.2M +139, s27.9M +163, s28.6M +157 (CI ±25). The random-opening ladder would not have shown this
+  (§5, draw convergence).
+- Blind-spot suites (`~/arena/blindspot2`): each suite favours its labelling net (v1 labelled by s20.4M, v2 by s28.6M),
+  so they find weak spots rather than rank nets: value-swing and contested positions ~60-79% agreement in both, late
+  and random positions ≥ 92%. Hints re-mined with s28.6M: 27 of the 55 old hints expired, 34 new (62 in use).
+- lr test (`~/q1_run/run4_lr4`): from run4-s27906816's export checkpoint (no optimizer state) on the shuffle that
+  trained run4-s28602368 (×2, 695552 samples), at ×4: 488K samples (equal time) and 766K (≈ equal samples). Held-out
+  (the shuffle's md5 validation files, SWA weights): KL 0.4816 (×2) vs 0.4789 / 0.4766 (×4), value loss 0.5668 vs
+  0.5714 / 0.5678; standard ladder vs s28.6M: −7 / +16 [−3, 35]. → the loop runs **×4** (6 samples per new row as
+  before) and continues from the ×4 766K checkpoint (`run4lr4-s28673280`, its train bucket set to the loop's).
+- Switched to **I/O v4** (draws as noResult) per [QuoridorIOv4.md](QuoridorIOv4.md) §10: checkpoint migrated (v3 backups in
+  `train/run4.v3`, `checkpoint.ckpt.s28602368_v3/_v4`), all 9.86M self-play rows converted in place (hard-link backup
+  `selfplay.v3`; 6.6% draw rows), `reduceVisitsDrawThreshold = 0.9`, Colab binary rebuilt.
+
 ## Lessons
 
 - Long games were mostly game-theoretic draws, not bugs; give the net the rules and inputs to see them.
 - Check the lr scale against the optimizer; KataGo's defaults assume a mature net (SGD) or need tuning (Aurora).
 - Change one thing at a time when comparing (optimizer, lr, size, data) and compare at equal data where possible.
 - Launch scripts must use the venv; check that only one loop runs.
+- Measure the standard game with standard openings: a random-opening ladder can hide large progress.
+- On the same data and start, compare held-out (SWA) losses first; ladders are noisy and slow.
