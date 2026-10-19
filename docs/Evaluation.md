@@ -36,6 +36,7 @@ python -m pytest -o addopts="" quoridor_arena/tests
 | `elo.py` | Bradley-Terry fit, bootstrap CIs, `report.md`. |
 | `roster_default.json` | The default ladder. |
 | `kq_ladder.py` | KataQuoridor-only ladder in one `katago match` process, sparse pairs ([below](#kataquoridor-only-ladder-kq_ladderpy)). |
+| `ka_quoridor_qtp.py`, `ka_quoridor_check.py` | QTP adapter for Ka_Quoridor, an outside engine ([below](#ka_quoridor-an-outside-engine)), and its notation check. |
 
 ### Arbiter
 
@@ -290,6 +291,34 @@ schedule, and the arena's per-pair table. `elo_vs_samples.png`: Elo vs samples p
 `extra_pairs`, `openings`, `rules`, `search` (match search keys), `match` (`numGameThreads`, `nnMaxBatchSize`, NN cache…).
 Resume: `run` skips game ids already in `DIR/match/results.jsonl`; `adapt` stores its additions in
 `DIR/extra_games.json`.
+
+## Ka_Quoridor, an outside engine
+
+[Ka_Quoridor](https://github.com/sugiyama2718/Quoridor) (Kanta Sugiyama) is an AlphaZero / KataGo-style engine:
+a TensorFlow 1 graph (the published net `epoch4100`: 128 filters, 18 layers with self-attention) and a Python
+MCTS. `ka_quoridor_qtp.py` serves it over QTP so it can be a roster engine (standard rules only).
+
+Setup (once):
+
+- A Python 3.11 venv with its dependencies: `uv venv --python 3.11 ~/arena/ka_venv`, then
+  `uv pip install tensorflow "numpy<2" pandas matplotlib tqdm scikit-learn h5py numba bitarray graphviz cython setuptools`.
+- A copy of its tracked files with the native parts rebuilt (the shipped `State_util.so` is older than its source):
+  `make` and `python setup.py build_ext --inplace` in the copy (`~/arena/ka_quoridor`).
+- The nets from its Google Drive folder (`application_data/parameter/epoch*.ckpt*`); `--data-dir` points at that
+  `application_data`, and `--level -1` (default) loads the newest epoch.
+- Without CUDA libraries in the venv, run it on the CPU (`CUDA_VISIBLE_DEVICES=-1`): 500 nodes take 0.4-1.6 s.
+
+Roster entry:
+
+```json
+{"name": "ka-e4100-n1000", "command": "env", "args": ["CUDA_VISIBLE_DEVICES=-1", "{ka_python}", "{repo}/python/quoridor_arena/ka_quoridor_qtp.py",
+  "--ka-dir", "{ka_dir}", "--data-dir", "{ka_data}", "--nodes", "1000", "--seed", "{seed}"], "seed": 11}
+```
+
+Its own (Glendenning) notation is KataQuoridor's: `ka_quoridor_check.py` plays random games and compares the
+full legal-move sets of both engines at every position (20 games, 4407 positions, no difference). The adapter
+moves fd 1 to stderr (Ka_Quoridor's C code prints to stdout) and plays with its evaluation temperature
+(`--tau 0.32`).
 
 ## Notes
 

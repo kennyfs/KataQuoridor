@@ -1918,6 +1918,22 @@ tf3_b5c256_quoridor = {
     "pos_len": 9,
 }
 
+# A larger run4-style net (2026-10-19): 8 nested-bottleneck blocks of 3 transformer layers (24 layers), 320 trunk
+# channels, 5 heads of dim 32 on the 160-channel bottleneck, FFN 1.5x the trunk. About 2.5x tf3_b5c256's compute.
+tf3_b8c320_quoridor = dict(
+    tf3_b5c256_quoridor,
+    trunk_num_channels=320,
+    mid_num_channels=160,
+    transformer_ffn_channels=480,
+    transformer_heads=5,
+    transformer_kv_heads=5,
+    block_kind=[[f"block{i}", "bottlenest3transformerropesg"] for i in range(1, 9)],
+    p1_num_channels=64,
+    g1_num_channels=64,
+    v1_num_channels=128,
+    v2_size=128,
+)
+
 b2c64_quoridor = {
     "game": "quoridor",
     "version": 17,
@@ -1952,6 +1968,7 @@ b2c64_quoridor_v3 = dict(b2c64_quoridor, quoridor_io_version=3)
 # trained; a v3 checkpoint becomes v4 with quoridor_upgrade_v3_to_v4.py.
 tf2_b4c192_quoridor_v4 = dict(tf2_b4c192_quoridor, quoridor_io_version=4, num_value_outputs=3)
 tf3_b5c256_quoridor_v4 = dict(tf3_b5c256_quoridor, quoridor_io_version=4, num_value_outputs=3)
+tf3_b8c320_quoridor_v4 = dict(tf3_b8c320_quoridor, quoridor_io_version=4, num_value_outputs=3)
 b2c64_quoridor_v4 = dict(b2c64_quoridor, quoridor_io_version=4, num_value_outputs=3)
 
 
@@ -1959,6 +1976,7 @@ base_config_of_name = {
     # QUORIDOR MODELS =============================================================
     "tf2_b4c192_quoridor_v4": tf2_b4c192_quoridor_v4,
     "tf3_b5c256_quoridor_v4": tf3_b5c256_quoridor_v4,
+    "tf3_b8c320_quoridor_v4": tf3_b8c320_quoridor_v4,
     "b2c64_quoridor_v4": b2c64_quoridor_v4,
     # I/O v3 (inference and export of existing nets, and the source of quoridor_upgrade_v3_to_v4.py).
     "tf2_b4c192_quoridor_v3": tf2_b4c192_quoridor_v3,
