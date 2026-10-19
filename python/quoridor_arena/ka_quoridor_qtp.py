@@ -55,8 +55,10 @@ class KaEngine:
     def clear_board(self):
         if self.AIs is None and not self.args.no_net:
             self._prepare()
+        # Ka_Quoridor's per-game reset (tree, estimated V, end-game and opening flags); without it a reused process
+        # keeps e.g. end_game ("pawn moves are enough") from the last game and stops placing walls.
         for ai in self.AIs or []:
-            ai.prev_action = None
+            ai.init_prev()
         self.games += 1
         self.state = State_mod.State()
         State_mod.State_init(self.state)
