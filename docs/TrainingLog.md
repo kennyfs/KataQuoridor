@@ -160,6 +160,19 @@ removed before the loop switched (code in git history, `cb0b5ed7`). The loop's s
   games at v256: one-sided everywhere 827 s, exact everywhere + one-sided at the root 510 s, exact only 457 s (the
   self-play setting), solver off 482 s.
 
+### 5.5 s33.97M → s53.96M and an outside opponent (2026-10-19)
+
+- The loop ran to run4-s53960960 (gatekeeper at `GATEKEEPER_WIN_PROP` 0.45 accepted every net). Standard self-play:
+  Black wins 97-98% of the games from s34M on; the first eval gives White 10% (s32.4M) → 2.3% (s52.9M).
+- **Empty-board ladder** (`~/arena/kq_empty4`, v256, no opening suite; match's early temperature gives 55 distinct
+  8-ply lines, the top one 37%): vs s33.97M, s38.8M +58, s44.1M +92, s45.8M +115, s51.0M +136, s52.9M +139,
+  s53.96M +120 (CI ±20); s27.9M −124. The old standard-opening suite (s18.7M-s20.4M lines) was dropped as stale.
+- **Random 4-ply openings** (`~/arena/kq_rand4`): flat from s36.4M (+26) to s53.96M (+31); s27.9M +4. Direct:
+  s53.96M scores 54% vs s27.9M, 50% vs s40.9M. The gain is on the self-play main line only.
+- **Ka_Quoridor** (an outside AlphaZero/KataGo-style engine, net epoch4100, `ka_quoridor_qtp.py`, Evaluation.md),
+  1000 nodes on the CPU, 4-ply random openings, 80 games: s27.9M v256 74%, s40.9M v256 76%, s53.96M v256 68%,
+  s53.96M v1000 76% (v64 60%, v16 57%, 40 games). No progress since s28M against an engine the nets never saw.
+
 ## Lessons
 
 - Long games were mostly game-theoretic draws, not bugs; give the net the rules and inputs to see them.
