@@ -111,10 +111,10 @@ function visitsOf(st) {
   return PRESETS[st.preset] || PRESETS.normal;
 }
 
-function startGame(side, visits) {
+function startGame(side, visits, repetition = 0) {
   viewPly = null; selected = false; dismissedOver = null; pvHover = null;
   return act(async () => {
-    let s = await api("api/new", { human: side, visits });
+    let s = await api("api/new", { human: side, visits, repetition });
     if (side === "analysis") s = await api("api/analyze", { on: true, max_visits: maxVisitsSetting() });
     S = null; lastJson = "";
     setState(s);
@@ -198,11 +198,22 @@ function playerLabel(c) {
 }
 function leadText(e) {
   const l = e.black_lead, a = Math.abs(l);
+  if (e.source === "final" && drawOf(e) > 0.5) return "Draw";
   if (e.source === "final") return `${NAME[l > 0 ? "b" : "w"]} won by ${a.toFixed(1)}`;
   if (a < 0.05) return "Even race";
   return `${NAME[l > 0 ? "b" : "w"]} leads by ${a.toFixed(1)}`;
 }
 const pct = x => (100 * x).toFixed(1) + "%";
+// the draw probability (Quoridor I/O v4 nets); older states have no "draw" key
+const drawOf = e => e ? Math.max(0, e.draw != null ? e.draw : 1 - e.black_win - e.white_win) : 0;
+const DRAW_REASON = { maxPlies: "ply limit", repetition: "repetition" };
+// "Black wins (B+2.5)" or "Draw (ply limit 300)"
+function resultText() {
+  if (S.winner !== "d") return `${NAME[S.winner]} wins (${S.winner.toUpperCase()}+${S.margin})`;
+  const r = S.draw_reason;
+  return "Draw" + (r === "maxPlies" ? ` (ply limit ${S.settings.max_plies})` :
+    r === "repetition" ? ` (position repeated ${S.settings.repetition} times)` : "");
+}
 
 // ---- rendering ---------------------------------------------------------------------------------------------------
 function render() {
@@ -303,7 +314,7 @@ function renderStatus() {
   else if (!S.started) html = "Choose <b>New game</b> to start.";
   else if (viewPly !== null) html = `Reviewing the position after move ${viewPly} of ${S.moves.length} (read-only). <a href="#" id="stBack">Back to current</a>`;
   else if (isAnalysis()) html = analysisStatus();
-  else if (S.winner) html = `<b>Game over:</b> ${NAME[S.winner]} wins (${S.winner.toUpperCase()}+${S.margin}).`;
+  else if (S.winner) html = `<b>Game over:</b> ${resultText()}.`;
   else if (S.busy === "hint") html = `<span class="spin"></span>Searching for a hint (${S.settings.hint_visits} visits)…`;
   else if (S.thinking) html = `<span class="spin"></span>KataQuoridor is thinking… (${S.settings.visits} visit${S.settings.visits === 1 ? "" : "s"})` + (S.settings.human ? "" : " · AI vs AI demo");
   else if (S.ai_error) html = `<span class="err">${escapeHtml(S.ai_error)}</span>`;
@@ -319,7 +330,7 @@ function renderStatus() {
 }
 
 function analysisStatus() {
-  if (S.winner) return `<b>Game over:</b> ${NAME[S.winner]} wins (${S.winner.toUpperCase()}+${S.margin}). ← to step back.`;
+  if (S.winner) return `<b>Game over:</b> ${resultText()}. ← to step back.`;
   if (S.busy === "hint") return `<span class="spin"></span>Searching (${S.settings.hint_visits} visits)…`;
   if (S.thinking) return `<span class="spin"></span>AI (${NAME[S.to_move]}) is choosing its move… (${S.settings.visits} visit${S.settings.visits === 1 ? "" : "s"})`;
   if (pending || S.busy) return `<span class="spin"></span>Working…`;
@@ -339,13 +350,16 @@ function renderEval(ply) {
   const h = S.settings.human;
   const you = c => (h === c ? " (you)" : "");
   if (!e) {
-    $("evBarB").style.width = "50%";
-    $("evB").textContent = "Black —"; $("evW").textContent = "White —";
+    $("evBarB").style.width = "50%"; $("evBarD").style.width = "0%";
+    $("evB").textContent = "Black —"; $("evW").textContent = "White —"; $("evD").textContent = "";
     $("evLead").textContent = S.thinking ? "Evaluating…" : "No evaluation";
     $("evSrc").textContent = "";
   } else {
+    const dr = drawOf(e);
     $("evBarB").style.width = (100 * e.black_win).toFixed(1) + "%";
+    $("evBarD").style.width = (100 * dr).toFixed(1) + "%";
     $("evB").textContent = `Black${you("b")} ${pct(e.black_win)}`;
+    $("evD").textContent = dr >= 0.0005 ? `Draw ${pct(dr)}` : "";
     $("evW").textContent = `White${you("w")} ${pct(e.white_win)}`;
     $("evLead").textContent = leadText(e);
     let src = e.source === "search" ? `Search · ${e.visits} visits` : e.source === "net" ? "Net estimate (no search)" : "Final result";
@@ -354,7 +368,8 @@ function renderEval(ply) {
   }
   const net = S.positions[ply].net;
   $("evNet").textContent = net && e && e.source !== "net"
-    ? `Net alone: Black ${pct(net.black_win)} · ${leadText(net)}` : "";
+    ? `Net alone: Black ${pct(net.black_win)}` + (drawOf(net) >= 0.0005 ? ` · draw ${pct(drawOf(net))}` : "") +
+      ` · ${leadText(net)}` : "";
   renderChart(ply);
 }
 
@@ -377,6 +392,11 @@ function renderChart(ply) {
     mk("path", { d: d + `L${pts[pts.length - 1][0]} ${Y(0.5)}L${pts[0][0]} ${Y(0.5)}Z`, fill: "var(--b-pawn)", opacity: 0.08 });
     mk("path", { d, fill: "none", stroke: "var(--ink)", "stroke-width": 1.8, "stroke-linejoin": "round" });
   }
+  const dpts = [];
+  S.positions.forEach((p, i) => { if (p.eval) dpts.push([X(i), Y(drawOf(p.eval))]); });
+  if (dpts.some(p => p[1] < Y(0.01)))
+    mk("path", { d: dpts.map((p, k) => (k ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(""),
+                 fill: "none", stroke: "var(--draw)", "stroke-width": 1.4, "stroke-dasharray": "4 3" });
   mk("line", { x1: X(ply), x2: X(ply), y1: T, y2: H - B, stroke: "var(--b-acc)", "stroke-width": 2 });
   const e = S.positions[ply].eval;
   if (e) mk("circle", { cx: X(ply), cy: Y(e.black_win), r: 3.5, fill: "var(--b-acc)", stroke: "#fff", "stroke-width": 1.5 });
@@ -400,7 +420,8 @@ function renderCands(c) {
   // root summary
   let root = "";
   if (r) {
-    root += `<div><b>${NAME[col]} ${pct1(r.winrate)}%</b> · lead ${signed(r.lead)} · utility ${signed(r.utility, 3)} · σ ${r.score_stdev == null ? "—" : r.score_stdev.toFixed(2)}</div>`;
+    root += `<div><b>${NAME[col]} ${pct1(r.winrate)}%</b>` + (r.draw >= 0.0005 ? ` · draw ${pct1(r.draw)}%` : "") +
+      ` · lead ${signed(r.lead)} · utility ${signed(r.utility, 3)} · σ ${r.score_stdev == null ? "—" : r.score_stdev.toFixed(2)}</div>`;
     if (r.raw_wr_error != null)
       root += `<div class="muted">net uncertainty: winrate ±${r.raw_wr_error.toFixed(3)} · score ±${(r.raw_score_error || 0).toFixed(2)}` +
         (r.raw_time_left != null ? ` · time left ${r.raw_time_left.toFixed(1)}` : "") + `</div>`;
@@ -463,7 +484,8 @@ function renderMoves(ply) {
     });
     $("moveList").innerHTML = rows.join("");
   }
-  $("moveCount").textContent = S.moves.length ? `${S.moves.length} played` + (S.redo.length ? ` · ${S.redo.length} undone` : "") : "";
+  $("moveCount").textContent = (S.moves.length ? `${S.moves.length} / ${S.settings.max_plies} played` + (S.redo.length ? ` · ${S.redo.length} undone` : "") : "") +
+    (S.settings.repetition ? ` · draw at ${S.settings.repetition}× repetition` : "");
   document.querySelectorAll("#moveList .m.cur").forEach(x => x.classList.remove("cur"));
   const row = document.querySelector(`#moveList .m[data-ply="${ply}"]`);
   if (row) {
@@ -482,9 +504,10 @@ function renderOverlay() {
   const show = !!S.winner && viewPly === null && dismissedOver !== key && !isAnalysis();
   $("overlay").hidden = !show;
   if (!show) return;
-  $("ovTitle").textContent = `${NAME[S.winner]} wins (${S.winner.toUpperCase()}+${S.margin})`;
+  $("ovTitle").textContent = resultText();
   const h = S.settings.human;
-  $("ovSub").textContent = !h ? "AI vs AI demo finished." : S.winner === h ? "Well played, you win!" : "KataQuoridor wins this one.";
+  $("ovSub").textContent = !h ? "AI vs AI demo finished." : S.winner === "d" ? "Nobody wins this one." :
+    S.winner === h ? "Well played, you win!" : "KataQuoridor wins this one.";
   $("overlay").className = "win-" + S.winner;
 }
 
@@ -690,6 +713,8 @@ function openNewDialog() {
   dlg.querySelectorAll('input[name="side"]').forEach(i => { i.checked = i.value === side; });
   dlg.querySelectorAll('input[name="preset"]').forEach(i => { i.checked = i.value === preset; });
   if (st.custom) $("customVisits").value = st.custom;
+  const rep = String(st.repetition || 0);
+  dlg.querySelectorAll('input[name="rep"]').forEach(i => { i.checked = i.value === rep; });
   dlg.showModal();
   $("startBtn").focus();
 }
@@ -700,8 +725,9 @@ dlg.addEventListener("close", () => {
   const side = (dlg.querySelector('input[name="side"]:checked') || {}).value || "b";
   const preset = (dlg.querySelector('input[name="preset"]:checked') || {}).value || "normal";
   const custom = parseInt($("customVisits").value, 10) || 64;
-  saveSettings({ side, preset, custom });
-  startGame(side, visitsOf({ preset, custom }));
+  const repetition = parseInt((dlg.querySelector('input[name="rep"]:checked') || {}).value, 10) || 0;
+  saveSettings({ side, preset, custom, repetition });
+  startGame(side, visitsOf({ preset, custom }), repetition);
 });
 
 document.addEventListener("keydown", e => {

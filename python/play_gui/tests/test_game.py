@@ -484,3 +484,40 @@ def test_analysis_ai_uses_new_game_visits(game):
     assert moves_of(s) == [("b", "e8"), ("w", "e2")]
     # White's move should use the new-game visits (16), not the analysis max_visits (64)
     assert s["positions"][2]["eval"]["visits"] == 16
+
+
+def test_draw_by_ply_limit(tmp_path):
+    g = make_game(tmp_path, "--max-plies", "6")
+    try:
+        g.max_plies = 6                    # the mock has no kata-get-rules
+        g.new_game("analysis", 16)
+        for mv in ("d9", "d1", "e9", "e1", "d9", "d1"):
+            s = g.play(mv)
+        assert s["winner"] == "d" and s["margin"] == 0.0 and s["draw_reason"] == "maxPlies"
+        assert s["legal_moves"] == [] and s["to_move"] is None
+        e = s["eval"]
+        assert e["source"] == "final" and e["draw"] == 1.0 and e["black_win"] == 0.0 and e["white_win"] == 0.0
+        s = g.undo()
+        assert s["winner"] is None and s["draw_reason"] is None
+    finally:
+        g.close()
+
+
+def test_draw_by_repetition(game):
+    s = game.new_game("analysis", 16, repetition=3)
+    assert s["settings"]["repetition"] == 3
+    for mv in ("d9", "d1", "e9", "e1", "d9", "d1", "e9", "e1"):
+        s = game.play(mv)
+    assert s["winner"] == "d" and s["draw_reason"] == "repetition"
+    # The rule persists in the engine across clear_board, so a standard new game turns it off again.
+    s = game.new_game("analysis", 16)
+    assert s["settings"]["repetition"] == 0
+    for mv in ("d9", "d1", "e9", "e1", "d9", "d1", "e9", "e1"):
+        s = game.play(mv)
+    assert s["winner"] is None
+
+
+def test_bad_repetition(game):
+    for bad in (1, 11, "x"):
+        with pytest.raises(ActionError):
+            game.new_game("b", 16, repetition=bad)

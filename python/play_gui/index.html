@@ -58,8 +58,8 @@
   <section class="panel side">
     <div id="evalCard" class="card">
       <h2>Evaluation <span class="sub" id="evalPly"></span></h2>
-      <div class="ev-bar"><div class="b" id="evBarB"></div><div class="w" id="evBarW"></div></div>
-      <div class="ev-nums"><span id="evB">—</span><span id="evW">—</span></div>
+      <div class="ev-bar"><div class="b" id="evBarB"></div><div class="d" id="evBarD"></div><div class="w" id="evBarW"></div></div>
+      <div class="ev-nums"><span id="evB">—</span><span id="evD" class="draw"></span><span id="evW">—</span></div>
       <div class="ev-lead" id="evLead">—</div>
       <div class="ev-src" id="evSrc"></div>
       <div class="ev-src" id="evNet"></div>
@@ -102,6 +102,14 @@
         <label><input type="radio" name="preset" value="custom"><span>Custom <input type="number" id="customVisits" min="1" max="100000" value="64"></span></label>
       </div>
       <div class="note">Visits per move. Easy plays the raw policy net without search.</div>
+    </div>
+    <div class="field">
+      <div class="lab">Draws</div>
+      <div class="seg" id="repSeg">
+        <label><input type="radio" name="rep" value="0"><span>Standard <small>draw at ply 300 only</small></span></label>
+        <label><input type="radio" name="rep" value="3"><span>Threefold repetition <small>also a draw</small></span></label>
+      </div>
+      <div class="note">The standard game has no repetition rule; the nets are trained mostly without it.</div>
     </div>
     <div class="dlg-btns">
       <button value="cancel" formnovalidate>Cancel</button>

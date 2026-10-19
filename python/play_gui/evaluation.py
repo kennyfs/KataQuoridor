@@ -12,18 +12,20 @@ Scores are KataQuoridor tempo leads (`scoreLead`; the result of a finished game,
 docs/QuoridorIOv2.md), so a positive `black_lead` reads as "Black leads by n".
 
 Every evaluation handed to the frontend is a dict:
-    {"black_win": float, "white_win": float, "black_lead": float, "source": "search"|"net"|"final",
+    {"black_win": float, "white_win": float, "draw": float, "black_lead": float, "source": "search"|"net"|"final",
      "visits": int|None, "pv": [moves]}
+where draw = 1 - black_win - white_win (the draw probability, nonzero for Quoridor I/O v4 nets).
 """
 
 
-EVAL_KEYS = ("black_win", "white_win", "black_lead", "source", "visits", "pv")
+EVAL_KEYS = ("black_win", "white_win", "draw", "black_lead", "source", "visits", "pv")
 
 
 def make_eval(black_win, black_lead, source, visits=None, pv=None, draw=0.0):
     black_win = min(1.0, max(0.0, float(black_win)))
     white_win = min(1.0, max(0.0, 1.0 - black_win - float(draw)))
-    return {"black_win": black_win, "white_win": white_win, "black_lead": float(black_lead),
+    return {"black_win": black_win, "white_win": white_win, "draw": max(0.0, 1.0 - black_win - white_win),
+            "black_lead": float(black_lead),
             "source": source, "visits": visits, "pv": list(pv or [])}
 
 
@@ -50,12 +52,15 @@ def from_raw_nn(values):
 
 
 def final_eval(winner, margin):
-    """The exact value of a finished game: winner "b"/"w", margin = the winner's tempo lead (> 0)."""
+    """The exact value of a finished game: winner "b"/"w", margin = the winner's tempo lead (> 0), or winner "d"
+    (a draw: the ply limit or the repetition rule)."""
+    if winner == "d":
+        return make_eval(0.0, 0.0, "final", draw=1.0)
     if winner == "b":
         return make_eval(1.0, margin, "final")
     if winner == "w":
         return make_eval(0.0, -margin, "final")
-    raise ValueError("winner must be 'b' or 'w', got %r" % (winner,))
+    raise ValueError("winner must be 'b', 'w' or 'd', got %r" % (winner,))
 
 
 # -- parsing ------------------------------------------------------------------------------------------

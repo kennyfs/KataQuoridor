@@ -78,6 +78,13 @@ def test_final_eval():
     assert (b["black_win"], b["white_win"], b["black_lead"], b["source"]) == (1.0, 0.0, 3.0, "final")
     w = ev.final_eval("w", 2)
     assert (w["black_win"], w["white_win"], w["black_lead"]) == (0.0, 1.0, -2.0)
+    d = ev.final_eval("d", 0)
+    assert (d["black_win"], d["white_win"], d["draw"], d["black_lead"]) == (0.0, 0.0, 1.0, 0.0)
+
+
+def test_draw_share():
+    e = ev.from_side_to_move(0.6, 1.0, "b", draw=0.2)   # winrate counts a draw as 1/2
+    assert abs(e["black_win"] - 0.5) < 1e-9 and abs(e["white_win"] - 0.3) < 1e-9 and abs(e["draw"] - 0.2) < 1e-9
 
 
 def test_parse_analysis():

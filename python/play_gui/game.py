@@ -14,6 +14,7 @@ current position. The analysis streams until it is stopped, so every engine comm
 `_session()`, which stops a running analysis first and starts a new one afterwards when it is switched on.
 """
 import contextlib
+import json
 import os
 import queue
 import random
@@ -165,6 +166,8 @@ class GameController:
         self.human = "b"                 # "b", "w", or None for AI vs AI
         self.human_choice = "b"
         self.visits = 16
+        self.repetition = 0              # repetitionDrawCount of the current game (0: off, the standard game)
+        self.max_plies = 300             # the engine's maxPlies (a draw there), read at start
         self.thinking = False
         self.busy = None
         self.ai_error = None
@@ -183,7 +186,7 @@ class GameController:
         self.positions = [self._snapshot([], {"b": WALLS_PER_PLAYER, "w": WALLS_PER_PLAYER}, None, None)]
         self.legal = []
         self.winner = None
-        self.margin = None               # the winner's tempo lead (KataQuoridor's result, e.g. 0.5 for B+0.5)
+        self.margin = None               # the winner's tempo lead (KataQuoridor's result, e.g. 0.5 for B+0.5); 0 for a draw
         self.komi = STANDARD_KOMI        # the engine's komi, read at start
         self.redo = []                   # analysis mode: undone (color, move, position) entries, last first out
         self.analysis = None             # analysis of the current position (analysis mode)
@@ -241,7 +244,7 @@ class GameController:
     def _query_position(self):
         """winner, dist, walls and legal moves of the engine's current position."""
         w = self._must("winner").strip().lower()
-        winner = w if w in ("b", "w") else None
+        winner = w if w in ("b", "w") else "d" if w == "draw" else None
         dist = parse_pair(self._must("dist"))
         walls_left = parse_pair(self._must("walls"))
         legal = [] if winner else self._must("legal_moves").split()
@@ -266,7 +269,9 @@ class GameController:
     def _margin(self, winner, dist):
         """The winner's tempo lead, as KataQuoridor scores a game (docs/QuoridorIOv2.md): the loser's remaining
         distance d is the tempo t = d if White arrived and 1 - d if Black did, and the result is |t + komi|
-        (with the standard komi -0.5, d - 0.5: B+0.5 for an equal race)."""
+        (with the standard komi -0.5, d - 0.5: B+0.5 for an equal race). A draw has margin 0."""
+        if winner == "d":
+            return 0.0
         d = max(1, dist[opp(winner)])
         return abs((d if winner == "w" else 1 - d) + self.komi)
 
@@ -415,8 +420,11 @@ class GameController:
             except (QTPError, ValueError):
                 komi = STANDARD_KOMI
             self.komi = komi
+            self.max_plies = self._read_max_plies()
             # Replay the current game (after a crash) or just reset the board.
             self._must("clear_board")
+            if self.repetition:
+                self._must("kata-set-rule repetitionDrawCount %d" % self.repetition)
             self._must("kata-set-param maxVisits %d" % self.visits)
             for color, move in self.moves:
                 self._must("play %s %s" % (color, move))
@@ -434,6 +442,16 @@ class GameController:
             self._maybe_start_analysis()
         if need_ai:
             self._spawn_ai(gen)
+
+    def _read_max_plies(self):
+        """maxPlies from kata-get-rules (a JSON object), 300 if the engine does not say."""
+        try:
+            if not self.engine.known_command("kata-get-rules"):
+                return 300
+            ok, text = self._send("kata-get-rules")
+            return int(json.loads(text).get("maxPlies", 300)) if ok else 300
+        except (QTPError, ValueError, AttributeError):
+            return 300
 
     def close(self):
         with self.lock:
@@ -525,10 +543,17 @@ class GameController:
             raise ActionError("visits must be between %d and 1000000000" % lo, 400)
         return visits
 
-    def new_game(self, human="b", visits=16):
-        """human: "b", "w", "random", "none" (AI vs AI) or "analysis" (free play for both sides)."""
+    def new_game(self, human="b", visits=16, repetition=0):
+        """human: "b", "w", "random", "none" (AI vs AI) or "analysis" (free play for both sides). repetition: the
+        repetition draw rule (a draw at the N-th occurrence of a position, 2..10), 0 = off (the standard game)."""
         if human not in ("b", "w", "random", "none", "analysis"):
             raise ActionError("human must be b, w, random, none or analysis", 400)
+        try:
+            repetition = int(repetition or 0)
+        except (TypeError, ValueError):
+            raise ActionError("repetition must be 0 or 2..10", 400)
+        if repetition != 0 and not 2 <= repetition <= 10:
+            raise ActionError("repetition must be 0 or 2..10", 400)
         visits = self._parse_visits(visits, 1)
         if visits > 100000:
             raise ActionError("visits must be between 1 and 100000", 400)
@@ -541,6 +566,10 @@ class GameController:
         try:
             with self._session():
                 self._must("clear_board")
+                if repetition or self.repetition:  # QTP rules persist across clear_board
+                    ok, text = self._send("kata-set-rule repetitionDrawCount %d" % repetition)
+                    if not ok:
+                        raise ActionError("the engine rejects the repetition rule: %s" % text.strip(), 400)
                 self._must("kata-set-param maxVisits %d" % visits)
                 winner, dist, walls_left, legal = self._query_position()
                 evaluation = self._position_eval(winner, dist)
@@ -553,6 +582,7 @@ class GameController:
                     self.human = (None if human in ("none", "analysis") else
                                   self.rng.choice("bw") if human == "random" else human)
                     self.visits = visits
+                    self.repetition = repetition
                     self._reset_position_state()
                     self.positions[0].update(walls_left=walls_left, dist=dist, eval=evaluation, net=evaluation)
                     self.legal = legal
@@ -855,6 +885,7 @@ class GameController:
             "game_id": self.gen,
             "mode": self.mode,
             "settings": {"human": self.human, "human_choice": self.human_choice, "visits": self.visits,
+                         "repetition": self.repetition, "max_plies": self.max_plies,
                          "hint_visits": max(self.hint_visits, self.visits)},
             "moves": [{"color": c, "move": m} for c, m in self.moves],
             "redo": [{"color": c, "move": m} for c, m, _ in reversed(self.redo)],
@@ -867,6 +898,9 @@ class GameController:
             "legal_moves": list(self.legal),
             "winner": self.winner,
             "margin": self.margin,
+            # "maxPlies" or "repetition" for a draw (the engine only says "Draw"; the ply count tells them apart)
+            "draw_reason": (None if self.winner != "d" else
+                            "maxPlies" if len(self.moves) >= self.max_plies else "repetition"),
             "thinking": self.thinking,
             "busy": self.busy,
             "ai_error": self.ai_error,

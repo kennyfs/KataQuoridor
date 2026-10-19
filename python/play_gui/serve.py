@@ -114,7 +114,8 @@ def make_handler(game):
             except ValueError as e:
                 return self._json(400, {"error": "bad JSON: %s" % e})
             if path == "/api/new":
-                return self._run(lambda: game.new_game(body.get("human", "b"), body.get("visits", 16)))
+                return self._run(lambda: game.new_game(body.get("human", "b"), body.get("visits", 16),
+                                                     body.get("repetition", 0)))
             if path == "/api/move":
                 return self._run(lambda: game.play(str(body.get("move", ""))))
             if path == "/api/undo":

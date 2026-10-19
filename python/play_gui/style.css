@@ -5,6 +5,7 @@
   --ink: #1f2933;
   --ink2: #52606d;
   --muted: #7b8794;
+  --draw: #b9b3a4;
   --line: #e4e0d6;
   --board: #2f4858;
   --board-edge: #243a47;
@@ -83,6 +84,7 @@ main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap:
 .ov-box { background: var(--panel); border-radius: var(--radius); padding: 18px 24px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.3); border-top: 6px solid var(--acc, var(--board)); max-width: 86%; }
 #overlay.win-b .ov-box { --acc: var(--b-acc); }
 #overlay.win-w .ov-box { --acc: var(--w-acc); }
+#overlay.win-d .ov-box { --acc: var(--draw); }
 .ov-title { font-size: 22px; font-weight: 750; }
 .ov-sub { color: var(--ink2); margin: 4px 0 14px; }
 .ov-btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
@@ -107,7 +109,9 @@ body.noeval #evalCard { display: none; }
 body.noeval #moveList .ev { visibility: hidden; }
 .ev-bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; border: 1px solid #c9ced3; background: var(--w-pawn); }
 .ev-bar .b { background: var(--b-pawn); transition: width .25s; }
+.ev-bar .d { background: var(--draw); transition: width .25s; }
 .ev-bar .w { flex: 1; }
+.ev-nums .draw { color: var(--muted); font-weight: 600; }
 .ev-nums { display: flex; justify-content: space-between; font-size: 13px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .ev-lead { font-size: 18px; font-weight: 700; margin-top: 4px; }
 .ev-src { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
