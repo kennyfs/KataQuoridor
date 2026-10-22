@@ -189,15 +189,20 @@ removed before the loop switched (code in git history, `cb0b5ed7`). The loop's s
 ## 6. q2 (`~/q2_run`): a clean run (from 2026-10-22)
 
 q1's run0-run4 are one continuous line with many mid-run changes (λ 0.05 → 0, I/O v2 → v3 → v4, SGD → Aurora, lr,
-exploration, b4 → b5). q2 restarts from a random net with what q1 ended with, data on the home NVMe (`~/q2_run`; reading
-many npz files on /thi's HDD array was slow):
+exploration, b4 → b5). q2 restarts from a random net with what q1 ended with. Its goal is the strongest net as fast as
+possible, not a comparison with q1; data data on the home NVMe (`~/q2_run`; reading many npz files on /thi's HDD array was slow):
 
 - 500K random-net rows from ws4 (native Eigen build `ws4:tmp2/kq_remote/build_eigen`, `gen_random_ws4.sh`), first
   cycle by hand (`first_cycle.sh`: shuffle all, 500K samples), then `run.sh` (`synchronous_loop.sh`, no gatekeeper,
   `ROWS_PER_CYCLE` 50K at first, window min 250K / slope 0.4, 6 samples per row).
 - `tf2_b4c192_quoridor_v4` (I/O v4 from the start), Aurora, bf16, lr schedule in `lr_schedule.txt` (ramp 0.5× → 8× over
-  128K samples, then 8×; compare a ×4 branch around 2M samples). b5 (`tf3_b5c256`) later, bootstrapped on the newest
-  ~2.5M rows when the b4 ladders flatten, as in q1.
+  128K samples, then 8×; compare a ×4 branch around 2M samples).
+- Net growth early, not when b4 saturates (q1's b4 hit its capacity soon after Aurora): **b5** (`tf3_b5c256`) at
+  ~1.5-2M self-play rows (`bootstrap_b5.sh`: from scratch on the newest 2M rows, random-net rows excluded, 2M
+  samples; then `TRAININGNAME=q2b5 MODELKIND=tf3_b5c256_quoridor_v4 ./run.sh` and self-play visits 1000 / 250),
+  later **b8** (`tf3_b8c320_quoridor_v4`, 9.0M params) the same way.
+- Yardstick: Ka_Quoridor matches every few cycles (the only outside opponent) plus the empty-board and random-opening
+  ladders; once a net is decent, hints mined from the positions it loses to Ka.
 - `selfplay_quoridor_q2.cfg` (its header lists the differences): policy-init T 1.5; `compensateAfterPolicyInitProb`
   0.8, randomized-komi games (15%) never compensated; no fence handicap; 600 / 150 visits while b4; no hints; the
   exploration (forced playouts 4, root policy T 1.6 / 1.5), `reduceVisitsThreshold` 0.97, exact race solver and λ = 0
