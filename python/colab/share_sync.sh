@@ -48,6 +48,9 @@ while true; do
       log "pulled $(wc -l <<< "$files") files, $rows rows from $w (total $total)"
     fi
   done
+  # rsync --remove-source-files leaves the directories: drop the empty ones untouched for 10 minutes (a worker's
+  # rsync recreates what it needs; the age keeps clear of one that is just being created)
+  ssh -o ConnectTimeout=20 "$HOSTPART" "find $PATHPART/incoming -mindepth 2 -type d -empty -mmin +10 -delete" 2>>"$LOG"
   # 2. the newest net (the newest dir in models/), when it changed
   newest=$(ls -t "$BASEDIR/models" 2>/dev/null | head -1)
   if [[ -n "$newest" && "$newest" != "$published" && -f "$BASEDIR/models/$newest/model.bin.gz" ]]; then

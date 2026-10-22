@@ -173,6 +173,39 @@ removed before the loop switched (code in git history, `cb0b5ed7`). The loop's s
   1000 nodes on the CPU, 4-ply random openings, 80 games: s27.9M v256 74%, s40.9M v256 76%, s53.96M v256 68%,
   s53.96M v1000 76% (v64 60%, v16 57%, 40 games). No progress since s28M against an engine the nets never saw.
 
+### 5.6 Openings over run4, policy-init temperature (2026-10-22)
+
+- Opening frequencies in run4's standard self-play games without policy-init moves (`~/arena/joseki`, mirror images
+  merged): White's first reply was e2 (both race) in ~100% of games until s27M; within two cycles of the I/O v4 / lr ×4
+  switch (s28.6M) it became the wall d7v (85% at s32M), and e2 came back to ~65% from s48M. Inside the e2 line the main
+  continuation changed twice (c7h lines until s19M, d6h c3h s20-28M, d6h e3h from s29M). Training changes visibly move
+  the nets' openings.
+- `policyInitAreaTemperature` (the policy-init moves sample policy^(1/T); 1.0 so far), s53.96M, ~1000 games each, no komi
+  randomization / handicap / compensation (`~/arena/policyinit_t`): T 1.0 / 1.3 / 1.6 gave effective 6-ply lines
+  (exp entropy) 26 / 85 / 161, positions still open (White 10-90%) at the first search 2% / 5% / 11%, Black score 96% /
+  95% / 86%. A higher T does not leave more decided positions: the empty board itself is a Black win for these nets,
+  and T 1.0 keeps the init moves on that line.
+
+## 6. q2 (`~/q2_run`): a clean run (from 2026-10-22)
+
+q1's run0-run4 are one continuous line with many mid-run changes (λ 0.05 → 0, I/O v2 → v3 → v4, SGD → Aurora, lr,
+exploration, b4 → b5). q2 restarts from a random net with what q1 ended with, data on the home NVMe (`~/q2_run`; reading
+many npz files on /thi's HDD array was slow):
+
+- 500K random-net rows from ws4 (native Eigen build `ws4:tmp2/kq_remote/build_eigen`, `gen_random_ws4.sh`), first
+  cycle by hand (`first_cycle.sh`: shuffle all, 500K samples), then `run.sh` (`synchronous_loop.sh`, no gatekeeper,
+  `ROWS_PER_CYCLE` 50K at first, window min 250K / slope 0.4, 6 samples per row).
+- `tf2_b4c192_quoridor_v4` (I/O v4 from the start), Aurora, bf16, lr schedule in `lr_schedule.txt` (ramp 0.5× → 8× over
+  128K samples, then 8×; compare a ×4 branch around 2M samples). b5 (`tf3_b5c256`) later, bootstrapped on the newest
+  ~2.5M rows when the b4 ladders flatten, as in q1.
+- `selfplay_quoridor_q2.cfg` (its header lists the differences): policy-init T 1.5; `compensateAfterPolicyInitProb`
+  0.8, randomized-komi games (15%) never compensated; no fence handicap; 600 / 150 visits while b4; no hints; the
+  exploration (forced playouts 4, root policy T 1.6 / 1.5), `reduceVisitsThreshold` 0.97, exact race solver and λ = 0
+  from the start.
+- SGF root comments now say where the komi came from (`komiRandom=1`, `komiComp=policyinit|fair|fancy|emptyboard`),
+  and the self-play stats count compensated games separately (smoke test with s53.96M: compensated games Black
+  0.505 over 203).
+
 ## Lessons
 
 - Long games were mostly game-theoretic draws, not bugs; give the net the rules and inputs to see them.
