@@ -29,6 +29,18 @@ only add games and training rows.
   shell (`-no-lock`: rrsync otherwise lets only one connection in at a time, and workers syncing together fail).
   KataCDC's key (`~/.ssh/cdc_worker`) and share (`~/tmp2/cdc_remote`) are separate.
 
+Failure handling (ported from KataCDC, 2026-10-23):
+- A worker starting while the home side replaced the share's net could find `models/` without a model file and play
+  on a random net. `share_sync.sh` publishes the net first and atomically (`--delay-updates --delete-after`), the worker
+  waits for a complete `model.bin.gz` and fetches nets the same way, and any `incoming/<worker>/random/` data goes to
+  `$BASEDIR/rejected/<worker>/` instead of `selfplay/`.
+- `share_sync.sh` logs in with `~/.ssh/kq_sync` (a copy of the workers' restricted key, no passphrase, BatchMode): the
+  personal key needs the ssh-agent, and password fallbacks after failed logins got KataCDC's home IP banned. After a
+  failed listing it backs off (up to 30 minutes). It pulls with `-z` (sgfs compress ~6x).
+- The launcher checks that the worker runs after starting it (3 tries on the same VM) and restarts a worker that
+  ended on a VM that is still there (up to 3 times). It also removes its worker's empty `incoming/` dirs (rsync
+  `--remove-source-files` leaves them; the restricted key cannot).
+
 ## Rows per cycle with remote rows
 
 `synchronous_loop.sh` with `ROWS_PER_CYCLE=N` trains every cycle on about N new rows, wherever they come from:

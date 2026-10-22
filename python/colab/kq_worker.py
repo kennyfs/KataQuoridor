@@ -32,7 +32,7 @@ WORK = "/content/kq" if os.path.isdir("/content") else os.path.expanduser("~/kq_
 TUNING = [("T4", 256, 256), ("L4", 256, 256), ("A100", 512, 512), ("H100", 768, 768), ("RTX PRO 6000", 768, 768),
           ("", 256, 256)]
 
-SSH = f"ssh -i {KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ConnectTimeout=20"
+SSH = f"ssh -i {KEY} -o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthentications=publickey -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ConnectTimeout=20"
 
 
 def sh(cmd, check=True, **kw):
@@ -70,12 +70,29 @@ def setup():
         sh("tar -C bin -xzf katago-kq-colab.tar.gz && touch bin/katago")
     rsync(f"{HOST}:{ROOT}selfplay_quoridor_v2.cfg {WORK}/")
     os.makedirs("models", exist_ok=True)
-    rsync(f"--delete {HOST}:{ROOT}models/ {WORK}/models/")
+    # selfplay starts on a random net when its models dir has no model file. The share's models/ can be caught
+    # without one (the home side replacing the net: an rsync temp file only), so wait until a full net is here.
+    for i in range(60):
+        rsync(MODELS_RSYNC)
+        if have_model():
+            break
+        print("no net in the share's models/ yet, retrying in 30 s", flush=True)
+        time.sleep(30)
+    else:
+        sys.exit("no net in the share's models/ after 30 minutes")
     # hint poses (hintPosesDir in the config points at the home run; publish_share.sh copies them to the share)
     os.makedirs("hintposes", exist_ok=True)
     rsync(f"--delete {HOST}:{ROOT}hintposes/ {WORK}/hintposes/", tries=2)
-    if not os.listdir("models"):
-        sys.exit("no net in the share's models/")
+
+
+# The share's models/ into WORK/models/: rsync's temp files (.*) never copied, new files moved in place only once all
+# have arrived and old ones deleted afterwards, so the dir never lacks a complete net (selfplay then uses random).
+MODELS_RSYNC = f"--delay-updates --delete-after --exclude='.*' {HOST}:{ROOT}models/ {WORK}/models/"
+
+
+def have_model():
+    return any(f == "model.bin.gz" and os.path.getsize(os.path.join(d, f)) > 0
+               for d, _, fs in os.walk(os.path.join(WORK, "models")) for f in fs)
 
 
 def push_finished(out_dir, dest, all_files=False):
@@ -138,7 +155,7 @@ def main():
             if BENCH_ROWS:
                 continue
             moved += push_finished(out, worker)
-            rsync(f"--delete {HOST}:{ROOT}models/ {WORK}/models/", tries=2)   # selfplay picks a newer net up itself
+            rsync(MODELS_RSYNC, tries=2)   # selfplay picks a newer net up itself
             print(f"{time.strftime('%H:%M')} {(time.time() - t0) / 60:.0f} min · {moved} files sent", flush=True)
     th_sync = threading.Thread(target=sync_loop, daemon=True)
     th_sync.start()

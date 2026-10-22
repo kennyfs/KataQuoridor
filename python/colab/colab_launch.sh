@@ -15,9 +15,25 @@ REALHOME="$(getent passwd "$USER" | cut -d: -f6)"   # HOME may point at another 
 KEY="${KEY:-$REALHOME/.ssh/kq_worker}"
 LOGROOT="${LOGROOT:-$REALHOME/tmp2/kq_remote/colab_logs}"
 L="$LOGROOT/worker_$S"; mkdir -p "$L"
+INCOMING="${SHAREDIR:-$REALHOME/tmp2/kq_remote/share}/incoming/$S"
 rm -f "$L/STOP"   # a STOP left from an earlier run with this name
 export PATH="$REALHOME/.local/bin:$PATH"
 log() { echo "$(date '+%F %T') $*" | tee -a "$L/launch.log"; }
+# prints WORKER ALIVE / DEAD (and the end of the worker's log, if any); nothing when the exec fails
+ALIVE="import subprocess; print('WORKER', 'ALIVE' if subprocess.run(['pgrep', '-f', 'kq_worker.py'], capture_output=True).returncode == 0 else 'DEAD')"
+# Starts the worker detached and checks it is running. The start exec sometimes fails ("Connection was lost") and
+# the VM is then left with only the uploaded files: try again (on the same VM) up to 3 times.
+start_worker() {
+  local k
+  for k in 1 2 3; do
+    echo "import subprocess, os; e = dict(os.environ, KQ_WORKER='$S'); subprocess.Popen('python3 /content/kq_worker.py >> /content/worker.log 2>&1', shell=True, env=e, start_new_session=True); print('started')" \
+      | timeout 300 colab exec -s "$S" >> "$L/launch.log" 2>&1
+    sleep 20
+    echo "$ALIVE" | timeout 180 colab exec -s "$S" 2>&1 | grep -q "WORKER ALIVE" && return 0
+    log "worker not running after start $k"
+  done
+  return 1
+}
 T0=$(date +%s)
 over() { [[ -f "$L/STOP" ]] || { [[ "$HOURS" != 0 ]] && (( $(date +%s) - T0 > ${HOURS%.*} * 3600 )); }; }
 vm=0
@@ -29,12 +45,14 @@ while ! over; do
   fi
   timeout 300 colab upload -s "$S" "$KEY" /content/kq_worker_key >> "$L/launch.log" 2>&1
   timeout 300 colab upload -s "$S" "$HERE/kq_worker.py" /content/kq_worker.py >> "$L/launch.log" 2>&1
-  echo "import subprocess, os; e = dict(os.environ, KQ_WORKER='$S'); subprocess.Popen('python3 /content/kq_worker.py >> /content/worker.log 2>&1', shell=True, env=e, start_new_session=True); print('started')" \
-    | timeout 300 colab exec -s "$S" >> "$L/launch.log" 2>&1
-  fails=0
+  if ! start_worker; then
+    log "VM $vm: the worker does not start; replacing the VM"
+    timeout 120 colab stop -s "$S" >> "$L/launch.log" 2>&1; sleep 60; continue
+  fi
+  fails=0; restarts=0
   while true; do
     for i in $(seq 10); do over && break; sleep 30; done   # a poll every 5 minutes, STOP noticed within 30 s
-    out=$(echo "import subprocess; print(open('/content/worker.log').read()[-1500:]); print('WORKER', 'ALIVE' if subprocess.run(['pgrep', '-f', 'kq_worker.py'], capture_output=True).returncode == 0 else 'DEAD')" \
+    out=$(echo "import os; print(open('/content/worker.log').read()[-1500:] if os.path.exists('/content/worker.log') else 'no worker.log'); $ALIVE" \
       | timeout 180 colab exec -s "$S" 2>&1)
     if ! grep -q "^WORKER" <<< "$out"; then
       fails=$((fails + 1)); log "poll failed ($fails): $(tail -c 300 <<< "$out" | tr '\n' ' ')"
@@ -43,14 +61,23 @@ while ! over; do
     fi
     fails=0
     echo "$(date '+%F %T') $(grep -v '^\s*$' <<< "$out" | tail -2 | tr '\n' ' ')" >> "$L/poll.log"
-    grep -q "WORKER DEAD" <<< "$out" && { log "worker ended"; break; }
+    # rsync --remove-source-files (share_sync.sh) leaves this worker's incoming/ dirs: drop the empty ones untouched for
+    # 10 minutes (the worker's rsync recreates what it needs; the age keeps clear of one being created)
+    find "$INCOMING" -mindepth 1 -type d -empty -mmin +10 -delete 2>/dev/null
+    if grep -q "WORKER DEAD" <<< "$out"; then
+      # the VM is still here: start the worker again on it (a few times), else replace the VM
+      restarts=$((restarts + 1))
+      if over || (( restarts > 3 )); then log "worker ended"; break; fi
+      log "worker ended; restarting it on VM $vm ($restarts)"
+      start_worker || { log "worker does not restart"; break; }
+      continue
+    fi
     if over; then
       log "stopping the worker"
       echo "import subprocess; subprocess.run(['pkill', '-TERM', '-f', 'kq_worker.py'])" | timeout 120 colab exec -s "$S" >/dev/null 2>&1
       for i in $(seq 12); do   # up to 6 minutes for the worker to send its last files
         sleep 30
-        echo "import subprocess; print('WORKER', 'ALIVE' if subprocess.run(['pgrep', '-f', 'kq_worker.py'], capture_output=True).returncode == 0 else 'DEAD')" \
-          | timeout 120 colab exec -s "$S" 2>&1 | grep -q "WORKER DEAD" && break
+        echo "$ALIVE" | timeout 120 colab exec -s "$S" 2>&1 | grep -q "WORKER DEAD" && break
       done
       break
     fi
