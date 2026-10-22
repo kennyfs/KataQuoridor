@@ -255,6 +255,18 @@ void PlayUtils::initializeGameUsingPolicy(
   for(int i = 0; i<numInitialMovesToPlay; i++) {
     Loc loc = getGameInitializationMove(botB, botW, board, hist, pla, buf, gameRand, temperature);
 
+    //KataQuoridor: stop before the move that would place the last wall of both players. After it the init would play
+    //aimless pawn moves, and with the repetition rule on a position repeated N-1 times since the last wall keeps the
+    //race solver (exact self-play finish, search terminal values) off for the rest of the game, which is then played by
+    //search in a solved race (seen with the random net). With a wall left, the game's last wall is placed by search,
+    //and the solver takes over from a clean history.
+    if(loc != Board::NULL_LOC && loc != Board::PASS_LOC && Location::getX(loc,board.x_size) % 2 == 1) {
+      const int myFences = pla == P_BLACK ? board.blackFences : board.whiteFences;
+      const int oppFences = pla == P_BLACK ? board.whiteFences : board.blackFences;
+      if(myFences <= 1 && oppFences == 0)
+        break;
+    }
+
     //Make the move!
     assert(hist.isLegal(board,loc,pla));
     hist.makeBoardMoveAssumeLegal(board,loc,pla,NULL);
