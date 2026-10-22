@@ -99,6 +99,8 @@ FinishedGameData::FinishedGameData()
    mode(0),
    beganInEncorePhase(0),
    usedInitialPosition(0),
+   komiRandom(false),
+   komiCompensation(),
 
    hasFullData(false),
    targetWeightByTurn(),
@@ -160,6 +162,8 @@ void FinishedGameData::printDebug(ostream& out) const {
   out << "mode " << mode << endl;
   out << "beganInEncorePhase " << beganInEncorePhase << endl;
   out << "usedInitialPosition " << usedInitialPosition << endl;
+  out << "komiRandom " << komiRandom << endl;
+  out << "komiCompensation " << komiCompensation << endl;
   out << "hasFullData " << hasFullData << endl;
   for(int i = 0; i<targetWeightByTurn.size(); i++)
     out << "targetWeightByTurn " << i << " " << targetWeightByTurn[i] << " " << "unrounded" << " " << targetWeightByTurnUnrounded[i] << endl;

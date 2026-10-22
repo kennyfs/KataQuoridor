@@ -120,7 +120,8 @@ class SelfplayManager {
       int64_t pliesByRule[2] = {0,0};
       // Normal games (not forks etc.) with 10/10 walls, by komi and repetition rule ([0] off, [1] on).
       struct Results { int64_t games = 0; int64_t blackWins = 0; int64_t draws = 0; };
-      std::map<float,Results> byKomi;
+      std::map<float,Results> byKomi;      // komi not from a fair-komi search (standard or random)
+      std::map<float,Results> byKomiComp;  // komi from a fair-komi search (FinishedGameData::komiCompensation)
       Results standardByRule[2];  // the standard komi only
     };
     QuoridorStats quoridorStats;

@@ -713,6 +713,7 @@ void GameInitializer::createGameSharedUnsynchronized(
     if(quoridorKomiRandomProb > 0.0 && rand.nextBool(quoridorKomiRandomProb)) {
       int n = 1 + (int)rand.nextUInt(quoridorKomiRandomWeights.data(),quoridorKomiRandomWeights.size());
       extraBlackAndKomi.komiMean = Rules::roundKomi(komiMean + (rand.nextBool(0.5) ? n : -n));
+      extraBlackAndKomi.quoridorKomiRandom = true;
     }
     PlayUtils::setKomiWithNoise(extraBlackAndKomi, hist, rand);
 
@@ -1679,6 +1680,7 @@ FinishedGameData* Play::runGame(
   const std::function<void(const Board&, const BoardHistory&, Player, Loc, const std::vector<double>&, const std::vector<double>&, const std::vector<double>&, const Search*)>& onEachMove
 ) {
   FinishedGameData* gameData = new FinishedGameData();
+  gameData->komiRandom = extraBlackAndKomi.quoridorKomiRandom;
 
   Board board(startBoard);
   BoardHistory hist(startHist);
@@ -1726,6 +1728,7 @@ FinishedGameData* Play::runGame(
     //Restore baseline on empty hist, adjust empty hist to fair, then apply to real history.
     PlayUtils::setKomiWithoutNoise(extraBlackAndKomi,h);
     PlayUtils::adjustKomiToEven(botB,botW,b,h,makeFairPla,playSettings.compensateKomiVisits,otherGameProps,gameRand);
+    gameData->komiCompensation = "emptyboard";
     extraBlackAndKomi.komiMean = h.rules.komi;
     PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
   }
@@ -1739,6 +1742,7 @@ FinishedGameData* Play::runGame(
     //Restore baseline on hist, adjust hist to fair, then apply it with noise.
     PlayUtils::setKomiWithoutNoise(extraBlackAndKomi,hist);
     PlayUtils::adjustKomiToEven(botB,botW,board,hist,pla,playSettings.compensateKomiVisits,otherGameProps,gameRand);
+    gameData->komiCompensation = "fair";
     extraBlackAndKomi.komiMean = hist.rules.komi;
     PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
   }
@@ -1750,6 +1754,7 @@ FinishedGameData* Play::runGame(
     //Restore baseline on hist, adjust hist to fair, then apply it with noise.
     PlayUtils::setKomiWithoutNoise(extraBlackAndKomi,hist);
     PlayUtils::adjustKomiToEven(botB,botW,board,hist,pla,playSettings.compensateKomiVisits,otherGameProps,gameRand);
+    gameData->komiCompensation = "fancy";
     double newKomi = hist.rules.komi;
 
     //Now, randomize between the old and new komi, with extra noise
@@ -1846,9 +1851,11 @@ FinishedGameData* Play::runGame(
         playSettings.compensateAfterPolicyInitProb > 0.0 && gameRand.nextBool(playSettings.compensateAfterPolicyInitProb);
       if(gameData->mode != FinishedGameData::MODE_NORMAL)
         shouldCompensate = extraBlackAndKomi.makeGameFair;
-      //KataQuoridor: the policy init moves can end the game (a weak net walking to the goal); no search there
-      if(shouldCompensate && canCompensateKomi && !hist.isGameFinished) {
+      //KataQuoridor: the policy init moves can end the game (a weak net walking to the goal); no search there.
+      //A randomized komi (quoridorKomiRandomProb) is kept: those games are meant to be played at an unfair komi.
+      if(shouldCompensate && canCompensateKomi && !hist.isGameFinished && !extraBlackAndKomi.quoridorKomiRandom) {
         PlayUtils::adjustKomiToEven(botB,botW,board,hist,pla,playSettings.compensateKomiVisits,otherGameProps,gameRand);
+        gameData->komiCompensation = "policyinit";
         extraBlackAndKomi.komiMean = hist.rules.komi;
         PlayUtils::setKomiWithNoise(extraBlackAndKomi,hist,gameRand);
       }

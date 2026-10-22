@@ -2117,6 +2117,10 @@ void WriteSgf::writeSgf(
     else
       commentOut << "," << "gtype=other";
 
+    if(gameData->komiRandom)
+      commentOut << "," << "komiRandom=1";
+    if(!gameData->komiCompensation.empty())
+      commentOut << "," << "komiComp=" << gameData->komiCompensation;
     if(gameData->beganInEncorePhase != 0)
       commentOut << "," << "beganInEncorePhase=" << gameData->beganInEncorePhase;
     if(gameData->usedInitialPosition != 0)

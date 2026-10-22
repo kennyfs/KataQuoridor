@@ -51,6 +51,8 @@ struct ExtraBlackAndKomi {
   bool makeGameFairForEmptyBoard = false;
   bool allowInteger = true;
   bool interpZero = false;
+  //KataQuoridor: the komi was randomized (quoridorKomiRandomProb), recorded in the SGF as komiRandom=1
+  bool quoridorKomiRandom = false;
 };
 
 struct OtherGameProperties {

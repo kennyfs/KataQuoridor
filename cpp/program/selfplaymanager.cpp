@@ -364,8 +364,9 @@ void SelfplayManager::countQuoridorGameResult(NNEvaluator* nnEval, const Finishe
       r.blackWins += blackWon ? 1 : 0;
       r.draws += isDecisive ? 0 : 1;
     };
-    add(stats.byKomi[hist.rules.komi]);
-    if(hist.rules.komi == standard.komi)
+    const bool compensated = !gameData.komiCompensation.empty();
+    add(compensated ? stats.byKomiComp[hist.rules.komi] : stats.byKomi[hist.rules.komi]);
+    if(hist.rules.komi == standard.komi && !compensated)
       add(stats.standardByRule[hist.rules.repetitionDrawCount > 0 ? 1 : 0]);
   }
 }
@@ -395,11 +396,20 @@ string SelfplayManager::quoridorStatsSummary(ModelData* modelData) {
   auto drawPct = [](const ModelData::QuoridorStats::Results& r) {
     return Global::strprintf("%.1f%%", r.games > 0 ? 100.0 * r.draws / (double)r.games : 0.0);
   };
-  s += ", Black score (draw = 1/2) in normal 10/10-wall games by komi:";
+  s += ", Black score (draw = 1/2) in normal 10/10-wall games by komi (not compensated):";
   for(const auto& kv : stats.byKomi)
     s += " " + Global::strprintf("%+.1f", kv.first) + " " + score(kv.second) +
       " (n " + Global::int64ToString(kv.second.games) + ", draws " + drawPct(kv.second) + ")";
-  s += "; standard komi by repetition rule:";
+  s += "; compensated komi (fair-komi search):";
+  int64_t compGames = 0;
+  ModelData::QuoridorStats::Results compAll;
+  for(const auto& kv : stats.byKomiComp) {
+    s += " " + Global::strprintf("%+.1f", kv.first) + " " + score(kv.second) + " (n " + Global::int64ToString(kv.second.games) + ")";
+    compGames += kv.second.games;
+    compAll.games += kv.second.games; compAll.blackWins += kv.second.blackWins; compAll.draws += kv.second.draws;
+  }
+  s += compGames > 0 ? ", all " + score(compAll) + " (n " + Global::int64ToString(compGames) + ")" : " none";
+  s += "; standard komi (not compensated) by repetition rule:";
   for(int r = 1; r >= 0; r--) {
     const ModelData::QuoridorStats::Results& res = stats.standardByRule[r];
     s += string(r ? " on " : ", off ") + score(res) + " (n " + Global::int64ToString(res.games) + ", draws " + drawPct(res) + ")";
