@@ -1,13 +1,14 @@
 // Checks the viewer's pure functions (header parsing, results and draws, scores, the repetition-stretch metric,
 // per-game summaries) on real SGF lines: node python/sgfs_viewer/tests/check_core.js [file.sgfs]
 // Default file: fixture.sgfs next to this script (self-play rule on N = 3 / 4 and off, draws by repetition and by
-// maxPlies, a fork, a hint game (gtype hintpos), fence handicaps on each side, komi != -0.5, a gatekeeper and a kq_ladder game).
+// maxPlies, a fork, a hint game (gtype hintpos), fence handicaps on each side, komi != -0.5, a gatekeeper and a kq_ladder game,
+// a random-komi game and a compensated-komi game).
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm"), assert = require("assert");
 const js = path.join(__dirname, "..", "js");
 const ctx = vm.createContext({ console, document: {} });
 vm.runInContext(["core.js", "stats.js"].map(f => fs.readFileSync(path.join(js, f), "utf8")).join("\n") +
-  "\nthis.api = { headerOf, parseGame, scoreB, isDraw, repLabel, repeatStretch, summarize, bdw, openingOf, openingLabel, moveKind, OPENING_PLIES };", ctx);
+  "\nthis.api = { headerOf, parseGame, scoreB, isDraw, repLabel, repeatStretch, summarize, bdw, openingOf, openingLabel, moveKind, OPENING_PLIES, canonLine, mirrorRaw, isStandardGame, LINE_PLIES };", ctx);
 const A = ctx.api;
 
 const file = process.argv[2] || path.join(__dirname, "fixture.sgfs");
@@ -31,7 +32,7 @@ function occurrences(g) {
   return { max, last };
 }
 
-const seen = { ruleOn: 0, ruleOff: 0, n3: 0, n4: 0, repDraw: 0, maxPliesDraw: 0, fork: 0, hint: 0, hcB: 0, hcW: 0, komi: 0, match: 0, decisive: 0, predDraw: 0 };
+const seen = { ruleOn: 0, ruleOff: 0, n3: 0, n4: 0, repDraw: 0, maxPliesDraw: 0, fork: 0, hint: 0, hcB: 0, hcW: 0, komi: 0, komiRandom: 0, komiComp: 0, match: 0, decisive: 0, predDraw: 0 };
 lines.forEach((line, i) => {
   const h = A.headerOf(line, i), g = A.parseGame(line), s = A.summarize(line, h);
   const re = /RE\[([^\]]*)\]/.exec(line)[1];
@@ -82,6 +83,14 @@ lines.forEach((line, i) => {
   if (h.wb < h.ww) seen.hcB++;
   if (h.ww < h.wb) seen.hcW++;
   if (h.komi !== -0.5) seen.komi++;
+  // training weight: the sum of the weight= values in the move comments
+  const ws = [...line.matchAll(/weight=([-\d.]+)/g)].map(m => +m[1]);
+  if (ws.length) assert(Math.abs(s.weightSum - ws.reduce((a, b) => a + b, 0)) < 1e-6, "weightSum");
+  else assert.strictEqual(s.weightSum, null);
+  // komi source: komiRandom=1 / komiComp=<kind> in the root comment
+  const rootC = (/C\[([^\]]*)\]/.exec(line) || [])[1] || "";
+  assert.strictEqual(h.komiSrc, /komiRandom=1/.test(rootC) ? "random" : (/komiComp=(\w+)/.exec(rootC) || [])[1] || "");
+  if (h.komiSrc === "random") seen.komiRandom++; else if (h.komiSrc) seen.komiComp++;
   if (h.pb !== h.pw) seen.match++;
   // full-search visits are this game's max v, except a hint game's first search (the hint move, 4x visits)
   if (h.gtype === "hintpos") {
@@ -91,6 +100,24 @@ lines.forEach((line, i) => {
     assert.strictEqual(s.maxV, Math.max(...rest.map(e => e.v)));
   } else if (s.evs.length) assert.strictEqual(s.maxV, Math.max(...s.evs.map(e => e.v)));
 });
+
+// mirror-canonical lines: a line and its mirror give the same list; the race to the centre is its own mirror
+{
+  assert.strictEqual(A.mirrorRaw("io"), "io");             // e8 (column e is the axis)
+  assert.strictEqual(A.mirrorRaw(A.mirrorRaw("bl")), "bl");
+  const a6h = ["io", "ic", "im", "ie", "ik", "ig", "bl", "ii"], h6h = a6h.map(A.mirrorRaw);
+  assert.deepStrictEqual(A.canonLine(a6h), A.canonLine(h6h));
+  assert.deepStrictEqual(A.canonLine(a6h).join(" "), "e8 e2 e7 e3 e6 e4 a6h e5");
+  for (const [l, i] of lines.map((l, i) => [l, i])) {
+    const h = A.headerOf(l, i), s = A.summarize(l, h), g = A.parseGame(l);
+    assert.strictEqual(s.std, A.isStandardGame(h));
+    if (s.std) {
+      assert.strictEqual(s.line.length, Math.min(A.LINE_PLIES, g.moves.length));
+      assert.deepStrictEqual(s.line, A.canonLine(g.moves.slice(0, A.LINE_PLIES).map(m => A.mirrorRaw(m.raw))));
+    } else assert.strictEqual(s.line, null);
+    if (s.firstPredB !== null) assert(s.firstPredB >= 0 && s.firstPredB <= 1);
+  }
+}
 
 // score with draws as ½
 const S = lines.map((l, i) => A.summarize(l, A.headerOf(l, i)));

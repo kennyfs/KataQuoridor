@@ -10,11 +10,13 @@ function summarize(line, h) {
     margin: decisive && isFinite(parseFloat(h.result.slice(2))) ? Math.abs(parseFloat(h.result.slice(2))) : null,
     used: { B: 0, W: 0 }, hw: 0, vw: 0, pawnMoves: 0, evs: [], firstWallSearch: null,
     firstToMove: g.moves[g.startTurnIdx]?.pla ?? null,
-    pb: h.pb, pw: h.pw, winnerModel: h.winnerModel, komi: h.komi, wb: h.wb, ww: h.ww, rulesLabel: h.rulesLabel,
+    pb: h.pb, pw: h.pw, winnerModel: h.winnerModel, komi: h.komi, komiSrc: h.komiSrc, wb: h.wb, ww: h.ww, rulesLabel: h.rulesLabel,
     repetition: h.repetition, ruleKnown: h.ruleKnown, drawReason: h.drawReason, opening: h.opening,
   };
   s.signed = s.margin === null ? null : s.winner === "W" ? s.margin : -s.margin;
   s.walls = 0;
+  s.std = isStandardGame(s);
+  s.line = s.std ? canonLine(g.moves.slice(0, LINE_PLIES).map(m => m.raw)) : null;
   // path race: shortest-path length to goal for both pawns after every move (no jumps)
   const bl = newBlock(), pos = { B: { ...g.startB }, W: { ...g.startW } };
   const dG = { B: goalDist(bl, "B"), W: goalDist(bl, "W") };
@@ -51,6 +53,8 @@ function summarize(line, h) {
   // this game's full-search visits; a hint game's first search (the hint move, 4x visits) is not one of them
   const Ev = h.gtype === "hintpos" ? E.filter(e => e.i !== g.startTurnIdx) : E;
   s.maxV = Ev.length ? Math.max(...Ev.map(e => e.v ?? 0)) : 0;
+  // total training weight of the game's moves (weight= in the move comments; null if the file has none)
+  s.weightSum = s.evs.some(e => e.w !== undefined) ? s.evs.reduce((a, e) => a + (e.w || 0), 0) : null;
   s.minWinnerP = hasW ? Math.min(...E.map(pw)) : null;
   s.hasLead = has && E.every(e => e.lead);   // margin values below are the predicted lead (else the old score)
   s.minWinnerScore = hasW ? Math.min(...E.map(sw)) : null;
@@ -67,6 +71,8 @@ function summarize(line, h) {
   });
   s.drawSettledLeft = isDraw(s.winner) && has ? s.n - (lastDrawBelow + 1) : null;   // draws: moves left once the predicted draw% stayed ≥ 90%
   s.decidedLeft = hasW ? s.n - (lastBelow + 1) : null;  // moves remaining once decided
+  const first = E.find(e => e.i >= s.start);
+  s.firstPredB = first ? 1 - first.p : null;   // Black's predicted score (draw = ½) at the first search after init
   s.leadChanges = has ? lead : null;
   s.volatility = has ? vol : null;
   s.maxSwing = has ? swing : null;
@@ -208,6 +214,40 @@ function ruleGroups(S) {
   return out.filter(([, a]) => a.length);
 }
 
+// Line tree of the standard games: the current line is lineTreePath (notation moves); it survives re-renders while the
+// games still reach it.
+let lineTreePath = [];
+function renderLineTree(host, G) {
+  const at = path => G.filter(s => path.every((m, k) => s.line[k] === m));
+  while (lineTreePath.length && !at(lineTreePath).length) lineTreePath = lineTreePath.slice(0, -2);
+  const here = at(lineTreePath), d = lineTreePath.length;
+  const crumbs = [`<button class="linkbtn" data-depth="0">start</button>`];
+  for (let k = 0; k < d; k += 2) crumbs.push(`<button class="linkbtn" data-depth="${k + 2}">${escapeHtml(lineTreePath.slice(k, k + 2).join(" "))}</button>`);
+  const r0 = bdw(here);
+  let html = `<div class="mini">Line: ${crumbs.join(" › ")} · ${here.length} of ${G.length} games (${pct(here.length / G.length)}) · Black score ${pctOr(r0.score)}</div>`;
+  const by = new Map();
+  for (const s of here) {
+    const k = s.line.slice(d, d + 2).join(" ");
+    const a = by.get(k); a ? a.push(s) : by.set(k, [s]);
+  }
+  const rows = [...by.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 15).map(([k, arr]) => {
+    const r = bdw(arr), deeper = k.split(" ").length === 2 && arr.some(s => s.line.length > d + 2);
+    return tr([`<span class="line">${escapeHtml(k || "(game ended)")}</span>`, arr.length, pct(arr.length / here.length), pct(arr.length / G.length), pctOr(r.score), pctOr(r.drawRate), f1(describe(arr.map(s => s.n)).mean)],
+      deeper ? ` class="click" data-next="${escapeHtml(k)}"` : "");
+  });
+  html += `<table class="st"><tr><th>next plies</th><th>games</th><th>of this line</th><th>of all</th><th>Black score</th><th>draws</th><th>mean len</th></tr>${rows.join("")}</table>`;
+  if (by.size > 15) html += `<div class="mini">${by.size - 15} rarer continuations not shown.</div>`;
+  if (d + 2 >= LINE_PLIES) html += `<div class="mini">The tree stops at ply ${LINE_PLIES}.</div>`;
+  host.innerHTML = html;
+  host.onclick = e => {
+    const row = e.target.closest("tr[data-next]"), crumb = e.target.closest("button[data-depth]");
+    if (row && d + 2 <= LINE_PLIES) lineTreePath = [...lineTreePath, ...row.dataset.next.split(" ")];
+    else if (crumb) lineTreePath = lineTreePath.slice(0, +crumb.dataset.depth);
+    else return;
+    renderLineTree(host, G);
+  };
+}
+
 function renderStats() {
   if (!games.length) { $("statsNote").textContent = "Load a file first."; return; }
   if (!statsCache) { $("statsNote").textContent = "Computing game metrics…"; return; }   // computeSummaries() re-renders when done
@@ -274,12 +314,15 @@ function renderStats() {
     table(c, ["", "games", "Black score", "draws", "by rep.", "by ply limit", "mean len", "median len", "searched", "cycled ≥ 8"], rows);
   }
 
-  // 1. komi table (walls 10/10, so the fence handicap does not mix in)
+  // 1. komi table (walls 10/10, so the fence handicap does not mix in; compensated komi is chosen per start
+  // position to make it even, so those games would blur how much a komi itself is worth: they get their own slices)
   {
-    const tenTen = S.filter(s => s.wb === STANDARD_WALLS && s.ww === STANDARD_WALLS);
+    const tenTen = S.filter(s => s.wb === STANDARD_WALLS && s.ww === STANDARD_WALLS && !isCompensated(s.komiSrc));
+    const nComp = S.filter(s => s.wb === STANDARD_WALLS && s.ww === STANDARD_WALLS && isCompensated(s.komiSrc)).length;
     const ks = [...new Set(tenTen.map(s => s.komi))].sort((a, b) => a - b);
     if (ks.length > 1) {
-      const c = card("By komi", "Games with 10/10 walls, by komi (positive favours White; standard −0.5). Black score counts a draw as ½.");
+      const c = card("By komi", "Games with 10/10 walls, by komi (positive favours White; standard −0.5). Black score counts a draw as ½." +
+        (nComp ? ` ${nComp} games with compensated komi left out (see the score by slice).` : ""));
       table(c, ["komi", "games", "B", "D", "W", "Black score", "draw rate", "mean len", "rule on"], ks.map(k => {
         const arr = tenTen.filter(s => s.komi === k), r = bdw(arr);
         return tr([fmtKomi(k) + (k === STANDARD_KOMI ? " (std)" : ""), arr.length, r.b, r.d, r.w, pctOr(r.score), pctOr(r.drawRate), f1(describe(arr.map(s => s.n)).mean), pct(arr.filter(s => s.repetition > 0).length / arr.length, 0)]);
@@ -295,6 +338,8 @@ function renderStats() {
     const gts = [...new Set(S.map(s => s.gtype))].sort();
     if (gts.length > 1) for (const gt of gts) rows.push([`gtype = ${gt || "—"}`, S.filter(s => s.gtype === gt)]);
     for (const [lab, arr] of ruleGroups(S)) if (arr.length < S.length) rows.push([lab, arr]);
+    const ksrcs = [...new Set(S.map(s => s.komiSrc))].sort();
+    if (ksrcs.length > 1) for (const k of ksrcs) rows.push([komiSourceLabel(k).replace(/^./, c => c.toUpperCase()), S.filter(s => s.komiSrc === k)]);
     rows.push(["Black moves first after init", S.filter(s => s.firstToMove === "B")]);
     rows.push(["White moves first after init", S.filter(s => s.firstToMove === "W")]);
     const q = [dAll.p25, dAll.median, dAll.p75];
@@ -312,9 +357,64 @@ function renderStats() {
     for (const [lab, arr] of rows) if (arr.length) bdwRow(c, lab, arr);
   }
 
+  // 2b. the standard game by policy-init length
+  const STD = S.filter(s => s.std && s.gtype !== "hintpos");
+  if (STD.length) {
+    const c = card("Standard game by policy-init length", "Komi −0.5 as configured (not compensated or random), 10/10 walls, normal games, " +
+      "by the number of policy-init plies. Black score counts a draw as ½. Predicted: Black's score as the first search after the init plies saw it " +
+      "(a draw as ½); a predicted score near the actual one means the net already reads the position.");
+    legend(c, [["Black (1st) wins", C_B], ["Draws", DRAW_COLOR], ["White (2nd) wins", C_W]]);
+    const bins = [[0, 0, "No policy init"], [1, 6, "Init 1–6 plies"], [7, 16, "Init 7–16 plies"], [17, Infinity, "Init 17+ plies"]];
+    const rows = [];
+    for (const [lo, hi, lab] of bins) {
+      const arr = STD.filter(s => s.start >= lo && s.start <= hi);
+      if (!arr.length) continue;
+      bdwRow(c, lab, arr);
+      const r = bdw(arr), pr = arr.filter(s => s.firstPredB !== null).map(s => s.firstPredB);
+      rows.push(tr([lab, arr.length, pct(arr.length / STD.length), pctOr(r.score), pr.length ? pct(describe(pr).mean) : "—", pctOr(r.drawRate), f1(describe(arr.map(s => s.n)).mean)]));
+    }
+    table(c, ["", "games", "share", "Black score", "predicted", "draws", "mean len"], rows);
+  }
+
+  // 2c. compensated and random komi
+  {
+    const K = S.filter(s => s.komiSrc && s.wb === STANDARD_WALLS && s.ww === STANDARD_WALLS);
+    if (K.length) {
+      const c = card("Compensated and random komi", "Games whose komi was set per start position (compensated: the fair komi of the position, so a good " +
+        "compensation gives Black about 50%) or randomized. 10/10 walls. Positive komi favours White.");
+      const groups = [["Compensated", K.filter(s => isCompensated(s.komiSrc))], ["Random", K.filter(s => s.komiSrc === "random")]];
+      table(c, ["", "games", "mean komi", "Black score", "draws", "mean len"], groups.filter(([, a]) => a.length).map(([lab, a]) => {
+        const r = bdw(a);
+        return tr([lab, a.length, fmtScore(describe(a.map(s => s.komi)).mean), pctOr(r.score), pctOr(r.drawRate), f1(describe(a.map(s => s.n)).mean)]);
+      }));
+      const comp = groups[0][1];
+      if (comp.length) {
+        const ks = [...new Set(comp.map(s => s.komi))].sort((a, b) => a - b);
+        mini(c, "<br>Compensated games by komi:");
+        table(c, ["komi", "games", "share", "Black score", "draws"], ks.map(k => {
+          const a = comp.filter(s => s.komi === k), r = bdw(a);
+          return tr([fmtKomi(k), a.length, pct(a.length / comp.length), pctOr(r.score), pctOr(r.drawRate)]);
+        }));
+      }
+    }
+  }
+
+  // 2d. standard-game line tree
+  {
+    const G = STD.filter(s => s.start === 0);
+    if (G.length) {
+      const c = card("Standard-game line tree", "Standard games (as above) with no policy-init plies; a line and its mirror image are merged. " +
+        "Each row is a continuation of the current line by up to two plies (Black's move and White's reply); click a row to follow it, " +
+        "click a step of the path to go back.", $("statCards"), true);
+      const host = document.createElement("div");
+      c.appendChild(host);
+      renderLineTree(host, G);
+    }
+  }
+
   // 3. game length histogram
   {
-    const c = card("Game length", "Total moves per game (including random init). Dashed lines: median and mean.");
+    const c = card("Game length", "Total moves per game (including policy init). Dashed lines: median and mean.");
     const w = niceWidth(dAll.max - dAll.min);
     const bins = binsFor([S.map(s => s.n)], w);
     mini(c, `mean ${f1(dAll.mean)} · median ${f1(dAll.median)} · sd ${f1(dAll.sd)} · IQR ${f1(dAll.p25)}–${f1(dAll.p75)}`);
@@ -371,7 +471,7 @@ function renderStats() {
     for (const s of S) { const a = by.get(s.opening); a ? a.push(s) : by.set(s.opening, [s]); }
     const top = [...by.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 12);
     if (top.length > 1 || (top.length === 1 && S.length > 1)) {
-      const c = card("Frequent openings", `The first ${OPENING_PLIES} plies (random init plies included) of the most common lines. Click a row to filter the game list to that line.`);
+      const c = card("Frequent openings", `The first ${OPENING_PLIES} plies (policy init plies included) of the most common lines. Click a row to filter the game list to that line.`);
       table(c, ["line", "games", "share", "Black score", "draws", "mean len"], top.map(([key, arr]) => {
         const r = bdw(arr);
         return tr([`<span class="line">${escapeHtml(openingLabel(key))}</span>`, arr.length, pct(arr.length / S.length), pctOr(r.score), pctOr(r.drawRate), f1(describe(arr.map(s => s.n)).mean)], ` class="click" data-open="${escapeHtml(key)}"`);
@@ -470,10 +570,10 @@ function renderStats() {
     }
   }
 
-  // 14. random init length + first searched wall
+  // 14. policy init length + first searched wall
   {
-    const c = card("Random init length", "startTurnIdx: moves played randomly before search took over. Hint games " +
-      "(gtype hintpos) are left out: their first moves are the hint position, not random.");
+    const c = card("Policy init length", "startTurnIdx: moves sampled from the policy before search took over. Hint games " +
+      "(gtype hintpos) are left out: their first moves are the hint position, not policy init.");
     const R = S.filter(s => s.gtype !== "hintpos"), H = S.filter(s => s.gtype === "hintpos");
     const vals = R.length ? R.map(s => s.start) : [0], d = describe(vals);
     if (H.length) mini(c, `${H.length} hint games left out (hint position length: mean ${f1(describe(H.map(s => s.start)).mean)})`);
@@ -483,7 +583,7 @@ function renderStats() {
       tipFor: b => `<b>init ${bins.labels[b]}</b><br>${bins.counts[0][b]} games` });
   }
   {
-    const c = card("First wall during search", "Move number of the first wall placed after random init (games with no searched wall excluded).");
+    const c = card("First wall during search", "Move number of the first wall placed after policy init (games with no searched wall excluded).");
     const vals = S.filter(s => s.firstWallSearch !== null).map(s => s.firstWallSearch);
     if (vals.length) {
       const d = describe(vals), bins = binsFor([vals], niceWidth(d.max - d.min));

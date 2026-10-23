@@ -46,15 +46,25 @@ function headerOf(line, i) {
   const result = re ? re[1] : "?";
   const pb = (/PB\[([^\]]*)\]/.exec(line) || [])[1] || "", pw = (/PW\[([^\]]*)\]/.exec(line) || [])[1] || "";
   return { i, result, winner: result[0], nMoves, gtype: kv.gtype || "", startTurnIdx: +kv.startTurnIdx || 0, pb, pw,
+    komiSrc: komiSourceOf(kv),
     winnerModel: result[0] === "B" ? pb : result[0] === "W" ? pw : "", opening: openingOf(line), ...rulesOf(line) };
 }
+
+// Where a game's komi came from (root comment, written since 2026-10-23): "random" (komiRandom=1), a compensation
+// kind (komiComp=emptyboard / fair / fancy / policyinit: komi set to make the start position even), or "" (the
+// configured komi; also older files, and forks, which keep their parent's komi without its tags).
+const komiSourceOf = kv => kv.komiRandom === "1" ? "random" : kv.komiComp || "";
+const KOMI_SOURCES = { random: "random komi", emptyboard: "compensated (empty board)", fair: "compensated (fair komi)",
+  fancy: "compensated (fancy start)", policyinit: "compensated (after policy init)" };
+const komiSourceLabel = src => KOMI_SOURCES[src] || (src ? "compensated (" + src + ")" : "configured komi");
+const isCompensated = src => !!src && src !== "random";
 
 // Black's score in a game: 1 win, 0 loss, ½ draw (RE[0]: the winner field is "0"); null for an unknown result.
 // Every rate in the viewer is a score with a draw as ½, the same convention as the move comments' White win prob.
 const scoreB = winner => winner === "B" ? 1 : winner === "W" ? 0 : winner === "0" ? 0.5 : null;
 const isDraw = winner => winner === "0";
 
-// The first OPENING_PLIES moves (random init plies included), as raw SGF coords joined by spaces.
+// The first OPENING_PLIES moves (policy init plies included), as raw SGF coords joined by spaces.
 const OPENING_PLIES = 6;
 function openingOf(line) {
   const re = /;[BW]\[([a-z]*)\]/g, out = [];
@@ -64,6 +74,22 @@ function openingOf(line) {
 }
 const rawNotation = raw => raw.length === 2 ? notation({ raw, x: raw.charCodeAt(0) - 97, y: raw.charCodeAt(1) - 97 }) : "pass";
 const openingLabel = key => key ? key.split(" ").map(rawNotation).join(" ") : "—";
+// Left-right mirror of a raw SGF move on the 17-wide search board: pawns, wall centers and vertical walls' upper arms
+// all map x -> 16 - x.
+const mirrorRaw = raw => raw.length === 2 ? String.fromCharCode(97 + 16 - (raw.charCodeAt(0) - 97)) + raw[1] : raw;
+// Mirror-canonical line in notation: a line and its mirror image give the same list. At the first move that differs
+// from its mirror, the version whose move sorts first as a notation string is kept ("a6h", not "h6h"), as in the
+// run plots (~/arena/tools/runplots.py).
+function canonLine(raws) {
+  const a = raws.map(rawNotation), m = raws.map(r => rawNotation(mirrorRaw(r)));
+  for (let k = 0; k < a.length; k++) if (a[k] !== m[k]) return a[k] < m[k] ? a : m;
+  return a;
+}
+// The standard game as self-play plays it at the configured komi: komi -0.5, 10 / 10 walls, a normal game (not a
+// fork or a hint position), komi neither compensated nor randomized.
+const isStandardGame = h => h.komi === STANDARD_KOMI && h.wb === STANDARD_WALLS && h.ww === STANDARD_WALLS &&
+  (h.gtype === "normal" || h.gtype === "") && !h.komiSrc;
+const LINE_PLIES = 16;   // plies kept per game for the standard-game line tree
 
 // Komi and initial walls (docs/QuoridorIOv2.md): KM (missing, or KM[0] as 0.1.0 wrote it: the standard -0.5),
 // WB / WW (missing: 10). rulesLabel is "" for the standard game (the repetition rule is not in it: see repLabel).

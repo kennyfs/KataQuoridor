@@ -96,7 +96,7 @@ $("chart").addEventListener("mousemove", e => {
   const mv = cur.moves[i];
   let html = `<b>Position ${i}</b>` + (i < cur.moves.length ? ` · next ${mv.pla} ${notation(mv)}` : " · end");
   if (hasEv(mv)) html += `<br>${sw("var(--w-acc)")}White ${mv.ev.noRes > 0 ? "score" : "win"} ${pct(mv.ev.wWin)}${mv.ev.noRes > 0 ? `<br>${sw("var(--draw)")}Draw ${pct(mv.ev.noRes)}` : ""}<br>${sw("var(--margin)")}${mv.ev.hasLead ? "Lead" : "Margin (no lead)"} ${fmtScore(mv.ev.wMargin)}<br>visits ${mv.ev.v ?? "?"}`;
-  else html += `<br>${i < cur.startTurnIdx ? "random init" : i >= cur.moves.length ? games[curGameIdx].result : "no search"}`;
+  else html += `<br>${i < cur.startTurnIdx ? "policy init" : i >= cur.moves.length ? games[curGameIdx].result : "no search"}`;
   showTip(e, html);
 });
 $("chart").addEventListener("mouseleave", () => { hideTip(); const hv = $("chart")._hover; if (hv) hv.setAttribute("visibility", "hidden"); });

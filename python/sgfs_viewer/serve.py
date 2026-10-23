@@ -8,7 +8,7 @@ To open it on a phone on the same network, bind to all interfaces (anyone on the
     python3 python/sgfs_viewer/serve.py games.sgfs --host 0.0.0.0
 and open the printed "On your LAN" URL on the phone.
 
-With --latest, it opens the newest self-play games of ~/q1_run/run4 (or --latest RUN_DIR):
+With --latest, it opens the newest self-play games of ~/q2_run (or --latest RUN_DIR):
     python3 python/sgfs_viewer/serve.py --latest
 
 Without a file argument, the page opens empty and accepts drag-and-drop / "Open .sgfs...".
@@ -46,8 +46,8 @@ def latest_selfplay_sgfs(run_dir):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file", nargs="?", help=".sgfs file (one game per line)")
-    ap.add_argument("--latest", nargs="?", const="~/q1_run/run4", metavar="RUN_DIR",
-                    help="open the newest self-play .sgfs of the newest model in RUN_DIR (default ~/q1_run/run4)")
+    ap.add_argument("--latest", nargs="?", const="~/q2_run", metavar="RUN_DIR",
+                    help="open the newest self-play .sgfs of the newest model in RUN_DIR (default ~/q2_run)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1; 0.0.0.0 = reachable from the LAN)")
     ap.add_argument("--no-browser", action="store_true")

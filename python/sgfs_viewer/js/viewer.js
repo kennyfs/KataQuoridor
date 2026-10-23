@@ -110,7 +110,7 @@ function renderEvalStrip() {
   const tiles = ["evWin", "evMar", "evVis"];
   if (!hasEv(mv)) {
     tiles.forEach(t => $(t).classList.add("dim"));
-    const why = ply >= cur.moves.length ? `Game over · ${resultLabel(games[curGameIdx])}` : ply < cur.startTurnIdx ? (isHint() ? "Hint position move, no search" : "Random init move, no search") : "No search data";
+    const why = ply >= cur.moves.length ? `Game over · ${resultLabel(games[curGameIdx])}` : ply < cur.startTurnIdx ? (isHint() ? "Hint position move, no search" : "Policy init move, no search") : "No search data";
     $("evWinV").textContent = "—"; $("evMarV").textContent = "—"; $("evVisV").textContent = "—";
     $("evWinBar").style.flexBasis = "50%"; $("evDrawBar").style.flexBasis = "0%"; $("evLossBar").style.flexBasis = "50%"; $("evTick").style.left = "50%";
     $("evWinS").textContent = why; $("evMarS").textContent = ""; $("evVisS").textContent = "";
@@ -142,7 +142,7 @@ function renderInfo() {
     ["Game", `#${curGameIdx + 1} of ${games.length}`],
     ["Result", resultLabel(h)],
     ...(h.ruleKnown || h.repetition ? [["Repetition rule", h.repetition ? `on: draw at occurrence ${h.repetition} of a position` : "off"]] : []),
-    ...(h.komi !== STANDARD_KOMI ? [["Komi", `${fmtKomi(h.komi)} (standard −0.5)`]] : []),
+    ...(h.komi !== STANDARD_KOMI || h.komiSrc ? [["Komi", `${fmtKomi(h.komi)} (standard −0.5)` + (h.komiSrc ? ` · ${komiSourceLabel(h.komiSrc)}` : "")]] : []),
     ...(h.wb !== STANDARD_WALLS || h.ww !== STANDARD_WALLS ? [["Initial walls", `Black ${h.wb} · White ${h.ww}`]] : []),
     ["Moves", `${g.moves.length}  (${isHint() ? "hint position" : "init"} ${g.startTurnIdx}, searched ${g.moves.length - g.startTurnIdx})`],
     ["Type", (g.kv.gtype || "—") + (g.kv.usedInitialPosition ? " · initial pos" : "")],
@@ -152,13 +152,13 @@ function renderInfo() {
   $("info").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("");
 }
 
-// a hint game (gtype hintpos) starts at a mined hint position: its first moves are that position, not random init
+// a hint game (gtype hintpos) starts at a mined hint position: its first moves are that position, not policy init
 function isHint() { return games[curGameIdx]?.gtype === "hintpos"; }
 
 function renderMoveList() {
   const parts = [];
   cur.moves.forEach((mv, i) => {
-    if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">${isHint() ? "Hint position" : "Random init"} · ${cur.startTurnIdx} moves</div>`);
+    if (i === 0 && cur.startTurnIdx > 0) parts.push(`<div class="sep">${isHint() ? "Hint position" : "Policy init"} · ${cur.startTurnIdx} moves</div>`);
     if (i === cur.startTurnIdx && i > 0) parts.push(`<div class="sep">Self-play search${isHint() ? " · the first one searches the hint move (4× visits)" : ""}</div>`);
     const e = mv.ev;
     const ev = hasEv(mv) ? `W ${(e.wWin * 100).toFixed(0)}%${e.noRes > 0.05 ? ` · D ${(e.noRes * 100).toFixed(0)}%` : ""} · ${e.hasLead ? "lead" : "margin"} ${fmtScore(e.wMargin)} · v=${e.v ?? "?"}${e.result ? " · " + e.result : ""}` : (e?.result || "");
@@ -183,7 +183,7 @@ const curHasDraw = () => cur.moves.some(mv => hasEv(mv) && mv.ev.noRes > 0);
 
 function renderChart() {
   $("drawLegend").hidden = !curHasDraw();
-  $("winLegend").textContent = curHasDraw() ? "White score (draw = ½)" : "White win%";
+  $("winLegend").textContent = curHasDraw() ? "White score" : "White win%";
   $("marLegend").textContent = curHasLead() ? "Predicted lead" : "Margin (no lead in file)";
   const { svg, w, n, X, top2 } = chartGeom();
   const H = top2 + CH.h2 + CH.b;
@@ -305,6 +305,7 @@ const SORTS = [
   { key: "maxPath", label: "Longest detour", desc: "Longest shortest path of either pawn at any point (a clear 9x9 board is 8). High = a big maze.", get: s => s.maxPath, fmt: v => v, dir: "desc" },
   { key: "walls", label: "Walls placed", desc: "Total walls placed by both sides.", get: s => s.walls, fmt: v => v, dir: "desc" },
   { key: "brier", label: "Misjudged", desc: "Mean squared error of White win% vs the actual result (Brier, a draw counts as ½). High = the search was wrong for long stretches.", get: s => s.brier, fmt: v => v.toFixed(2), dir: "desc" },
+  { key: "weight", label: "Training weight", desc: "Sum of the move weights (weight= in the move comments): about how many training rows the game wrote (policy-target weight; cheap searches write 0). Games without weights are listed last.", get: s => s.weightSum, fmt: v => v.toFixed(1), dir: "desc" },
   { key: "len", label: "Length", desc: "Total moves.", get: s => s.n, fmt: v => v, dir: "desc" },
 ];
 let sortDesc = false;
@@ -330,12 +331,12 @@ function randomGame() { if (filtered.length) selectGame(filtered[Math.floor(Math
 
 // ---- Filters: one shared state for the game list and the statistics page ----
 // The selects hold the state; `openingFilter` (set from the statistics page's opening table) is shown as a chip.
-const FILTER_IDS = ["fRes", "fRule", "fKomi", "fWalls", "fType", "fCyc", "fMin"];
+const FILTER_IDS = ["fRes", "fRule", "fKomi", "fKSrc", "fWalls", "fType", "fCyc", "fInit"];
 let openingFilter = "";
 let repTags = false;   // tag each list row with its repetition rule (the file mixes rules)
 function passes(g, s) {
   const r = $("fRes").value, rule = $("fRule").value, km = $("fKomi").value, wl = $("fWalls").value;
-  const t = $("fType").value, cyc = +$("fCyc").value || 0, mn = +$("fMin").value || 0;
+  const t = $("fType").value, cyc = +$("fCyc").value || 0, mi = $("fInit").value, ks = $("fKSrc").value;
   if (r) {
     if (r[0] === "m") { if (!match || g.winnerModel !== match.models[+r[1]]) return false; }
     else if (r[0] === "a") { if (!match || g.pb !== match.models[+r[1]]) return false; }
@@ -345,12 +346,13 @@ function passes(g, s) {
   }
   if (rule && !(rule === "on" ? g.repetition > 0 : rule === "off" ? g.ruleKnown && !g.repetition : g.repetition === +rule)) return false;
   if (km && g.komi !== (km === "std" ? STANDARD_KOMI : +km)) return false;
+  if (ks && !(ks === "none" ? !g.komiSrc : ks === "comp" ? isCompensated(g.komiSrc) : g.komiSrc === ks)) return false;
   if (wl) {
     const std = g.wb === STANDARD_WALLS && g.ww === STANDARD_WALLS;
     if (wl === "std" ? !std : wl === "hc" ? std : wl === "hcB" ? !(g.wb < g.ww) : !(g.ww < g.wb)) return false;
   }
   if (t && g.gtype !== t) return false;
-  if (g.nMoves < mn) return false;
+  if (mi !== "" && g.startTurnIdx > +mi) return false;
   if (openingFilter && g.opening !== openingFilter && !g.opening.startsWith(openingFilter + " ")) return false;
   if (cyc && s && s.cycleMax < cyc) return false;   // before the summaries are ready the cycling filter is not applied
   return true;
@@ -361,7 +363,7 @@ function activeFilters() {
   for (const id of FILTER_IDS) {
     const e = $(id);
     if (!e.value || e.hidden) continue;
-    out.push(id === "fMin" ? `≥ ${e.value} moves` : e.options[e.selectedIndex].text);
+    out.push(id === "fInit" ? `init ≤ ${e.value} moves` : e.options[e.selectedIndex].text);
   }
   if (openingFilter) out.push(`opening ${openingLabel(openingFilter)}`);
   return out;
@@ -395,6 +397,11 @@ function initFilters() {
   $("fKomi").hidden = komis.length < 2;
   $("fKomi").innerHTML = `<option value="">Any komi</option><option value="std">Komi standard (−0.5)</option>` +
     komis.filter(k => k !== STANDARD_KOMI).map(k => `<option value="${k}">Komi ${fmtKomi(k)}</option>`).join("");
+  const ksrcs = [...new Set(games.map(g => g.komiSrc))].sort();
+  $("fKSrc").hidden = ksrcs.length < 2;
+  $("fKSrc").innerHTML = `<option value="">Any komi source</option><option value="none">Configured komi</option>` +
+    (ksrcs.filter(isCompensated).length > 1 ? `<option value="comp">Compensated (any)</option>` : "") +
+    ksrcs.filter(Boolean).map(k => `<option value="${escapeHtml(k)}">${escapeHtml(komiSourceLabel(k)).replace(/^./, c => c.toUpperCase())}</option>`).join("");
   $("fWalls").hidden = games.every(g => g.wb === STANDARD_WALLS && g.ww === STANDARD_WALLS);
   const types = [...new Set(games.map(g => g.gtype).filter(Boolean))].sort();
   $("fType").hidden = types.length < 2;
@@ -424,7 +431,7 @@ function applyFilters() {
     const g = games[i];
     let tags = g.gtype && g.gtype !== "normal" ? tag(g.gtype) : "";
     if (repTags) tags += tag(repLabel(g) || "rule ?");
-    if (g.rulesLabel) tags += tag(g.rulesLabel);
+    if (g.rulesLabel) tags += tag(g.rulesLabel + (g.komiSrc === "random" ? " (rand)" : isCompensated(g.komiSrc) ? " (comp)" : ""));
     if (g.drawReason) tags += tag(DRAW_REASONS[g.drawReason] || g.drawReason);
     if (match && g.winnerModel) tags += `<span class="won">${mDot(g.winnerModel)}${mLabel(g.winnerModel)} won</span>`;
     const v = statsCache && M.key !== "idx" && M.key !== "len" ? M.get(statsCache[i]) : undefined;

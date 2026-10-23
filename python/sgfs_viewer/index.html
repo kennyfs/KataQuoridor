@@ -25,9 +25,10 @@
       <select id="fRule" title="Repetition rule" hidden></select>
       <select id="fKomi" title="Komi" hidden></select>
       <select id="fWalls" title="Initial walls" hidden><option value="">Any walls</option><option value="std">Walls 10/10</option><option value="hc">Fence handicap</option><option value="hcB">Handicap on Black</option><option value="hcW">Handicap on White</option></select>
+      <select id="fKSrc" title="Komi source (komiRandom / komiComp in the root comment)" hidden></select>
       <select id="fType" title="Game type" hidden><option value="">All types</option></select>
       <select id="fCyc" title="Longest repeated stretch (computed with the game metrics)"><option value="">Any cycling</option><option value="4">Cycled ≥ 4 plies</option><option value="8">Cycled ≥ 8 plies</option><option value="16">Cycled ≥ 16 plies</option></select>
-      <input id="fMin" type="number" min="0" placeholder="min moves">
+      <input id="fInit" type="number" min="0" placeholder="max init moves" title="Games whose policy init (startTurnIdx; a hint game: the hint position) is at most this many moves">
     </div>
     <div class="chips" id="fChips"></div>
     <div class="filters sortrow">
