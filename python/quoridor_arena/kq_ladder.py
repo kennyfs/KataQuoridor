@@ -11,6 +11,13 @@ Usage (from the python/ directory):
     python -m quoridor_arena.kq_ladder adapt  --config C --out DIR --pairs 10 --games 40   # add games, then `run`
     python -m quoridor_arena.kq_ladder report --config C --out DIR
     python -m quoridor_arena.kq_ladder sgfs   --config C --out DIR     # only re-sort the SGFs per pair
+    python -m quoridor_arena.kq_ladder run    --config C --out DIR_K --shard K --weights 1,1,2   # one machine's share
+    python -m quoridor_arena.kq_ladder merge  --config C --out DIR --from DIR_0 DIR_1 DIR_2      # then `report`
+
+Sharding (several machines, each with its own --out): a game belongs to the machine its id hashes to, with the
+machines' shares given by --weights, so the split does not change when a pair gets more games (a bigger config
+extends a pilot: games already played are skipped). A sharded `run` plays only; `merge` collects the raw results and
+SGFs of the shard dirs into --out, and `report` / `sgfs` there rate them.
 
 `run` plays every scheduled game whose id is not yet in DIR/match/results.jsonl (so it resumes), then sorts the SGFs into
 DIR/sgfs/<link kind>/<a>_vs_<b>.sgfs and writes DIR/results.jsonl (arena format, for elo.py), DIR/report.md and DIR/elo_vs_samples.png. See docs/Evaluation.md.
@@ -18,10 +25,12 @@ DIR/sgfs/<link kind>/<a>_vs_<b>.sgfs and writes DIR/results.jsonl (arena format,
 import argparse
 import collections
 import glob
+import hashlib
 import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -36,6 +45,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 _SAMPLES_RE = re.compile(r"-s(\d+)(?:-|$)")
+_ROWS_RE = re.compile(r"-d(\d+)(?:-|$)")
 
 
 # -- config and roster ----------------------------------------------------------
@@ -56,6 +66,12 @@ def model_samples(model_dir):
     if not m:
         raise SystemExit("cannot read the training samples (-s<N>-) from model directory %s" % model_dir)
     return int(m.group(1))
+
+
+def model_rows(model_path):
+    """The self-play rows the net's training had seen (-d<N> in the model directory name), or None."""
+    m = _ROWS_RE.search(os.path.basename(os.path.dirname(model_path)))
+    return int(m.group(1)) if m else None
 
 
 def list_models(spec):
@@ -187,6 +203,17 @@ def make_pairs(cfg, nets, bots):
     for a, b, _, _ in out:
         assert a in bots and b in bots, (a, b)
     return out
+
+
+def shard_of(gid, weights):
+    """The machine (index into weights) that plays game gid: its hash, as a fraction, falls in that machine's share."""
+    u = int(hashlib.md5(gid.encode()).hexdigest()[:12], 16) / float(16 ** 12)
+    total, acc = float(sum(weights)), 0.0
+    for i, w in enumerate(weights):
+        acc += w / total
+        if u < acc:
+            return i
+    return len(weights) - 1
 
 
 def game_id(a, b, k, swap):
@@ -544,15 +571,18 @@ def make_plot(cfg, bots, rated, path):
     names, point, lo, hi, idx, anchor = rated
     ref = cfg.get("reference")
     shift = point[idx[ref]] if ref in idx else 0.0
+    # cfg["plot_x"] = "rows": the x axis is the self-play rows the net had seen (-d<N> in the directory name)
+    use_rows = cfg.get("plot_x") == "rows" and all(model_rows(b["model"]) for b in bots.values())
+    xval = (lambda n: model_rows(bots[n]["model"])) if use_rows else (lambda n: bots[n]["samples"])
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     colors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea"]
     for ax, logx in zip(axes, (False, True)):
         for si, s in enumerate(cfg["series"]):
             sel = sorted([n for n in names if bots[n]["series"] == s["name"] and bots[n]["visits"] == cfg["visits"]],
-                         key=lambda n: bots[n]["samples"])
+                         key=xval)
             if not sel:
                 continue
-            x = np.array([bots[n]["samples"] for n in sel]) / 1e6
+            x = np.array([xval(n) for n in sel]) / 1e6
             y = np.array([point[idx[n]] for n in sel]) - shift
             yl = y - (np.array([lo[idx[n]] for n in sel]) - shift)
             yh = (np.array([hi[idx[n]] for n in sel]) - shift) - y
@@ -560,17 +590,17 @@ def make_plot(cfg, bots, rated, path):
                         label="%s (v%d)" % (s["name"], cfg["visits"]))
         for n in names:
             if bots[n]["visits"] != cfg["visits"]:
-                ax.plot(bots[n]["samples"] / 1e6, point[idx[n]] - shift, marker="^", ms=7, ls="none",
+                ax.plot(xval(n) / 1e6, point[idx[n]] - shift, marker="^", ms=7, ls="none",
                         color="#6b7280")
-                ax.annotate("v%d" % bots[n]["visits"], (bots[n]["samples"] / 1e6, point[idx[n]] - shift),
+                ax.annotate("v%d" % bots[n]["visits"], (xval(n) / 1e6, point[idx[n]] - shift),
                             textcoords="offset points", xytext=(5, -3), fontsize=8, color="#6b7280")
         if logx:
             ax.set_xscale("log")
-        ax.set_xlabel("training samples (millions)" + (", log scale" if logx else ""))
+        ax.set_xlabel(("self-play data rows" if use_rows else "training samples") + " (millions)" + (", log scale" if logx else ""))
         ax.set_ylabel("Elo (%s = 0)" % (ref if ref in idx else anchor))
         ax.grid(alpha=0.3)
         ax.legend(loc="lower right")
-    fig.suptitle("KataQuoridor Elo vs training samples (95% bootstrap CI)")
+    fig.suptitle("KataQuoridor Elo vs %s (95%% bootstrap CI)" % ("self-play data rows" if use_rows else "training samples"))
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
@@ -579,8 +609,9 @@ def make_plot(cfg, bots, rated, path):
 # -- commands -------------------------------------------------------------------
 
 class Ladder:
-    def __init__(self, cfg, out_dir):
+    def __init__(self, cfg, out_dir, shard=None, weights=None):
         self.cfg = cfg
+        self.shard, self.weights = shard, weights
         self.out = os.path.abspath(os.path.expanduser(out_dir))
         os.makedirs(os.path.join(self.out, "match", "sgfs"), exist_ok=True)
         self.nets, self.bots = make_roster(cfg)
@@ -632,6 +663,8 @@ class Ladder:
         self.write_roster()
         done = {r.get("id") for r in load_jsonl(self.raw_path)}
         todo = [g for g in self.schedule if g[0] not in done]
+        if self.shard is not None:
+            todo = [g for g in todo if shard_of(g[0], self.weights) == self.shard]
         print("%s; %d done, %d to play%s" % (self.describe(), len(self.schedule) - len(todo), len(todo),
                                              (", this run at most %d" % limit) if limit else ""), flush=True)
         if limit:
@@ -659,8 +692,30 @@ class Ladder:
                 rc, n1 - n0, secs / 60, (n1 - n0) / max(secs, 1e-9)), flush=True)
             if rc != 0:
                 print("!!! see %s" % os.path.join(self.out, "match", "match.log"), flush=True)
+        if self.shard is not None:
+            return 0   # one machine's share: `merge` and `report` rate all of them
         self.sgfs()
         return self.report()
+
+    def merge(self, dirs):
+        """Collects the raw results (by game id) and the SGFs of the shard dirs into this ladder's dir."""
+        have = {r.get("id") for r in load_jsonl(self.raw_path)}
+        added = 0
+        with open(self.raw_path, "a") as f:
+            for d in dirs:
+                src = os.path.join(os.path.abspath(os.path.expanduser(d)), "match")
+                for line in open(os.path.join(src, "results.jsonl")) if os.path.exists(os.path.join(src, "results.jsonl")) else []:
+                    if line.strip() and json.loads(line).get("id") not in have:
+                        have.add(json.loads(line).get("id"))
+                        f.write(line if line.endswith("\n") else line + "\n")
+                        added += 1
+                for sgf in glob.glob(os.path.join(src, "sgfs", "*")):
+                    dst = os.path.join(self.out, "match", "sgfs", os.path.basename(sgf))
+                    if not os.path.exists(dst):
+                        shutil.copy(sgf, dst)
+        print("merged %d new games from %d dirs; %d of %d scheduled games are in" % (
+            added, len(dirs), len(have & {g[0] for g in self.schedule}), len(self.schedule)), flush=True)
+        return 0
 
     def sgfs(self):
         counts = organize_sgfs(os.path.join(self.out, "match", "sgfs"), os.path.join(self.out, "sgfs"), self.pairs)
@@ -706,15 +761,21 @@ class Ladder:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["plan", "run", "report", "adapt", "sgfs"])
+    ap.add_argument("command", choices=["plan", "run", "report", "adapt", "sgfs", "merge"])
     ap.add_argument("--config", default=os.path.join(HERE, "kq_ladder_example.json"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, help="run: play at most this many of the remaining games (pilot)")
     ap.add_argument("--pairs", type=int, default=10, help="adapt: number of pairs to extend")
     ap.add_argument("--games", type=int, default=40, help="adapt: games added per pair")
     ap.add_argument("--bootstrap", type=int, default=1000)
+    ap.add_argument("--shard", type=int, help="run: this machine's index into --weights (play only its share)")
+    ap.add_argument("--weights", default="1", help="run: the machines' relative shares, e.g. 1,1,2,2")
+    ap.add_argument("--from", dest="sources", nargs="*", default=[], help="merge: shard dirs")
     args = ap.parse_args(argv)
-    lad = Ladder(load_config(args.config), args.out)
+    weights = [float(w) for w in args.weights.split(",")]
+    if args.shard is not None and not 0 <= args.shard < len(weights):
+        ap.error("--shard must index --weights")
+    lad = Ladder(load_config(args.config), args.out, args.shard, weights)
     if args.command == "plan":
         print(lad.describe())
         for a, b, n, kind in lad.pairs:
@@ -722,6 +783,8 @@ def main(argv=None):
         return 0
     if args.command == "run":
         return lad.run(args.limit)
+    if args.command == "merge":
+        return lad.merge(args.sources)
     if args.command == "sgfs":
         return lad.sgfs()
     if args.command == "report":

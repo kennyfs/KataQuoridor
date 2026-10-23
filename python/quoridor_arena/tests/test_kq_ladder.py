@@ -236,3 +236,14 @@ def test_openings_from_file(tmp_path):
     assert got == [suite[k % 3] for k in range(5)]
     path.write_text(json.dumps(suite))  # a bare list works too
     assert kq_ladder.Ladder.openings(fake)[:3] == suite
+
+
+def test_shard_of_is_stable_and_follows_the_weights():
+    ids = ["a_vs_b_o%03d_%s" % (k, s) for k in range(3000) for s in ("ab", "ba")]
+    w = [1, 1, 2]
+    shares = [sum(1 for i in ids if kq_ladder.shard_of(i, w) == m) / len(ids) for m in range(3)]
+    for got, want in zip(shares, (0.25, 0.25, 0.5)):
+        assert abs(got - want) < 0.02
+    # a game's machine does not depend on which other games exist
+    assert [kq_ladder.shard_of(i, w) for i in ids[:50]] == [kq_ladder.shard_of(i, w) for i in ids[:50]]
+    assert {kq_ladder.shard_of(i, [1]) for i in ids} == {0}
