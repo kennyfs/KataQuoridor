@@ -198,8 +198,8 @@ possible, not a comparison with q1; data data on the home NVMe (`~/q2_run`; read
 - `tf2_b4c192_quoridor_v4` (I/O v4 from the start), Aurora, bf16, lr schedule in `lr_schedule.txt` (ramp 0.5× → 8× over
   128K samples, then 8×; compare a ×4 branch around 2M samples).
 - Net growth early, not when b4 saturates (q1's b4 hit its capacity soon after Aurora): **b5** (`tf3_b5c256`) at
-  ~1.5-2M self-play rows (`bootstrap_b5.sh`: from scratch on the newest 2M rows, random-net rows excluded, 2M
-  samples; then `TRAININGNAME=q2b5 MODELKIND=tf3_b5c256_quoridor_v4 ./run.sh` and self-play visits 1000 / 250),
+  ~1.5-2M self-play rows (planned; see §6.1 for what was done), (`bootstrap_b5.sh`; then
+  `TRAININGNAME=q2b5 MODELKIND=tf3_b5c256_quoridor_v4 ./run.sh` and self-play visits 1000 / 250),
   later **b8** (`tf3_b8c320_quoridor_v4`, 9.0M params) the same way.
 - Yardstick: Ka_Quoridor matches every few cycles (the only outside opponent) plus the empty-board and random-opening
   ladders; once a net is decent, hints mined from the positions it loses to Ka.
@@ -210,6 +210,59 @@ possible, not a comparison with q1; data data on the home NVMe (`~/q2_run`; read
 - SGF root comments now say where the komi came from (`komiRandom=1`, `komiComp=policyinit|fair|fancy|emptyboard`),
   and the self-play stats count compensated games separately (smoke test with s53.96M: compensated games Black
   0.505 over 203).
+
+### 6.1 First 5.2M rows: s0.48M → s29.55M, b4 (2026-10-23)
+
+- Loop ran overnight with 2 Colab L4 workers (`l4wa`, `l4wb`): 44 nets, d = 5.18M rows. Colab rows arrived but the
+  loop's quota ignored them until `share_sync.sh` had created `remote_rows.txt` (fixed: `-extra-rows-file` is always
+  passed). Epoch set to 600K samples (about one cycle's 100K rows × 6).
+- Ladders (`~/arena/q2ladder`, v256, race solver on, 10 nets, 1466 games each, local 3070, 2-3 min per ladder):
+  - random 4-ply openings: s4.4M 0 → s7.3M +464 → s10.4M +666 → s15.1M +786, then flat (s20.4M +781, s25.2M +775,
+    s29.55M +816; CI ±150); direct s20.4M vs s29.55M 45%.
+  - empty board: still rising (s20.4M +1923, s25.2M +2031, s29.55M +2247 vs s4.4M; the last pair 82%), but the nets
+    are near-deterministic there, so these Elo are mostly the main line (same as q1's empty-board ladder).
+- Training: val policy loss 1.41, value loss 0.79, top-1 0.62, all flat since ~s20M; val total loss 4.68.
+- Self-play: both players out of walls in 99% of games at s0.5M (median ply 24), ~60% from s3M (median ply 52). Draw
+  rate 1.5% for s5-18M, then 26% at s23-26M (repetition draws, mean 30 plies; 68% of the games on the standard
+  opening at fair komi, random-komi games 1%), 8% again by s27M. Standard-opening games (no policy init, komi -0.5):
+  Black 0.57; after policy init 0.5; compensated komi 0.5.
+- Openings (komi -0.5, no policy init, `~/arena/joseki_q2/openings_q2.png`): first-move walls (d8v / d1h) until
+  s5M, e8 e2 100% from s12M; the centre line e6 e4 c7h f2h 80-98% from s14M, a second branch (d1v) peaks at 41% around
+  s12M; the 12-ply continuation c7h f2h e7h d2h d6 c5v 62-69% from s22M.
+- `kq_ladder.py` gained `run --shard K --weights ...` and `merge --from DIR...` for several machines (a game's machine
+  is its id's hash, so a bigger config extends a pilot).
+
+### 6.2 b5 bootstrap plan (2026-10-23)
+
+- b4 plateaued (§6.1), so the loop moves to b5 at 5.2M rows rather than raising b4's visits: random-opening Elo is flat
+  from s15M, and the empty-board Elo that still rises is the one main line.
+- `bootstrap_b5.sh` follows KataCDC's b8v2 (`~/cdc/b8v2/run.sh`: fixed window, one pass per round, a fresh shuffle every
+  round made while the previous trains, an export per round; its held-out val flattened after ~3 rounds): from scratch on
+  the newest 3M rows (random-net rows excluded; validation = the same window's 1% md5 validation files, ~30K rows),
+  **6 rounds of 3M samples** (18M; the first run is 3 rounds, `UNTIL=3`, then `FIRST=4 UNTIL=6`), lr 0.5x -> 8x over 128K samples, 8x until
+  3M (changed from 6M after round 1: val p0 1.577 at 2M, slope slowing; q1's ×8 also plateaued by ~3M), then 4x (`lr_schedule_b5.txt`; the schedule is piecewise constant, so it is a step; q1's b5 used 8x until ~3M, 4x,
+  2x and ran the loop at 4x, which beat 2x). Nets go to `models_extra/` (b5 rounds are compared before one is promoted).
+- Then: ladder (random 4-ply) and Ka against b4 s29.55M; promote with `cp -a models_extra/q2b5-... models/`, run the loop
+  with `TRAININGNAME=q2b5 MODELKIND=tf3_b5c256_quoridor_v4` (continues on the bootstrap's checkpoint) and self-play visits
+  1000 / 250.
+
+### 6.3 b5 bootstrap result and switch (2026-10-23)
+
+- 3 rounds of one pass over a 3M-row window (lr x8 until 3M samples, then x4), 9.46M samples in all. Val (30K rows, same window): policy KL (p0loss - ptentr) 0.645 at 7.0M, 0.633 at 9.5M, top-1 about 0.62, both flat; value loss rose slightly in the last 1M (0.752 -> 0.763). Plot: `~/arena/q2ladder/b5_loss.png`.
+- Random-opening ladder, 256 visits, 1098 games (`~/arena/q2ladder/b5`): b5 round 3 is +32 Elo [4, 58] over b4 s29.55M (direct 160 games: 53%); round 2 +21, round 1 -65. Rounds 2 to 3 add only +11, so no more bootstrap rounds.
+- Promoted `q2b5-s9459968-d4903432` to `models/`; self-play 1000/250 visits (config re-published to the share). The loop window is unchanged: the power law (min 250K, slope 0.4, scale 500K, exponent 0.65) gives 1.4M rows at 5.2M total, 2.1M at 10M, 2.8M at 15M, so 3M was only the bootstrap window.
+- Start: `TRAININGNAME=q2b5 MODELKIND=tf3_b5c256_quoridor_v4 ./run.sh`.
+- First 15 b5 loop cycles (to s18.9M, 6.9M rows; `~/arena/q2b5/q2b5_status.png`): komi -0.5 Black score rose fast. No policy init: 0.62 at the bootstrap net to 0.94 at s17.7M. Init 1-6: 0.52 to 0.82. Init 7-16: 0.52 to 0.67. q1 run4 ended at 0.98 / 0.97 / 0.95 / 0.87 (init 0 / 1-6 / 7-16 / 17+). Mean compensated komi -0.5 to +0.06, but compensated games drift to Black (0.62): the 20-visit komi lags the net. Draws 3%.
+- Training: value overfits more than q1 run4. Train vloss 0.70 to 0.62, loop val 0.76 to 0.78-0.80; the gap is 0.16 against 0.07-0.10 in q1 run4. The policy KL gap is about 0.10, as in q1. The loop val set (1% of each window, about 14K rows) drifts each cycle, and its target entropy fell 0.80 to 0.74 with 1000 visits.
+- s22.3M and s22.8M: komi -0.5, no-init Black score fell from 0.97 to 0.76 and 0.68 (55 and 28 games). The White wins are one line and its mirror: e8 e2 e7 e3 e6 e4 a6h e5 ..., with c5h at ply 29 (`~/arena/q2b5/fj/`). At 20K visits, the newest net, s18.9M and q1 run4 s54M all rate the position after c5h a Black win (0.89-0.95). Black's loss comes at ply 36: b4 (deep 0.37) instead of b2v (1.00). All q2b5 nets miss b2v at 250 visits and find it at 1000; q1 run4 s54M needs 4000. So this is not a regression. White exploits a hole that the cheap and reduced searches miss, and q1 never found it. Watch whether Black's full searches teach b2v within a few cycles.
+- The hole closed by itself. White moved on to a6h e2h (the a6h e5 line fell from 58% to 8% of the no-init games by 8.5M rows), and the no-init Black score returned to 0.93-0.97. Opening and Black-score plots: `~/arena/joseki_q2/openings_q2_b5.png`, `black_score_q2_b5.png`.
+- Loop stopped at s29.47M (8.66M rows). Ladders at 256 visits, 2444 games each, with q1 run4 nets (`~/arena/q2ladder/v2_{rand,empty}`):
+  - Empty board: b5 climbs steadily, from bootstrap to s29.47M +830 Elo. It is even with q1 run4 s54M (49% in 160 games; Black wins 99%).
+  - Random 4-ply openings: b5 is flat since the bootstrap (9 nets within +-30). It is even with q1 run4 s54M (50% in 160 games) and scores 52% against b4 s29.55M.
+  - Against Ka (e4100, 1000 nodes; 80 games each, same openings as q1's match): v256 71% (+155) and v1000 79% (+224), against 68% / 76% for q1 run4 s54M. So q2 reached q1's final strength with 8.7M rows; q1 needed 14.2M.
+- Self-play at the stop: no-init Black score 0.93-0.97; init 1-6 about 0.90, 7-16 about 0.81, 17+ about 0.76 (q1 run4 end: 0.98 / 0.97 / 0.95 / 0.87). Mean compensated komi is about +1.0, and compensated games are back to 0.5. Value overfitting persists: train vloss 0.45 against val 0.62.
+- Plot tools: `python/quoridor_arena/runplots.py`, `docs/RunPlots.md` (extract, openings, score, selfplay, loss); the cheap per-file parts are on the sgfs viewer's Statistics page.
+- 2026-10-24, before the loop restarts: `policyInitAreaTemperature` 1.5 -> 1.2. `policyInitAreaProp` stays 0.08. The aim is more games near the main line, since random-opening strength had plateaued, as it had in q1. Value loss weight and `MAX_TRAIN_PER_DATA` 6 are unchanged: val KL is still falling and val vloss has not turned up. If val vloss rises for several cycles while train keeps falling, set `-value-loss-scale` 0.6 -> 0.4 first.
 
 ## Lessons
 

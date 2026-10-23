@@ -61,7 +61,7 @@ ROWS_PER_CYCLE="${ROWS_PER_CYCLE:-0}" # > 0: every cycle trains on about this ma
 # remote (python/colab), written during self-play, while the loop shuffled or trained, or while it was stopped. Self-play
 # makes up the difference (none if there are enough already), counting the remote rows that arrive meanwhile.
 REMOTE_ROWS_FILE="${REMOTE_ROWS_FILE:-$BASEDIR/remote_rows.txt}" # Running count of the remote rows pulled
-# (python/colab/share_sync.sh), read by selfplay -extra-rows-file when ROWS_PER_CYCLE is set and the file exists.
+# (python/colab/share_sync.sh), read by selfplay -extra-rows-file when ROWS_PER_CYCLE is set (a missing file counts as 0).
 NUM_THREADS_FOR_SHUFFLING="${NUM_THREADS_FOR_SHUFFLING:-12}"
 NUM_TRAIN_SAMPLES_PER_EPOCH="${NUM_TRAIN_SAMPLES_PER_EPOCH:-100000}"  # Training will proceed in chunks of this many rows, subject to MAX_TRAIN_PER_DATA.
 MAX_TRAIN_PER_DATA="${MAX_TRAIN_PER_DATA:-8}" # On average, train only this many times on each data row. Larger numbers may cause overfitting.
@@ -141,8 +141,8 @@ do
         if [[ "$QUOTA" -le 0 ]]; then
             echo "$(date '+%F %T') $NEWROWS new rows already (ROWS_PER_CYCLE $ROWS_PER_CYCLE), no self-play this cycle" | tee -a "$BASEDIR"/selfplay/stdout.txt
         else
-            EXTRAROWS=()
-            [[ -f "$REMOTE_ROWS_FILE" ]] && EXTRAROWS=(-extra-rows-file "$REMOTE_ROWS_FILE")
+            # Always passed: a missing file counts as 0, so share_sync.sh can start after self-play and still count
+            EXTRAROWS=(-extra-rows-file "$REMOTE_ROWS_FILE")
             echo "$(date '+%F %T') $NEWROWS new rows already, self-play until $QUOTA more (ROWS_PER_CYCLE $ROWS_PER_CYCLE) ${EXTRAROWS[*]}" | tee -a "$BASEDIR"/selfplay/stdout.txt
             time ./bin/katago selfplay -max-games-total 1000000000 -max-rows-total "$QUOTA" "${EXTRAROWS[@]}" -output-dir "$BASEDIR"/selfplay -models-dir "$BASEDIR"/models -config "$DATED_ARCHIVE"/selfplay.cfg | tee -a "$BASEDIR"/selfplay/stdout.txt
         fi
